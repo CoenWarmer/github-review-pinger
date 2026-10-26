@@ -64,8 +64,9 @@ Grouped, top to bottom:
 
 1. **Needs action**: changes requested, conflicts, CI failing, ready to merge.
 2. **Waiting on review**: sorted by longest quiet first.
-3. **Dormant**: collapsed, most recently active first, with an `idle` time.
-4. **Drafts**: collapsed and not counted.
+3. **Snoozed**: collapsed, ending soonest first, with the snooze end time.
+4. **Dormant**: collapsed, most recently active first, with an `idle` time.
+5. **Drafts**: collapsed and not counted.
 
 Each row shows: repo, title, `open 6d · quiet 2d`, and one chip per reviewer
 with their latest state. An approval or change request outranks a later
@@ -74,9 +75,13 @@ until a member reviews, after which that member's chip replaces it. Bots and
 ignored logins only get a chip when explicitly requested (e.g. Copilot);
 re-requested reviewers are marked ↻.
 
-Drafts are collapsed by default. Clicking a row opens the PR in the default
-browser. A row can be snoozed for
-N days, which mutes its nudges and removes it from the count.
+Clicking a row opens the PR in the default browser. Hovering a non-draft row
+reveals Snooze (1 day, 3 days, 1 week), which moves it to Snoozed: out of the
+count and never nudged, though new reviews still notify. Snoozed rows offer
+Unsnooze.
+
+The footer shows when data was refreshed, a Refresh button, and Settings:
+launch at login (on by default in release builds) and the token form.
 
 ## Settings
 
@@ -84,19 +89,30 @@ N days, which mutes its nudges and removes it from the count.
 Support/dev.coenwarmer.reviewpinger/` on macOS), re-read on every poll:
 
 ```json
-{ "ignoredLogins": ["kibanamachine", "elasticmachine"], "dormantAfterDays": 30 }
+{
+  "ignoredLogins": ["kibanamachine", "elasticmachine"],
+  "dormantAfterDays": 30,
+  "nudgeAfterHours": 24
+}
 ```
 
 ## Notifications
 
-- One notification per review event from others: approved, changes
-  requested, commented.
-- Staleness nudge: once per quiet period, after 24 business hours
-  (configurable), skipping weekends, in the local time zone.
-- After launch or a long gap, the first poll diffs against persisted state and
-  sends a single "while you were away" summary instead of replaying events.
-- Seen events, nudge state, and snoozes persist across restarts (Tauri store
-  plugin).
+- One notification per new response from another human: an approval, a
+  change request, or a comment (review or plain PR comment). Applies to every
+  PR, snoozed and dormant included.
+- Staleness nudge: once per quiet period for PRs in Waiting on review, after
+  `nudgeAfterHours` (default 24) of weekday time in the local time zone.
+  Weekdays count in full, so 24 hours is one working day; a Friday-afternoon
+  PR is nudged Monday afternoon. A new response starts a new quiet period.
+- More than 3 events in one poll are folded into a single summary
+  ("2 approvals and 1 PR still waiting on review").
+- The first poll after launch, or after a gap of more than 15 minutes (sleep,
+  offline), sends one "While you were away" summary instead of replaying.
+- The very first poll after install is silent: everything is marked seen and
+  overdue PRs as nudged; the list itself shows what's pending.
+- Seen responses, nudged quiet periods, and snoozes persist in `state.json`
+  in the app data directory, written atomically. Closed PRs are pruned.
 
 ## Distribution
 

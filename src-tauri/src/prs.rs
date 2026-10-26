@@ -2,7 +2,7 @@
 //! open and quiet clocks, what needs the author's action, which PRs have gone
 //! dormant, and per-reviewer state.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 
 use chrono::{DateTime, Utc};
 use serde::Serialize;
@@ -27,6 +27,7 @@ pub enum Action {
 pub enum Group {
     NeedsAction,
     Waiting,
+    Snoozed,
     Dormant,
     Draft,
 }
@@ -72,29 +73,40 @@ pub struct PrView {
     pub quiet_since: DateTime<Utc>,
     /// The last push, or review or comment by a human including the author.
     pub last_activity: DateTime<Utc>,
+    pub snoozed_until: Option<DateTime<Utc>>,
     pub reviewers: Vec<Reviewer>,
+    /// Reviews and comments from other humans, oldest first, for notifications.
+    #[serde(skip)]
+    pub responses: Vec<Response>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ResponseKind {
+    Approved,
+    ChangesRequested,
+    Commented,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Response {
+    pub login: String,
+    pub kind: ResponseKind,
+    pub at: DateTime<Utc>,
 }
 
 pub struct Rules<'a> {
     pub ignored_logins: &'a [String],
     pub dormant_after: chrono::Duration,
+    /// Snooze end times by pull request id.
+    pub snoozed: &'a HashMap<String, DateTime<Utc>>,
 }
 
-pub fn derive(
-    prs: Vec<PullRequest>,
-    viewer: &str,
-    rules: &Rules,
-    now: DateTime<Utc>,
-) -> Vec<PrView> {
+pub fn derive(prs: &[PullRequest], viewer: &str, rules: &Rules, now: DateTime<Utc>) -> Vec<PrView> {
     let people = People {
         viewer,
         ignored_logins: rules.ignored_logins,
     };
-    let dormant_before = now - rules.dormant_after;
-    let mut views: Vec<PrView> = prs
-        .iter()
-        .map(|pr| view(pr, &people, dormant_before))
-        .collect();
+    let mut views: Vec<PrView> = prs.iter().map(|pr| view(pr, &people, rules, now)).collect();
     views.sort_by(|a, b| {
         a.group.cmp(&b.group).then_with(|| match a.group {
             Group::NeedsAction => a
@@ -103,6 +115,7 @@ pub fn derive(
                 .cmp(&b.actions.first())
                 .then(a.quiet_since.cmp(&b.quiet_since)),
             Group::Waiting => a.quiet_since.cmp(&b.quiet_since),
+            Group::Snoozed => a.snoozed_until.cmp(&b.snoozed_until),
             Group::Dormant => b.last_activity.cmp(&a.last_activity),
             Group::Draft => b.open_since.cmp(&a.open_since),
         })
@@ -136,17 +149,24 @@ impl People<'_> {
     }
 }
 
-fn view(pr: &PullRequest, people: &People, dormant_before: DateTime<Utc>) -> PrView {
+fn view(pr: &PullRequest, people: &People, rules: &Rules, now: DateTime<Utc>) -> PrView {
     let open_since = open_since(pr);
     let quiet_since = latest_response(pr, |author| people.is_other_human(author))
         .map_or(open_since, |t| t.max(open_since));
     let last_activity = last_activity(pr, people, open_since);
     let reviewers = reviewers(pr, people);
     let actions = actions(pr, &reviewers);
+    let snoozed_until = rules
+        .snoozed
+        .get(&pr.id)
+        .copied()
+        .filter(|&until| until > now);
 
     let group = if pr.is_draft {
         Group::Draft
-    } else if last_activity < dormant_before {
+    } else if snoozed_until.is_some() {
+        Group::Snoozed
+    } else if last_activity < now - rules.dormant_after {
         Group::Dormant
     } else if actions.is_empty() {
         Group::Waiting
@@ -165,7 +185,9 @@ fn view(pr: &PullRequest, people: &People, dormant_before: DateTime<Utc>) -> PrV
         open_since,
         quiet_since,
         last_activity,
+        snoozed_until,
         reviewers,
+        responses: responses(pr, people),
     }
 }
 
@@ -203,6 +225,7 @@ fn latest_response(pr: &PullRequest, counts: impl Fn(&Actor) -> bool) -> Option<
             TimelineItem::PullRequestReview {
                 submitted_at: Some(at),
                 author: Some(author),
+                ..
             }
             | TimelineItem::IssueComment {
                 created_at: at,
@@ -211,6 +234,42 @@ fn latest_response(pr: &PullRequest, counts: impl Fn(&Actor) -> bool) -> Option<
             _ => None,
         })
         .max()
+}
+
+fn responses(pr: &PullRequest, people: &People) -> Vec<Response> {
+    let mut responses: Vec<Response> = pr
+        .timeline_items
+        .iter()
+        .filter_map(|item| {
+            let (author, kind, at) = match item {
+                TimelineItem::PullRequestReview {
+                    state,
+                    submitted_at: Some(at),
+                    author: Some(author),
+                } => {
+                    let kind = match state {
+                        ReviewState::Approved => ResponseKind::Approved,
+                        ReviewState::ChangesRequested => ResponseKind::ChangesRequested,
+                        ReviewState::Commented => ResponseKind::Commented,
+                        _ => return None,
+                    };
+                    (author, kind, *at)
+                }
+                TimelineItem::IssueComment {
+                    created_at,
+                    author: Some(author),
+                } => (author, ResponseKind::Commented, *created_at),
+                _ => return None,
+            };
+            people.is_other_human(author).then(|| Response {
+                login: author.login.clone(),
+                kind,
+                at,
+            })
+        })
+        .collect();
+    responses.sort_by_key(|r| r.at);
+    responses
 }
 
 fn reviewers(pr: &PullRequest, people: &People) -> Vec<Reviewer> {
@@ -360,11 +419,20 @@ mod tests {
     }
 
     fn derive_all(prs: Vec<PullRequest>, ignored: &[String]) -> Vec<PrView> {
+        derive_snoozed(prs, ignored, &HashMap::new())
+    }
+
+    fn derive_snoozed(
+        prs: Vec<PullRequest>,
+        ignored: &[String],
+        snoozed: &HashMap<String, DateTime<Utc>>,
+    ) -> Vec<PrView> {
         let rules = Rules {
             ignored_logins: ignored,
             dormant_after: chrono::Duration::days(30),
+            snoozed,
         };
-        derive(prs, ME, &rules, at(NOW))
+        derive(&prs, ME, &rules, at(NOW))
     }
 
     fn commit(committed: &str, checks: &str) -> Value {
@@ -388,7 +456,11 @@ mod tests {
     }
 
     fn timeline_review(author: Value, at: &str) -> Value {
-        json!({ "__typename": "PullRequestReview", "submittedAt": at, "author": author })
+        timeline_review_with(author, "COMMENTED", at)
+    }
+
+    fn timeline_review_with(author: Value, state: &str, at: &str) -> Value {
+        json!({ "__typename": "PullRequestReview", "state": state, "submittedAt": at, "author": author })
     }
 
     fn ready(at: &str) -> Value {
@@ -552,6 +624,45 @@ mod tests {
             "commits": { "nodes": [commit("2026-08-01T09:00:00Z", "SUCCESS")] },
         }));
         assert_eq!(pr.group, Group::Draft);
+    }
+
+    #[test]
+    fn snoozing_takes_a_pr_out_of_needs_action_until_it_expires() {
+        let pr = || with(json!({ "mergeable": "CONFLICTING" }));
+        let mut snoozed = HashMap::new();
+
+        snoozed.insert("PR_1".to_string(), at("2026-10-12T09:00:00Z"));
+        let view = derive_snoozed(vec![pr()], &[], &snoozed).remove(0);
+        assert_eq!(view.group, Group::Snoozed);
+        assert_eq!(view.snoozed_until, Some(at("2026-10-12T09:00:00Z")));
+
+        snoozed.insert("PR_1".to_string(), at("2026-10-09T09:00:00Z"));
+        let view = derive_snoozed(vec![pr()], &[], &snoozed).remove(0);
+        assert_eq!(view.group, Group::NeedsAction);
+        assert_eq!(view.snoozed_until, None);
+    }
+
+    #[test]
+    fn responses_are_other_humans_reviews_and_comments_in_order() {
+        let pr = derive_one(json!({ "timelineItems": { "nodes": [
+            timeline_review_with(user("rev"), "APPROVED", "2026-10-03T09:00:00Z"),
+            comment(user("other"), "2026-10-02T09:00:00Z"),
+            timeline_review_with(user("author"), "COMMENTED", "2026-10-04T09:00:00Z"),
+            comment(bot("github-actions"), "2026-10-05T09:00:00Z"),
+            timeline_review_with(user("rev"), "DISMISSED", "2026-10-06T09:00:00Z"),
+        ] } }));
+        let responses: Vec<(&str, ResponseKind)> = pr
+            .responses
+            .iter()
+            .map(|r| (r.login.as_str(), r.kind))
+            .collect();
+        assert_eq!(
+            responses,
+            vec![
+                ("other", ResponseKind::Commented),
+                ("rev", ResponseKind::Approved)
+            ]
+        );
     }
 
     #[test]

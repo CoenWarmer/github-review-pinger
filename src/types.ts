@@ -4,7 +4,7 @@ export type TokenSource = "pat" | "gh";
 
 export type Action = "changesRequested" | "conflicts" | "ciFailing" | "readyToMerge";
 
-export type Group = "needsAction" | "waiting" | "dormant" | "draft";
+export type Group = "needsAction" | "waiting" | "snoozed" | "dormant" | "draft";
 
 export type ReviewerState = "changesRequested" | "approved" | "commented" | "pending";
 
@@ -26,6 +26,7 @@ export interface PullRequest {
   openSince: string;
   quietSince: string;
   lastActivity: string;
+  snoozedUntil: string | null;
   reviewers: Reviewer[];
 }
 

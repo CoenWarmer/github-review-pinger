@@ -14,6 +14,9 @@ pub struct Settings {
     /// PRs without human activity or pushes for this long are dormant: listed
     /// separately and left out of the tray count.
     pub dormant_after_days: u32,
+    /// Nudge about a PR waiting on review after this much weekday time
+    /// without a response.
+    pub nudge_after_hours: u32,
 }
 
 impl Default for Settings {
@@ -21,6 +24,7 @@ impl Default for Settings {
         Self {
             ignored_logins: Vec::new(),
             dormant_after_days: 30,
+            nudge_after_hours: 24,
         }
     }
 }

@@ -1,7 +1,8 @@
 import { useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { PrRow } from "./components/PrRow";
-import { Setup, TokenForm, problemMessage } from "./components/Setup";
+import { SettingsPanel } from "./components/SettingsPanel";
+import { Setup, problemMessage } from "./components/Setup";
 import { elapsed } from "./format";
 import { useNow, useSnapshot } from "./hooks";
 import type { Group, PullRequest, Snapshot } from "./types";
@@ -10,6 +11,7 @@ import "./App.css";
 const SECTIONS: { group: Group; title: string }[] = [
   { group: "needsAction", title: "Needs your action" },
   { group: "waiting", title: "Waiting on review" },
+  { group: "snoozed", title: "Snoozed" },
   { group: "dormant", title: "Dormant" },
   { group: "draft", title: "Drafts" },
 ];
@@ -58,12 +60,12 @@ function Section({
 }
 
 function Footer({ snapshot, now }: { snapshot: Snapshot; now: number }) {
-  const [showToken, setShowToken] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
   const source = snapshot.tokenSource === "pat" ? "saved token" : "GitHub CLI";
 
   return (
     <footer className="footer">
-      {showToken && <TokenForm hasSavedToken={snapshot.tokenSource === "pat"} />}
+      {showSettings && <SettingsPanel hasSavedToken={snapshot.tokenSource === "pat"} />}
       <div className="footer-row">
         <span>
           {snapshot.refreshing
@@ -72,8 +74,8 @@ function Footer({ snapshot, now }: { snapshot: Snapshot; now: number }) {
           {snapshot.viewer && ` · ${snapshot.viewer} via ${source}`}
         </span>
         <span className="footer-actions">
-          <button type="button" className="link" onClick={() => setShowToken(!showToken)}>
-            Token
+          <button type="button" className="link" onClick={() => setShowSettings(!showSettings)}>
+            Settings
           </button>
           <button
             type="button"
@@ -121,7 +123,7 @@ function App() {
               title={title}
               prs={prs.filter((pr) => pr.group === group)}
               now={now}
-              collapsible={group === "dormant" || group === "draft"}
+              collapsible={group === "snoozed" || group === "dormant" || group === "draft"}
             />
           ))
         )}

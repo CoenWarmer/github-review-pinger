@@ -104,22 +104,51 @@ button {
 }
 
 .pr {
+  position: relative;
+  border-bottom: 1px solid var(--border);
+}
+
+.pr:hover,
+.pr:focus-within {
+  background: var(--bg-hover);
+}
+
+.pr-main {
   display: flex;
   flex-direction: column;
   gap: 3px;
   width: 100%;
   padding: 8px 12px;
   border: 0;
-  border-bottom: 1px solid var(--border);
   background: none;
   text-align: left;
   cursor: pointer;
 }
 
-.pr:hover,
-.pr:focus-visible {
-  background: var(--bg-hover);
+.pr-main:focus-visible {
   outline: none;
+}
+
+/* Revealed on hover so rows stay uncluttered. */
+.pr-side {
+  position: absolute;
+  top: 6px;
+  right: 8px;
+  padding: 2px 6px;
+  border-radius: 6px;
+  background: var(--bg-hover);
+  font-size: 12px;
+  visibility: hidden;
+}
+
+.pr:hover .pr-side,
+.pr:focus-within .pr-side {
+  visibility: visible;
+}
+
+.snooze-options {
+  display: inline-flex;
+  gap: 8px;
 }
 
 .pr-title {
@@ -278,6 +307,20 @@ button {
 
 .token-form .link {
   align-self: flex-start;
+}
+
+.settings {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 4px 0 8px;
+}
+
+.checkbox {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--fg);
 }
 
 .form-error {

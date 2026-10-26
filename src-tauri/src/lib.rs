@@ -1,5 +1,8 @@
 mod auth;
+mod calendar;
 mod github;
+mod memory;
+mod notify;
 mod poller;
 mod prs;
 mod settings;
@@ -11,6 +14,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Manager, State, WindowEvent};
+use tauri_plugin_autostart::{MacosLauncher, ManagerExt};
 use tauri_plugin_positioner::{Position, WindowExt};
 
 use poller::{Poller, Snapshot};
@@ -87,6 +91,33 @@ async fn clear_token(poller: State<'_, Arc<Poller>>) -> Result<(), String> {
     Ok(())
 }
 
+#[tauri::command]
+fn snooze(app: AppHandle, poller: State<Arc<Poller>>, id: String, days: u32) {
+    let until = chrono::Utc::now() + chrono::Duration::days(days.into());
+    poller.set_snooze(&app, &id, Some(until));
+}
+
+#[tauri::command]
+fn unsnooze(app: AppHandle, poller: State<Arc<Poller>>, id: String) {
+    poller.set_snooze(&app, &id, None);
+}
+
+#[tauri::command]
+fn get_autostart(app: AppHandle) -> Result<bool, String> {
+    app.autolaunch().is_enabled().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn set_autostart(app: AppHandle, enabled: bool) -> Result<(), String> {
+    let autolaunch = app.autolaunch();
+    let result = if enabled {
+        autolaunch.enable()
+    } else {
+        autolaunch.disable()
+    };
+    result.map_err(|e| e.to_string())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -96,12 +127,21 @@ pub fn run() {
                 .build(),
         )
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_autostart::init(
+            MacosLauncher::LaunchAgent,
+            None,
+        ))
         .plugin(tauri_plugin_positioner::init())
         .invoke_handler(tauri::generate_handler![
             get_snapshot,
             refresh,
             save_token,
-            clear_token
+            clear_token,
+            snooze,
+            unsnooze,
+            get_autostart,
+            set_autostart
         ])
         .setup(|app| {
             #[cfg(target_os = "macos")]
@@ -144,6 +184,14 @@ pub fn run() {
                 .build(app)?;
 
             let poller = poller::start(app.handle());
+            // Launch at login defaults to on, but a dev build shouldn't
+            // register itself as a login item.
+            if !cfg!(debug_assertions)
+                && poller.claim_first_launch()
+                && let Err(e) = app.autolaunch().enable()
+            {
+                log::warn!("Could not enable launch at login: {e}");
+            }
             app.manage(poller);
 
             Ok(())

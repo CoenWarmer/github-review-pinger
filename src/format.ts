@@ -6,6 +6,10 @@ export function elapsed(iso: string, now: number): string {
   return `${Math.floor(hours / 24)}d`;
 }
 
+export function dayAndTime(iso: string): string {
+  return new Date(iso).toLocaleString([], { weekday: "short", hour: "2-digit", minute: "2-digit" });
+}
+
 export function clockTime(iso: string): string {
   return new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 }

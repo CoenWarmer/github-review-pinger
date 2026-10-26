@@ -243,8 +243,9 @@ mod tests {
         let rules = prs::Rules {
             ignored_logins: &ignored,
             dormant_after: chrono::Duration::days(30),
+            snoozed: &Default::default(),
         };
-        for pr in prs::derive(fetched.pull_requests, &fetched.viewer, &rules, Utc::now()) {
+        for pr in prs::derive(&fetched.pull_requests, &fetched.viewer, &rules, Utc::now()) {
             let reviewers: Vec<String> = pr
                 .reviewers
                 .iter()

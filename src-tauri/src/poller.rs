@@ -1,22 +1,32 @@
 //! Background polling. The poller owns the latest snapshot, pushes it to the
-//! popover as a `snapshot` event, and keeps the tray count in sync.
+//! popover as a `snapshot` event, keeps the tray count in sync, and sends
+//! notifications for what changed between polls.
 
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Local, Utc};
 use serde::Serialize;
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, Manager};
+use tauri_plugin_notification::NotificationExt;
 use tokio::sync::Notify;
 
 use crate::auth::{self, AuthError, TokenSource};
+use crate::github::types::PullRequest;
 use crate::github::{self, FetchError};
+use crate::memory::Memory;
+use crate::notify;
 use crate::prs::{self, Group, PrView};
 use crate::settings;
 
 const POLL_INTERVAL: Duration = Duration::from_secs(120);
 const STALE_AFTER: chrono::Duration = chrono::Duration::seconds(30);
 const MAX_BACKOFF: Duration = Duration::from_secs(600);
+/// A gap this long between polls means the machine slept or was offline, so
+/// whatever happened meanwhile is summarized rather than replayed.
+const COLD_START_GAP: chrono::Duration = chrono::Duration::minutes(15);
 pub const TRAY_ID: &str = "tray";
 
 #[derive(Debug, Clone, Serialize)]
@@ -57,6 +67,12 @@ pub enum Problem {
 
 pub struct Poller {
     snapshot: Mutex<Snapshot>,
+    /// The last successful fetch, kept so snoozes and settings can be
+    /// re-applied without another round trip.
+    latest: Mutex<Option<Fetched>>,
+    memory: Mutex<Memory>,
+    memory_path: Option<PathBuf>,
+    first_poll: AtomicBool,
     wake: Notify,
     http: reqwest::Client,
 }
@@ -80,6 +96,51 @@ impl Poller {
         }
     }
 
+    pub fn set_snooze(&self, app: &AppHandle, id: &str, until: Option<DateTime<Utc>>) {
+        {
+            let mut memory = self.memory.lock().unwrap();
+            memory.set_snooze(id, until, Utc::now());
+            self.save(&memory);
+        }
+        let latest = self.latest.lock().unwrap();
+        if let Some(fetched) = latest.as_ref() {
+            let views = self.derive(app, fetched, Utc::now());
+            self.update(app, |s| s.pull_requests = views);
+        }
+    }
+
+    /// Returns true exactly once per install, so autostart can default to on
+    /// without overriding a later opt-out.
+    pub fn claim_first_launch(&self) -> bool {
+        let mut memory = self.memory.lock().unwrap();
+        if memory.autostart_initialized {
+            return false;
+        }
+        memory.autostart_initialized = true;
+        self.save(&memory);
+        true
+    }
+
+    fn derive(&self, app: &AppHandle, fetched: &Fetched, now: DateTime<Utc>) -> Vec<PrView> {
+        let settings = settings::load(app);
+        let snoozed = self.memory.lock().unwrap().snoozes();
+        let rules = prs::Rules {
+            ignored_logins: &settings.ignored_logins,
+            dormant_after: chrono::Duration::days(settings.dormant_after_days.into()),
+            snoozed: &snoozed,
+        };
+        prs::derive(&fetched.pull_requests, &fetched.viewer, &rules, now)
+    }
+
+    fn save(&self, memory: &Memory) {
+        let Some(path) = &self.memory_path else {
+            return;
+        };
+        if let Err(e) = memory.save(path) {
+            log::warn!("Could not save {}: {e}", path.display());
+        }
+    }
+
     fn update(&self, app: &AppHandle, change: impl FnOnce(&mut Snapshot)) {
         let snapshot = {
             let mut snapshot = self.snapshot.lock().unwrap();
@@ -94,6 +155,13 @@ impl Poller {
 }
 
 pub fn start(app: &AppHandle) -> Arc<Poller> {
+    let memory_path = app
+        .path()
+        .app_data_dir()
+        .ok()
+        .map(|dir| dir.join("state.json"));
+    let memory = memory_path.as_deref().map(Memory::load).unwrap_or_default();
+
     let poller = Arc::new(Poller {
         snapshot: Mutex::new(Snapshot {
             status: Status::Loading,
@@ -104,6 +172,10 @@ pub fn start(app: &AppHandle) -> Arc<Poller> {
             sso_partial: false,
             pull_requests: Vec::new(),
         }),
+        latest: Mutex::new(None),
+        memory: Mutex::new(memory),
+        memory_path,
+        first_poll: AtomicBool::new(true),
         wake: Notify::new(),
         http: github::http_client(),
     });
@@ -146,38 +218,74 @@ fn backoff(failures: u32) -> Duration {
 async fn poll_once(app: &AppHandle, poller: &Poller) -> Result<(), Problem> {
     poller.update(app, |s| s.refreshing = true);
 
-    let result = fetch(app, poller).await;
-    poller.update(app, |s| {
-        s.refreshing = false;
-        match &result {
-            Ok(fetched) => {
-                s.status = Status::Ok;
-                s.viewer = Some(fetched.viewer.clone());
-                s.token_source = Some(fetched.token_source);
-                s.fetched_at = Some(Utc::now());
-                s.sso_partial = fetched.sso_partial;
-                s.pull_requests = fetched.pull_requests.clone();
-            }
+    let fetched = match fetch(poller).await {
+        Ok(fetched) => fetched,
+        Err(problem) => {
             // Keep showing the last good data alongside the problem.
-            Err(problem) => {
-                log::warn!("Refresh failed: {problem:?}");
+            log::warn!("Refresh failed: {problem:?}");
+            poller.update(app, |s| {
+                s.refreshing = false;
                 s.status = Status::Error {
                     problem: problem.clone(),
                 };
-            }
+            });
+            return Err(problem);
         }
+    };
+
+    let now = Utc::now();
+    let views = poller.derive(app, &fetched, now);
+    let notifications = {
+        let mut memory = poller.memory.lock().unwrap();
+        let first_ever = memory.last_poll_at.is_none();
+        let cold_start = poller.first_poll.swap(false, Ordering::Relaxed)
+            || memory
+                .last_poll_at
+                .is_some_and(|at| now - at > COLD_START_GAP);
+        let nudge_after = chrono::Duration::hours(settings::load(app).nudge_after_hours.into());
+
+        let events = notify::diff(&views, &mut memory, now, nudge_after, &Local);
+        poller.save(&memory);
+        // Right after install everything is new; the list itself says what's pending.
+        if first_ever {
+            Vec::new()
+        } else {
+            notify::compose(&events, cold_start)
+        }
+    };
+    for notification in notifications {
+        let shown = app
+            .notification()
+            .builder()
+            .title(&notification.title)
+            .body(&notification.body)
+            .show();
+        if let Err(e) = shown {
+            log::warn!("Could not show notification: {e}");
+        }
+    }
+
+    poller.update(app, |s| {
+        s.refreshing = false;
+        s.status = Status::Ok;
+        s.viewer = Some(fetched.viewer.clone());
+        s.token_source = Some(fetched.token_source);
+        s.fetched_at = Some(now);
+        s.sso_partial = fetched.sso_partial;
+        s.pull_requests = views;
     });
-    result.map(|_| ())
+    *poller.latest.lock().unwrap() = Some(fetched);
+    Ok(())
 }
 
 struct Fetched {
     viewer: String,
     token_source: TokenSource,
     sso_partial: bool,
-    pull_requests: Vec<PrView>,
+    pull_requests: Vec<PullRequest>,
 }
 
-async fn fetch(app: &AppHandle, poller: &Poller) -> Result<Fetched, Problem> {
+async fn fetch(poller: &Poller) -> Result<Fetched, Problem> {
     let token = tauri::async_runtime::spawn_blocking(auth::resolve_token)
         .await
         .map_err(|e| Problem::Api {
@@ -199,16 +307,11 @@ async fn fetch(app: &AppHandle, poller: &Poller) -> Result<Fetched, Problem> {
             FetchError::Api(message) => Problem::Api { message },
         })?;
 
-    let settings = settings::load(app);
-    let rules = prs::Rules {
-        ignored_logins: &settings.ignored_logins,
-        dormant_after: chrono::Duration::days(settings.dormant_after_days.into()),
-    };
     Ok(Fetched {
-        pull_requests: prs::derive(fetched.pull_requests, &fetched.viewer, &rules, Utc::now()),
         viewer: fetched.viewer,
         token_source: token.source,
         sso_partial: fetched.sso_partial,
+        pull_requests: fetched.pull_requests,
     })
 }
 
