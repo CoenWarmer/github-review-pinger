@@ -33,7 +33,10 @@ pub struct PullRequest {
     pub created_at: DateTime<Utc>,
     pub review_decision: Option<ReviewDecision>,
     pub mergeable: Mergeable,
-    pub merge_state_status: MergeStateStatus,
+    /// Not part of the details query; filled in afterwards for PRs that could
+    /// be ready to merge, and `None` for the rest.
+    #[serde(default)]
+    pub merge_state_status: Option<MergeStateStatus>,
     /// Only presence matters: auto-merge is enabled.
     pub auto_merge_request: Option<IgnoredAny>,
     pub repository: Repository,

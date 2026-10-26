@@ -1,19 +1,30 @@
 pub mod types;
 
+use std::collections::HashMap;
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
+use futures_util::{StreamExt, TryStreamExt, stream};
 use reqwest::{StatusCode, header};
 use serde::Deserialize;
-use serde_json::json;
+use serde::de::DeserializeOwned;
+use serde_json::{Value, json};
 
-use types::PullRequest;
+use types::{CheckState, MergeStateStatus, Mergeable, PullRequest, ReviewDecision, ReviewState};
 
 const ENDPOINT: &str = "https://api.github.com/graphql";
-const QUERY: &str = include_str!("query.graphql");
+const SEARCH_QUERY: &str = include_str!("search.graphql");
+const DETAILS_QUERY: &str = concat!(
+    include_str!("details.graphql"),
+    include_str!("pull_request.graphql")
+);
+const MERGE_STATE_QUERY: &str = include_str!("merge_state.graphql");
 const SEARCH: &str = "is:pr is:open author:@me archived:false";
-const PAGE_SIZE: u32 = 25;
-const MAX_PAGES: usize = 10;
+const MAX_SEARCH_PAGES: usize = 10;
+/// Small enough that each request finishes well inside GitHub's ~10 s
+/// GraphQL timeout; batches run concurrently.
+const BATCH_SIZE: usize = 10;
+const MAX_CONCURRENT: usize = 8;
 const MAX_ATTEMPTS: u32 = 3;
 
 pub struct Fetched {
@@ -39,24 +50,98 @@ pub fn http_client() -> reqwest::Client {
         .expect("HTTP client configuration is valid")
 }
 
+/// Fetches in three steps, because a single search query with all fields
+/// takes long enough to hit GitHub's timeout: list the open PR ids, fetch
+/// their details in concurrent batches, then fetch the expensive merge state
+/// only for PRs that could be ready to merge.
 pub async fn fetch_open_pull_requests(
     http: &reqwest::Client,
     token: &str,
 ) -> Result<Fetched, FetchError> {
-    let mut fetched = Fetched {
-        viewer: String::new(),
-        pull_requests: Vec::new(),
-        sso_partial: false,
+    let (viewer, ids, sso_partial) = search_ids(http, token).await?;
+
+    let mut pull_requests: Vec<PullRequest> = in_batches(
+        http,
+        token,
+        DETAILS_QUERY,
+        &ids,
+        |nodes: Nodes<PullRequest>| nodes.nodes,
+    )
+    .await?;
+
+    let candidates: Vec<String> = pull_requests
+        .iter()
+        .filter(|pr| could_be_ready(pr))
+        .map(|pr| pr.id.clone())
+        .collect();
+    let merge_states: HashMap<String, MergeStateStatus> = in_batches(
+        http,
+        token,
+        MERGE_STATE_QUERY,
+        &candidates,
+        |nodes: Nodes<MergeState>| nodes.nodes,
+    )
+    .await?
+    .into_iter()
+    .map(|state| (state.id, state.merge_state_status))
+    .collect();
+    for pr in &mut pull_requests {
+        pr.merge_state_status = merge_states.get(&pr.id).copied();
+    }
+
+    Ok(Fetched {
+        viewer,
+        pull_requests,
+        sso_partial,
+    })
+}
+
+/// Approved, mergeable, green, and not already auto-merging: the only PRs
+/// whose ready-to-merge verdict depends on `mergeStateStatus`. Mirrors the
+/// other conditions of the rule in `prs::actions`.
+fn could_be_ready(pr: &PullRequest) -> bool {
+    let approved = match pr.review_decision {
+        Some(ReviewDecision::Approved) => true,
+        None => pr
+            .latest_opinionated_reviews
+            .iter()
+            .flat_map(|nodes| nodes.iter())
+            .any(|review| review.state == ReviewState::Approved),
+        _ => false,
     };
+    let checks_ok = pr
+        .commits
+        .iter()
+        .last()
+        .and_then(|node| node.commit.status_check_rollup.as_ref())
+        .is_none_or(|rollup| rollup.state == CheckState::Success);
+    approved
+        && checks_ok
+        && !pr.is_draft
+        && pr.mergeable != Mergeable::Conflicting
+        && pr.auto_merge_request.is_none()
+}
+
+async fn search_ids(
+    http: &reqwest::Client,
+    token: &str,
+) -> Result<(String, Vec<String>, bool), FetchError> {
+    let mut viewer = String::new();
+    let mut ids = Vec::new();
+    let mut sso_partial = false;
     let mut cursor: Option<String> = None;
 
-    for _ in 0..MAX_PAGES {
-        let page = fetch_page(http, token, cursor.as_deref()).await?;
-        fetched.viewer = page.data.viewer.login;
-        fetched.sso_partial |= page.sso_partial;
-        fetched
-            .pull_requests
-            .extend(page.data.search.nodes.into_iter().flatten());
+    for _ in 0..MAX_SEARCH_PAGES {
+        let page: Response<SearchData> = request(
+            http,
+            token,
+            SEARCH_QUERY,
+            json!({ "q": SEARCH, "cursor": cursor }),
+        )
+        .await?;
+        viewer = page.data.viewer.login;
+        sso_partial |= page.sso_partial;
+        ids.extend(page.data.search.nodes.into_iter().flatten().map(|n| n.id));
 
         let info = page.data.search.page_info;
         match info.end_cursor {
@@ -64,31 +149,52 @@ pub async fn fetch_open_pull_requests(
             _ => break,
         }
     }
-
-    Ok(fetched)
+    Ok((viewer, ids, sso_partial))
 }
 
-struct Page {
-    data: Data,
-    sso_partial: bool,
+/// Runs `query` for `ids` in concurrent batches and collects the non-null nodes.
+async fn in_batches<D, T>(
+    http: &reqwest::Client,
+    token: &str,
+    query: &str,
+    ids: &[String],
+    nodes: impl Fn(D) -> Vec<Option<T>>,
+) -> Result<Vec<T>, FetchError>
+where
+    D: DeserializeOwned,
+{
+    // Owned variables keep the stream's closure free of borrowed arguments,
+    // which a Send future spawned on the runtime can't express.
+    let variables: Vec<Value> = ids
+        .chunks(BATCH_SIZE)
+        .map(|chunk| json!({ "ids": chunk }))
+        .collect();
+    let batches: Vec<Response<D>> = stream::iter(variables)
+        .map(|variables| request::<D>(http, token, query, variables))
+        .buffer_unordered(MAX_CONCURRENT)
+        .try_collect()
+        .await?;
+    Ok(batches
+        .into_iter()
+        .flat_map(|batch| nodes(batch.data))
+        .flatten()
+        .collect())
 }
 
 #[derive(Deserialize)]
-struct Response {
-    data: Option<Data>,
-    #[serde(default)]
-    errors: Vec<GraphqlError>,
+struct Nodes<T> {
+    nodes: Vec<Option<T>>,
 }
 
 #[derive(Deserialize)]
-struct GraphqlError {
-    #[serde(rename = "type")]
-    kind: Option<String>,
-    message: String,
+#[serde(rename_all = "camelCase")]
+struct MergeState {
+    id: String,
+    merge_state_status: MergeStateStatus,
 }
 
 #[derive(Deserialize)]
-struct Data {
+struct SearchData {
     viewer: Viewer,
     search: Search,
 }
@@ -102,7 +208,12 @@ struct Viewer {
 #[serde(rename_all = "camelCase")]
 struct Search {
     page_info: PageInfo,
-    nodes: Vec<Option<PullRequest>>,
+    nodes: Vec<Option<SearchNode>>,
+}
+
+#[derive(Deserialize)]
+struct SearchNode {
+    id: String,
 }
 
 #[derive(Deserialize)]
@@ -112,15 +223,32 @@ struct PageInfo {
     end_cursor: Option<String>,
 }
 
-async fn fetch_page(
+struct Response<D> {
+    data: D,
+    sso_partial: bool,
+}
+
+#[derive(Deserialize)]
+struct Envelope<D> {
+    data: Option<D>,
+    #[serde(default)]
+    errors: Vec<GraphqlError>,
+}
+
+#[derive(Deserialize)]
+struct GraphqlError {
+    #[serde(rename = "type")]
+    kind: Option<String>,
+    message: String,
+}
+
+async fn request<D: DeserializeOwned>(
     http: &reqwest::Client,
     token: &str,
-    cursor: Option<&str>,
-) -> Result<Page, FetchError> {
-    let body = json!({
-        "query": QUERY,
-        "variables": { "q": SEARCH, "first": PAGE_SIZE, "cursor": cursor },
-    });
+    query: &str,
+    variables: Value,
+) -> Result<Response<D>, FetchError> {
+    let body = json!({ "query": query, "variables": variables });
 
     let mut attempt = 0;
     let response = loop {
@@ -133,7 +261,7 @@ async fn fetch_page(
             .await
             .map_err(|e| FetchError::Network(e.to_string()))?;
 
-        // The search query is heavy and GitHub occasionally times out with a 502.
+        // GitHub occasionally times out heavy queries with a 502.
         if response.status().is_server_error() && attempt < MAX_ATTEMPTS {
             log::warn!("GitHub returned {}, retrying", response.status());
             tokio::time::sleep(Duration::from_secs(2 * u64::from(attempt))).await;
@@ -160,7 +288,7 @@ async fn fetch_page(
         .and_then(|v| v.to_str().ok())
         .is_some_and(|v| v.contains("partial-results"));
 
-    let parsed: Response = response
+    let parsed: Envelope<D> = response
         .json()
         .await
         .map_err(|e| FetchError::Api(format!("Unexpected response from GitHub: {e}")))?;
@@ -186,7 +314,7 @@ async fn fetch_page(
             if !parsed.errors.is_empty() {
                 log::warn!("GitHub returned partial data: {}", messages());
             }
-            Ok(Page { data, sso_partial })
+            Ok(Response { data, sso_partial })
         }
         None => Err(FetchError::Api(messages())),
     }
@@ -223,6 +351,54 @@ fn rate_limit_reset(
 mod tests {
     use super::*;
     use crate::{auth, prs};
+
+    fn pr(overrides: Value) -> PullRequest {
+        let mut pr = json!({
+            "id": "PR_1",
+            "number": 1,
+            "title": "Title",
+            "url": "https://github.com/o/r/pull/1",
+            "isDraft": false,
+            "createdAt": "2026-10-01T09:00:00Z",
+            "reviewDecision": "APPROVED",
+            "mergeable": "MERGEABLE",
+            "autoMergeRequest": null,
+            "repository": { "nameWithOwner": "o/r" },
+            "commits": { "nodes": [{ "commit": {
+                "committedDate": "2026-10-01T09:00:00Z",
+                "statusCheckRollup": { "state": "SUCCESS" },
+            } }] },
+            "timelineItems": { "nodes": [] },
+        });
+        for (key, value) in overrides.as_object().unwrap() {
+            pr[key] = value.clone();
+        }
+        serde_json::from_value(pr).unwrap()
+    }
+
+    #[test]
+    fn merge_state_is_only_fetched_for_possible_merges() {
+        assert!(could_be_ready(&pr(json!({}))));
+        assert!(could_be_ready(&pr(json!({
+            "reviewDecision": null,
+            "latestOpinionatedReviews": { "nodes": [{ "state": "APPROVED", "author": null }] },
+        }))));
+
+        assert!(!could_be_ready(&pr(
+            json!({ "reviewDecision": "REVIEW_REQUIRED" })
+        )));
+        assert!(!could_be_ready(&pr(json!({ "isDraft": true }))));
+        assert!(!could_be_ready(&pr(json!({ "mergeable": "CONFLICTING" }))));
+        assert!(!could_be_ready(&pr(
+            json!({ "autoMergeRequest": { "enabledAt": null } })
+        )));
+        assert!(!could_be_ready(&pr(
+            json!({ "commits": { "nodes": [{ "commit": {
+            "committedDate": "2026-10-01T09:00:00Z",
+            "statusCheckRollup": { "state": "PENDING" },
+        } }] } })
+        )));
+    }
 
     /// Fetches the logged-in user's real pull requests. Run with
     /// `cargo test -- --ignored --nocapture live_fetch`.

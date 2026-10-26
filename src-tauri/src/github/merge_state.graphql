@@ -1,0 +1,10 @@
+# mergeStateStatus is computed on demand and roughly doubles a PR's query
+# cost, so it's only requested for the few PRs that might be ready to merge.
+query MergeStates($ids: [ID!]!) {
+  nodes(ids: $ids) {
+    ... on PullRequest {
+      id
+      mergeStateStatus
+    }
+  }
+}

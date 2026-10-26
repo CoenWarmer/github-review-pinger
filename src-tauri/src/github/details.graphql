@@ -1,0 +1,5 @@
+query PullRequestDetails($ids: [ID!]!) {
+  nodes(ids: $ids) {
+    ...PullRequestFields
+  }
+}
