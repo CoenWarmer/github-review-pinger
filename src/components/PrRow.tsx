@@ -44,10 +44,12 @@ export function PrRow({ pr, now }: { pr: PullRequest; now: number }) {
         <span className="pr-meta">
           {pr.repo}#{pr.number} · open {elapsed(pr.openSince, now)} · quiet{" "}
           {elapsed(pr.quietSince, now)}
+          {pr.group === "dormant" && ` · idle ${elapsed(pr.lastActivity, now)}`}
         </span>
         {(pr.actions.length > 0 || pr.reviewers.length > 0) && (
           <span className="pr-badges">
             {pr.group !== "draft" &&
+              pr.group !== "dormant" &&
               pr.actions.map((action) => (
                 <span key={action} className={`badge badge-${action}`}>
                   {ACTION_LABELS[action]}

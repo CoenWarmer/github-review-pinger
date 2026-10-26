@@ -78,6 +78,8 @@ pub struct CommitNode {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Commit {
+    /// Updated by rebases and amends, so it approximates the last push.
+    pub committed_date: DateTime<Utc>,
     pub status_check_rollup: Option<StatusCheckRollup>,
 }
 

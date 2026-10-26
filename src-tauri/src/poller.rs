@@ -200,12 +200,12 @@ async fn fetch(app: &AppHandle, poller: &Poller) -> Result<Fetched, Problem> {
         })?;
 
     let settings = settings::load(app);
+    let rules = prs::Rules {
+        ignored_logins: &settings.ignored_logins,
+        dormant_after: chrono::Duration::days(settings.dormant_after_days.into()),
+    };
     Ok(Fetched {
-        pull_requests: prs::derive(
-            fetched.pull_requests,
-            &fetched.viewer,
-            &settings.ignored_logins,
-        ),
+        pull_requests: prs::derive(fetched.pull_requests, &fetched.viewer, &rules, Utc::now()),
         viewer: fetched.viewer,
         token_source: token.source,
         sso_partial: fetched.sso_partial,

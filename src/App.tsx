@@ -10,6 +10,7 @@ import "./App.css";
 const SECTIONS: { group: Group; title: string }[] = [
   { group: "needsAction", title: "Needs your action" },
   { group: "waiting", title: "Waiting on review" },
+  { group: "dormant", title: "Dormant" },
   { group: "draft", title: "Drafts" },
 ];
 
@@ -120,7 +121,7 @@ function App() {
               title={title}
               prs={prs.filter((pr) => pr.group === group)}
               now={now}
-              collapsible={group === "draft"}
+              collapsible={group === "dormant" || group === "draft"}
             />
           ))
         )}

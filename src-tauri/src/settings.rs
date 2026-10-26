@@ -5,12 +5,24 @@ use tauri::{AppHandle, Manager};
 
 /// User settings, read from `settings.json` in the app config directory on
 /// every poll so edits apply without a restart.
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Settings {
     /// Accounts whose activity doesn't count as a human response, for bots
     /// that post as regular users rather than GitHub Apps.
     pub ignored_logins: Vec<String>,
+    /// PRs without human activity or pushes for this long are dormant: listed
+    /// separately and left out of the tray count.
+    pub dormant_after_days: u32,
+}
+
+impl Default for Settings {
+    fn default() -> Self {
+        Self {
+            ignored_logins: Vec::new(),
+            dormant_after_days: 30,
+        }
+    }
 }
 
 pub fn load(app: &AppHandle) -> Settings {

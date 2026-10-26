@@ -23,6 +23,7 @@ query OpenPullRequests($q: String!, $first: Int!, $cursor: String) {
         commits(last: 1) {
           nodes {
             commit {
+              committedDate
               statusCheckRollup {
                 state
               }

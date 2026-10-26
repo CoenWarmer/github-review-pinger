@@ -1,5 +1,6 @@
 //! Turns raw GitHub pull requests into what the popover and tray show: the
-//! open and quiet clocks, what needs the author's action, and per-reviewer state.
+//! open and quiet clocks, what needs the author's action, which PRs have gone
+//! dormant, and per-reviewer state.
 
 use std::collections::BTreeMap;
 
@@ -26,6 +27,7 @@ pub enum Action {
 pub enum Group {
     NeedsAction,
     Waiting,
+    Dormant,
     Draft,
 }
 
@@ -68,15 +70,31 @@ pub struct PrView {
     pub actions: Vec<Action>,
     pub open_since: DateTime<Utc>,
     pub quiet_since: DateTime<Utc>,
+    /// The last push, or review or comment by a human including the author.
+    pub last_activity: DateTime<Utc>,
     pub reviewers: Vec<Reviewer>,
 }
 
-pub fn derive(prs: Vec<PullRequest>, viewer: &str, ignored_logins: &[String]) -> Vec<PrView> {
+pub struct Rules<'a> {
+    pub ignored_logins: &'a [String],
+    pub dormant_after: chrono::Duration,
+}
+
+pub fn derive(
+    prs: Vec<PullRequest>,
+    viewer: &str,
+    rules: &Rules,
+    now: DateTime<Utc>,
+) -> Vec<PrView> {
     let people = People {
         viewer,
-        ignored_logins,
+        ignored_logins: rules.ignored_logins,
     };
-    let mut views: Vec<PrView> = prs.iter().map(|pr| view(pr, &people)).collect();
+    let dormant_before = now - rules.dormant_after;
+    let mut views: Vec<PrView> = prs
+        .iter()
+        .map(|pr| view(pr, &people, dormant_before))
+        .collect();
     views.sort_by(|a, b| {
         a.group.cmp(&b.group).then_with(|| match a.group {
             Group::NeedsAction => a
@@ -85,6 +103,7 @@ pub fn derive(prs: Vec<PullRequest>, viewer: &str, ignored_logins: &[String]) ->
                 .cmp(&b.actions.first())
                 .then(a.quiet_since.cmp(&b.quiet_since)),
             Group::Waiting => a.quiet_since.cmp(&b.quiet_since),
+            Group::Dormant => b.last_activity.cmp(&a.last_activity),
             Group::Draft => b.open_since.cmp(&a.open_since),
         })
     });
@@ -117,14 +136,18 @@ impl People<'_> {
     }
 }
 
-fn view(pr: &PullRequest, people: &People) -> PrView {
+fn view(pr: &PullRequest, people: &People, dormant_before: DateTime<Utc>) -> PrView {
     let open_since = open_since(pr);
-    let quiet_since = quiet_since(pr, people).map_or(open_since, |t| t.max(open_since));
+    let quiet_since = latest_response(pr, |author| people.is_other_human(author))
+        .map_or(open_since, |t| t.max(open_since));
+    let last_activity = last_activity(pr, people, open_since);
     let reviewers = reviewers(pr, people);
     let actions = actions(pr, &reviewers);
 
     let group = if pr.is_draft {
         Group::Draft
+    } else if last_activity < dormant_before {
+        Group::Dormant
     } else if actions.is_empty() {
         Group::Waiting
     } else {
@@ -141,6 +164,7 @@ fn view(pr: &PullRequest, people: &People) -> PrView {
         actions,
         open_since,
         quiet_since,
+        last_activity,
         reviewers,
     }
 }
@@ -157,8 +181,22 @@ fn open_since(pr: &PullRequest) -> DateTime<Utc> {
         .unwrap_or(pr.created_at)
 }
 
-/// The last review or comment by someone other than the author or a bot.
-fn quiet_since(pr: &PullRequest, people: &People) -> Option<DateTime<Utc>> {
+fn last_activity(pr: &PullRequest, people: &People, open_since: DateTime<Utc>) -> DateTime<Utc> {
+    let last_push = pr
+        .commits
+        .iter()
+        .last()
+        .map(|node| node.commit.committed_date);
+    let last_response = latest_response(pr, |author| !people.is_automated(author));
+    [Some(open_since), last_push, last_response]
+        .into_iter()
+        .flatten()
+        .max()
+        .unwrap_or(open_since)
+}
+
+/// The latest review or comment whose author passes `counts`.
+fn latest_response(pr: &PullRequest, counts: impl Fn(&Actor) -> bool) -> Option<DateTime<Utc>> {
     pr.timeline_items
         .iter()
         .filter_map(|item| match item {
@@ -169,7 +207,7 @@ fn quiet_since(pr: &PullRequest, people: &People) -> Option<DateTime<Utc>> {
             | TimelineItem::IssueComment {
                 created_at: at,
                 author: Some(author),
-            } if people.is_other_human(author) => Some(*at),
+            } if counts(author) => Some(*at),
             _ => None,
         })
         .max()
@@ -284,6 +322,7 @@ mod tests {
     use serde_json::{Value, json};
 
     const ME: &str = "author";
+    const NOW: &str = "2026-10-10T09:00:00Z";
 
     fn base() -> Value {
         json!({
@@ -296,7 +335,7 @@ mod tests {
             "reviewDecision": "REVIEW_REQUIRED",
             "mergeable": "MERGEABLE",
             "repository": { "nameWithOwner": "o/r" },
-            "commits": { "nodes": [{ "commit": { "statusCheckRollup": { "state": "SUCCESS" } } }] },
+            "commits": { "nodes": [commit("2026-10-01T09:00:00Z", "SUCCESS")] },
             "reviewRequests": { "nodes": [] },
             "latestReviews": { "nodes": [] },
             "latestOpinionatedReviews": { "nodes": [] },
@@ -317,7 +356,19 @@ mod tests {
     }
 
     fn derive_with(overrides: Value, ignored: &[String]) -> PrView {
-        derive(vec![with(overrides)], ME, ignored).remove(0)
+        derive_all(vec![with(overrides)], ignored).remove(0)
+    }
+
+    fn derive_all(prs: Vec<PullRequest>, ignored: &[String]) -> Vec<PrView> {
+        let rules = Rules {
+            ignored_logins: ignored,
+            dormant_after: chrono::Duration::days(30),
+        };
+        derive(prs, ME, &rules, at(NOW))
+    }
+
+    fn commit(committed: &str, checks: &str) -> Value {
+        json!({ "commit": { "committedDate": committed, "statusCheckRollup": { "state": checks } } })
     }
 
     fn user(login: &str) -> Value {
@@ -447,7 +498,7 @@ mod tests {
         let pr = derive_one(json!({
             "reviewDecision": "APPROVED",
             "mergeable": "CONFLICTING",
-            "commits": { "nodes": [{ "commit": { "statusCheckRollup": { "state": "FAILURE" } } }] },
+            "commits": { "nodes": [commit("2026-10-01T09:00:00Z", "FAILURE")] },
         }));
         assert_eq!(pr.actions, vec![Action::Conflicts, Action::CiFailing]);
     }
@@ -463,6 +514,44 @@ mod tests {
         let pr = derive_one(json!({ "isDraft": true, "mergeable": "CONFLICTING" }));
         assert_eq!(pr.group, Group::Draft);
         assert_eq!(pr.actions, vec![Action::Conflicts]);
+    }
+
+    #[test]
+    fn untouched_for_a_month_is_dormant() {
+        let pr = derive_one(json!({
+            "createdAt": "2026-08-01T09:00:00Z",
+            "mergeable": "CONFLICTING",
+            "commits": { "nodes": [commit("2026-08-01T09:00:00Z", "FAILURE")] },
+            "timelineItems": { "nodes": [comment(bot("github-actions"), "2026-10-09T09:00:00Z")] },
+        }));
+        assert_eq!(pr.group, Group::Dormant);
+        assert_eq!(pr.last_activity, at("2026-08-01T09:00:00Z"));
+    }
+
+    #[test]
+    fn a_push_or_own_comment_keeps_it_alive() {
+        let pushed = derive_one(json!({
+            "createdAt": "2026-08-01T09:00:00Z",
+            "commits": { "nodes": [commit("2026-10-05T09:00:00Z", "SUCCESS")] },
+        }));
+        assert_eq!(pushed.group, Group::Waiting);
+
+        let commented = derive_one(json!({
+            "createdAt": "2026-08-01T09:00:00Z",
+            "commits": { "nodes": [commit("2026-08-01T09:00:00Z", "SUCCESS")] },
+            "timelineItems": { "nodes": [comment(user("author"), "2026-10-05T09:00:00Z")] },
+        }));
+        assert_eq!(commented.group, Group::Waiting);
+    }
+
+    #[test]
+    fn dormant_drafts_stay_drafts() {
+        let pr = derive_one(json!({
+            "isDraft": true,
+            "createdAt": "2026-08-01T09:00:00Z",
+            "commits": { "nodes": [commit("2026-08-01T09:00:00Z", "SUCCESS")] },
+        }));
+        assert_eq!(pr.group, Group::Draft);
     }
 
     #[test]
@@ -509,15 +598,27 @@ mod tests {
     fn sorts_by_group_then_urgency_then_staleness() {
         let prs = vec![
             with(json!({ "id": "draft", "isDraft": true })),
+            with(json!({
+                "id": "dormant",
+                "createdAt": "2026-08-01T09:00:00Z",
+                "commits": { "nodes": [commit("2026-08-01T09:00:00Z", "SUCCESS")] },
+            })),
             with(json!({ "id": "waiting-new", "createdAt": "2026-10-05T09:00:00Z" })),
             with(json!({ "id": "waiting-old", "createdAt": "2026-10-02T09:00:00Z" })),
             with(json!({ "id": "ready", "reviewDecision": "APPROVED" })),
             with(json!({ "id": "conflict", "mergeable": "CONFLICTING" })),
         ];
-        let ids: Vec<String> = derive(prs, ME, &[]).into_iter().map(|p| p.id).collect();
+        let ids: Vec<String> = derive_all(prs, &[]).into_iter().map(|p| p.id).collect();
         assert_eq!(
             ids,
-            vec!["conflict", "ready", "waiting-old", "waiting-new", "draft"]
+            vec![
+                "conflict",
+                "ready",
+                "waiting-old",
+                "waiting-new",
+                "dormant",
+                "draft"
+            ]
         );
     }
 }

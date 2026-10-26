@@ -49,7 +49,9 @@ have been open and waiting.
 | **Ready to merge** | (`reviewDecision == APPROVED`, or `reviewDecision == null` with ≥1 approval and no outstanding changes requested) and `mergeable == MERGEABLE` and no failing checks. |
 | **CI failing** | Head commit `statusCheckRollup.state` is `FAILURE` or `ERROR`. |
 | **Conflicts** | `mergeable == CONFLICTING`. |
-| **Needs action** | Any of the four states above, excluding drafts and snoozed PRs. |
+| **Last activity** | The latest of: the last commit's `committedDate` (approximates the last push), the open clock, or a review or comment by any human, the author included. |
+| **Dormant** | A non-draft PR whose last activity is older than `dormantAfterDays` (default 30). Listed in its own collapsed section, never counted or nudged. Any push or human comment revives it. |
+| **Needs action** | Any of the four states above, excluding drafts, dormant, and snoozed PRs. |
 
 ## Tray icon
 
@@ -62,7 +64,8 @@ Grouped, top to bottom:
 
 1. **Needs action**: changes requested, conflicts, CI failing, ready to merge.
 2. **Waiting on review**: sorted by longest quiet first.
-3. **Drafts**: muted and not counted.
+3. **Dormant**: collapsed, most recently active first, with an `idle` time.
+4. **Drafts**: collapsed and not counted.
 
 Each row shows: repo, title, `open 6d · quiet 2d`, and one chip per reviewer
 with their latest state. An approval or change request outranks a later
@@ -81,7 +84,7 @@ N days, which mutes its nudges and removes it from the count.
 Support/dev.coenwarmer.reviewpinger/` on macOS), re-read on every poll:
 
 ```json
-{ "ignoredLogins": ["kibanamachine", "elasticmachine"] }
+{ "ignoredLogins": ["kibanamachine", "elasticmachine"], "dormantAfterDays": 30 }
 ```
 
 ## Notifications
