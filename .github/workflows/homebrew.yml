@@ -1,0 +1,57 @@
+name: Update Homebrew cask
+
+# Runs when a draft release is published, so the cask only ever points at
+# public assets.
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to point the cask at, e.g. v0.1.0
+        required: true
+
+jobs:
+  cask:
+    runs-on: ubuntu-latest
+    env:
+      TAG: ${{ github.event.release.tag_name || inputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Render cask
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          url=$(gh api "repos/${{ github.repository }}/releases/tags/$TAG" \
+            --jq '.assets[] | select(.name | endswith("_universal.dmg")) | .browser_download_url')
+          if [ -z "$url" ]; then
+            echo "No universal .dmg on release $TAG" >&2
+            exit 1
+          fi
+          curl -fsSL -o app.dmg "$url"
+          sha256=$(sha256sum app.dmg | cut -d' ' -f1)
+          sed -e "s|@VERSION@|${TAG#v}|" -e "s|@SHA256@|$sha256|" -e "s|@URL@|$url|" \
+            packaging/homebrew/review-pinger.rb.in > review-pinger.rb
+          cat review-pinger.rb
+
+      - uses: actions/checkout@v4
+        with:
+          repository: CoenWarmer/homebrew-tap
+          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          path: tap
+
+      - name: Push to tap
+        working-directory: tap
+        run: |
+          mkdir -p Casks
+          cp ../review-pinger.rb Casks/review-pinger.rb
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Casks/review-pinger.rb
+          if git diff --cached --quiet; then
+            echo "Cask already up to date"
+            exit 0
+          fi
+          git commit -m "review-pinger ${TAG#v}"
+          git push
