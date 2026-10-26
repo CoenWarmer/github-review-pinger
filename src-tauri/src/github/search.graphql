@@ -1,0 +1,18 @@
+# Cheap: only ids, so all open PRs fit in one or two fast pages. Details are
+# fetched separately in parallel batches (details.graphql).
+query OpenPullRequestIds($q: String!, $cursor: String) {
+  viewer {
+    login
+  }
+  search(type: ISSUE, query: $q, first: 100, after: $cursor) {
+    pageInfo {
+      hasNextPage
+      endCursor
+    }
+    nodes {
+      ... on PullRequest {
+        id
+      }
+    }
+  }
+}

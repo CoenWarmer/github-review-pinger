@@ -28,12 +28,24 @@ have been open and waiting.
 
 ## Data
 
-- One GraphQL query: `search(type: ISSUE, query: "is:pr is:open author:@me")`
-  with, per PR: `isDraft`, `createdAt`, `reviewDecision`, `mergeable`, head
-  commit `statusCheckRollup`, `reviewRequests` (users and teams), latest
-  reviews, and timeline items (`ReadyForReviewEvent`, reviews, comments).
-- Pages of 25. The query is heavy (about 5 s per page) and GitHub
-  occasionally answers with a 502, so 5xx responses are retried twice.
+Each refresh takes three steps, because a single search query with every
+field takes ~11 s per 25 PRs and regularly hits GitHub's ~10 s GraphQL
+timeout:
+
+1. `search(type: ISSUE, query: "is:pr is:open author:@me archived:false")`
+   for ids only, 100 per page (~3 s).
+2. `nodes(ids:)` for the details in batches of 10, up to 8 concurrently
+   (~2 s each): `isDraft`, `createdAt`, `reviewDecision`, `mergeable`,
+   `autoMergeRequest`, head commit `committedDate` and `statusCheckRollup`,
+   `reviewRequests`, latest reviews, and timeline items (ready-for-review,
+   review-requested, reviews, comments).
+3. `mergeStateStatus` only for PRs that could be ready to merge (approved,
+   green, mergeable, no auto-merge), since GitHub computes it on demand and
+   it doubles a PR's cost.
+
+A refresh takes ~5–8 s for ~70 PRs (previously ~38 s). 5xx responses are
+retried twice per request.
+
 - Poll every 2 minutes; also refresh when the popover opens and data is older
   than 30 s (wall-clock, so time asleep counts). Wait out rate limits until
   the reset time; back off exponentially (up to 10 min) on network and API

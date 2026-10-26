@@ -1,0 +1,97 @@
+fragment PullRequestFields on PullRequest {
+  id
+  number
+  title
+  url
+  isDraft
+  createdAt
+  reviewDecision
+  mergeable
+  autoMergeRequest {
+    enabledAt
+  }
+  repository {
+    nameWithOwner
+  }
+  commits(last: 1) {
+    nodes {
+      commit {
+        committedDate
+        statusCheckRollup {
+          state
+        }
+      }
+    }
+  }
+  reviewRequests(first: 25) {
+    nodes {
+      requestedReviewer {
+        __typename
+        ... on User {
+          login
+        }
+        ... on Bot {
+          login
+        }
+        ... on Mannequin {
+          login
+        }
+        ... on Team {
+          slug
+        }
+      }
+    }
+  }
+  latestReviews(first: 50) {
+    nodes {
+      state
+      author {
+        __typename
+        login
+      }
+    }
+  }
+  latestOpinionatedReviews(first: 50) {
+    nodes {
+      state
+      author {
+        __typename
+        login
+      }
+    }
+  }
+  timelineItems(
+    last: 50
+    itemTypes: [
+      READY_FOR_REVIEW_EVENT
+      REVIEW_REQUESTED_EVENT
+      PULL_REQUEST_REVIEW
+      ISSUE_COMMENT
+    ]
+  ) {
+    nodes {
+      __typename
+      ... on ReadyForReviewEvent {
+        createdAt
+      }
+      ... on ReviewRequestedEvent {
+        createdAt
+      }
+      ... on PullRequestReview {
+        state
+        submittedAt
+        author {
+          __typename
+          login
+        }
+      }
+      ... on IssueComment {
+        createdAt
+        author {
+          __typename
+          login
+        }
+      }
+    }
+  }
+}

@@ -463,7 +463,7 @@ fn actions(
         && matches!(checks, Checks::Passing | Checks::None)
         && matches!(
             pr.merge_state_status,
-            MergeStateStatus::Clean | MergeStateStatus::HasHooks
+            Some(MergeStateStatus::Clean | MergeStateStatus::HasHooks)
         )
         && pr.auto_merge_request.is_none();
 
