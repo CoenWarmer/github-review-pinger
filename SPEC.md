@@ -62,7 +62,8 @@ elsewhere). Zero means nothing to do.
 
 Grouped, top to bottom:
 
-1. **Needs action**: changes requested, conflicts, CI failing, ready to merge.
+1. **Needs action**: ready to merge first, then changes requested,
+   conflicts, CI failing; oldest quiet first within each.
 2. **Waiting on review**: sorted by longest quiet first.
 3. **Snoozed**: collapsed, ending soonest first, with the snooze end time.
 4. **Dormant**: collapsed, most recently active first, with an `idle` time.

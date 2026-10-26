@@ -12,14 +12,16 @@ use crate::github::types::{
     TimelineItem,
 };
 
-/// Ordered by urgency; a pull request is sorted by its most urgent action.
+/// Ordered by sort priority; a pull request is sorted by its first action.
+/// Ready-to-merge comes first because it's the quickest win, and it never
+/// co-occurs with the others.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum Action {
+    ReadyToMerge,
     ChangesRequested,
     Conflicts,
     CiFailing,
-    ReadyToMerge,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
@@ -365,10 +367,10 @@ fn actions(pr: &PullRequest, reviewers: &[Reviewer]) -> Vec<Action> {
         && !ci_failing;
 
     [
+        (ready_to_merge, Action::ReadyToMerge),
         (changes_requested, Action::ChangesRequested),
         (conflicts, Action::Conflicts),
         (ci_failing, Action::CiFailing),
-        (ready_to_merge, Action::ReadyToMerge),
     ]
     .into_iter()
     .filter_map(|(applies, action)| applies.then_some(action))
@@ -723,8 +725,8 @@ mod tests {
         assert_eq!(
             ids,
             vec![
-                "conflict",
                 "ready",
+                "conflict",
                 "waiting-old",
                 "waiting-new",
                 "dormant",
