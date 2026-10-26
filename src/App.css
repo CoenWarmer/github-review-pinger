@@ -10,6 +10,7 @@
   --danger-bg: #ffebe9;
   --success: #1a7f37;
   --success-bg: #dafbe1;
+  --warning: #9a6700;
   --warning-bg: #fff8c5;
 
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
@@ -33,6 +34,7 @@
     --danger-bg: #3c1618;
     --success: #3fb950;
     --success-bg: #12261e;
+    --warning: #d29922;
     --warning-bg: #3a2f11;
   }
 }
@@ -195,11 +197,14 @@ button {
   background: var(--accent-bg);
 }
 
-.badge-note {
-  font-weight: 500;
-  color: var(--muted);
-  background: var(--bg-hover);
-  border: 1px solid var(--border);
+.badge-checksRunning {
+  color: var(--warning);
+  background: var(--warning-bg);
+}
+
+.badge-autoMerge {
+  color: var(--success);
+  background: var(--success-bg);
 }
 
 .badge-readyToMerge {

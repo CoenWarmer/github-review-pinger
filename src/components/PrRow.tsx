@@ -87,9 +87,10 @@ export function PrRow({ pr, now }: { pr: PullRequest; now: number }) {
     pr.group === "approved" || pr.group === "needsAction" || pr.group === "waiting";
   // Neutral context for why an approved PR isn't "ready to merge" yet.
   const notes = showActions
-    ? [pr.checks === "pending" && "Checks running", pr.autoMerge && "Auto-merge"].filter(
-        (note): note is string => Boolean(note),
-      )
+    ? [
+        pr.checks === "pending" && { label: "Checks running", className: "badge-checksRunning" },
+        pr.autoMerge && { label: "Auto-merge", className: "badge-autoMerge" },
+      ].filter((note) => note !== false)
     : [];
 
   return (
@@ -110,9 +111,9 @@ export function PrRow({ pr, now }: { pr: PullRequest; now: number }) {
                   {ACTION_LABELS[action]}
                 </span>
               ))}
-            {notes.map((note) => (
-              <span key={note} className="badge badge-note">
-                {note}
+            {notes.map(({ label, className }) => (
+              <span key={label} className={`badge ${className}`}>
+                {label}
               </span>
             ))}
             {pr.reviewers.map((reviewer) => (
