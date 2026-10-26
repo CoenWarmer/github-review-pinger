@@ -117,10 +117,18 @@ Support/dev.coenwarmer.reviewpinger/` on macOS), re-read on every poll:
 
 ## Distribution
 
-- Unsigned builds from GitHub Actions for macOS, Windows, and Linux.
-- macOS via a cask in a personal Homebrew tap. Users approve the app once in
-  System Settings → Privacy & Security; Homebrew's `--no-quarantine` is
-  deprecated and not relied upon.
+- `ci.yml` runs fmt, clippy, tests, and the frontend build on macOS, Linux,
+  and Windows for every PR and push to main.
+- `release.yml`: pushing a `v*` tag builds a universal macOS `.dmg`, Windows
+  `.msi`/`.exe`, and Linux `.deb`/`.rpm`/`.AppImage` into a draft release.
+- macOS builds are ad-hoc signed (`signingIdentity: "-"`), since Apple
+  Silicon won't run unsigned bundles, but not notarized. `Info.plist` sets
+  `LSUIElement` so no Dock icon flashes at launch.
+- `homebrew.yml`: publishing the release renders
+  `packaging/homebrew/review-pinger.rb.in` with the `.dmg`'s URL and sha256,
+  and pushes it to `CoenWarmer/homebrew-tap`. Users approve the app once in
+  System Settings → Privacy & Security; the cask's caveats say so. Homebrew's
+  `--no-quarantine` is deprecated and not relied upon.
 - If the app goes public: Developer ID signing, notarization, the official
   cask, and the Tauri updater.
 
