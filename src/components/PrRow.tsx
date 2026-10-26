@@ -83,7 +83,8 @@ function SnoozeControl({ pr }: { pr: PullRequest }) {
 }
 
 export function PrRow({ pr, now }: { pr: PullRequest; now: number }) {
-  const showActions = pr.group === "needsAction" || pr.group === "waiting";
+  const showActions =
+    pr.group === "approved" || pr.group === "needsAction" || pr.group === "waiting";
   // Neutral context for why an approved PR isn't "ready to merge" yet.
   const notes = showActions
     ? [pr.checks === "pending" && "Checks running", pr.autoMerge && "Auto-merge"].filter(

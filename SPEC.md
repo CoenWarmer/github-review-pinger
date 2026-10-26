@@ -53,7 +53,7 @@ have been open and waiting.
 | **Conflicts** | `mergeable == CONFLICTING`. |
 | **Last activity** | The latest of: the last commit's `committedDate` (approximates the last push), the open clock, or a review or comment by any human, the author included. |
 | **Dormant** | A non-draft PR whose last activity is older than `dormantAfterDays` (default 30). Listed in its own collapsed section, never counted or nudged. Any push or human comment revives it. |
-| **Needs action** | Any of the five states above, excluding drafts, dormant, and snoozed PRs. |
+| **Needs action** | Any of the five states above, excluding drafts, dormant, and snoozed PRs. Counted in the tray whether the PR sits in Approved or Needs your action. |
 
 ## Tray icon
 
@@ -64,13 +64,16 @@ elsewhere). Zero means nothing to do.
 
 Grouped, top to bottom:
 
-1. **Needs action**: ready to merge first, then changes requested, new
+1. **Approved**: every approved PR (per the rule above) that isn't a draft,
+   snoozed, or dormant, keeping its action badges. Ready to merge first, then
+   other actions, then those waiting on checks or auto-merge.
+2. **Needs your action**: ready to merge first, then changes requested, new
    feedback, conflicts, CI failing; oldest quiet first within each.
-2. **Waiting on others**: reviews, running checks, or auto-merge; sorted by
+3. **Waiting on others**: reviews, running checks, or auto-merge; sorted by
    longest quiet first.
-3. **Snoozed**: collapsed, ending soonest first, with the snooze end time.
-4. **Dormant**: collapsed, most recently active first, with an `idle` time.
-5. **Drafts**: collapsed and not counted.
+4. **Snoozed**: collapsed, ending soonest first, with the snooze end time.
+5. **Dormant**: collapsed, most recently active first, with an `idle` time.
+6. **Drafts**: collapsed and not counted.
 
 Each row shows: repo, title, `open 6d · quiet 2d`, and one chip per reviewer
 with their latest state. An approval or change request outranks a later

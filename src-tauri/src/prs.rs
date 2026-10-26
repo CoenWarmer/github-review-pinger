@@ -28,6 +28,8 @@ pub enum Action {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum Group {
+    /// Approved PRs, whatever else is going on; their actions still count.
+    Approved,
     NeedsAction,
     Waiting,
     Snoozed,
@@ -97,6 +99,14 @@ pub struct PrView {
     pub responses: Vec<Response>,
 }
 
+impl PrView {
+    /// Counts toward the tray number: something for the author to do, and
+    /// not parked as a draft, snoozed, or dormant.
+    pub fn needs_author(&self) -> bool {
+        matches!(self.group, Group::Approved | Group::NeedsAction) && !self.actions.is_empty()
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ResponseKind {
     Approved,
@@ -126,10 +136,13 @@ pub fn derive(prs: &[PullRequest], viewer: &str, rules: &Rules, now: DateTime<Ut
     let mut views: Vec<PrView> = prs.iter().map(|pr| view(pr, &people, rules, now)).collect();
     views.sort_by(|a, b| {
         a.group.cmp(&b.group).then_with(|| match a.group {
-            Group::NeedsAction => a
+            // PRs with an action come first (ready to merge leading), then
+            // those just waiting on checks or auto-merge.
+            Group::Approved | Group::NeedsAction => a
                 .actions
-                .first()
-                .cmp(&b.actions.first())
+                .is_empty()
+                .cmp(&b.actions.is_empty())
+                .then(a.actions.first().cmp(&b.actions.first()))
                 .then(a.quiet_since.cmp(&b.quiet_since)),
             Group::Waiting => a.quiet_since.cmp(&b.quiet_since),
             Group::Snoozed => a.snoozed_until.cmp(&b.snoozed_until),
@@ -194,6 +207,8 @@ fn view(pr: &PullRequest, people: &People, rules: &Rules, now: DateTime<Utc>) ->
         Group::Snoozed
     } else if last_activity < now - rules.dormant_after {
         Group::Dormant
+    } else if approved {
+        Group::Approved
     } else if actions.is_empty() {
         Group::Waiting
     } else {
@@ -444,6 +459,7 @@ fn actions(
     // protection satisfied, and auto-merge not already queued.
     let ready_to_merge = approved
         && blocking_reviewers.is_empty()
+        && !conflicts
         && matches!(checks, Checks::Passing | Checks::None)
         && matches!(
             pr.merge_state_status,
@@ -732,13 +748,24 @@ mod tests {
     }
 
     #[test]
+    fn approved_prs_get_their_own_group_and_keep_their_actions() {
+        let pr = derive_one(json!({ "reviewDecision": "APPROVED", "mergeable": "CONFLICTING" }));
+        assert_eq!(pr.group, Group::Approved);
+        assert_eq!(pr.actions, vec![Action::Conflicts]);
+        assert!(pr.needs_author());
+
+        let approved_draft = derive_one(json!({ "reviewDecision": "APPROVED", "isDraft": true }));
+        assert_eq!(approved_draft.group, Group::Draft);
+    }
+
+    #[test]
     fn unknown_merge_state_is_not_ready() {
         let pr = derive_one(json!({
             "reviewDecision": "APPROVED",
             "mergeable": "UNKNOWN",
             "mergeStateStatus": "UNKNOWN",
         }));
-        assert_eq!(pr.group, Group::Waiting);
+        assert!(pr.actions.is_empty());
     }
 
     #[test]
@@ -748,15 +775,16 @@ mod tests {
             "mergeStateStatus": "BLOCKED",
             "commits": { "nodes": [commit("2026-10-01T09:00:00Z", "PENDING")] },
         }));
-        assert_eq!(pr.group, Group::Waiting);
+        assert_eq!(pr.group, Group::Approved);
         assert_eq!(pr.checks, Checks::Pending);
-        assert!(pr.approved);
+        assert!(pr.actions.is_empty());
     }
 
     #[test]
     fn branch_protection_blocking_merge_is_not_ready() {
         let pr = derive_one(json!({ "reviewDecision": "APPROVED", "mergeStateStatus": "BLOCKED" }));
-        assert_eq!(pr.group, Group::Waiting);
+        assert!(pr.actions.is_empty());
+        assert!(!pr.needs_author());
     }
 
     #[test]
@@ -765,7 +793,7 @@ mod tests {
             "reviewDecision": "APPROVED",
             "autoMergeRequest": { "enabledAt": "2026-10-02T09:00:00Z" },
         }));
-        assert_eq!(pr.group, Group::Waiting);
+        assert!(pr.actions.is_empty());
         assert!(pr.auto_merge);
     }
 
@@ -915,6 +943,11 @@ mod tests {
             with(json!({ "id": "waiting-new", "createdAt": "2026-10-05T09:00:00Z" })),
             with(json!({ "id": "waiting-old", "createdAt": "2026-10-02T09:00:00Z" })),
             with(json!({ "id": "ready", "reviewDecision": "APPROVED" })),
+            with(json!({
+                "id": "approved-pending",
+                "reviewDecision": "APPROVED",
+                "mergeStateStatus": "BLOCKED",
+            })),
             with(json!({ "id": "conflict", "mergeable": "CONFLICTING" })),
         ];
         let ids: Vec<String> = derive_all(prs, &[]).into_iter().map(|p| p.id).collect();
@@ -922,6 +955,7 @@ mod tests {
             ids,
             vec![
                 "ready",
+                "approved-pending",
                 "conflict",
                 "waiting-old",
                 "waiting-new",

@@ -9,6 +9,7 @@ import type { Group, PullRequest, Snapshot } from "./types";
 import "./App.css";
 
 const SECTIONS: { group: Group; title: string }[] = [
+  { group: "approved", title: "Approved" },
   { group: "needsAction", title: "Needs your action" },
   { group: "waiting", title: "Waiting on others" },
   { group: "snoozed", title: "Snoozed" },

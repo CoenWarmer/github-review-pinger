@@ -18,7 +18,7 @@ use crate::github::types::PullRequest;
 use crate::github::{self, FetchError};
 use crate::memory::Memory;
 use crate::notify;
-use crate::prs::{self, Group, PrView};
+use crate::prs::{self, PrView};
 use crate::settings;
 
 const POLL_INTERVAL: Duration = Duration::from_secs(120);
@@ -322,7 +322,7 @@ fn update_tray(app: &AppHandle, snapshot: &Snapshot) {
     let needs_action = snapshot
         .pull_requests
         .iter()
-        .filter(|pr| pr.group == Group::NeedsAction)
+        .filter(|pr| pr.needs_author())
         .count();
     let failed_without_data =
         matches!(snapshot.status, Status::Error { .. }) && snapshot.fetched_at.is_none();

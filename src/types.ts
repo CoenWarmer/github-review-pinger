@@ -9,7 +9,7 @@ export type Action =
   | "conflicts"
   | "ciFailing";
 
-export type Group = "needsAction" | "waiting" | "snoozed" | "dormant" | "draft";
+export type Group = "approved" | "needsAction" | "waiting" | "snoozed" | "dormant" | "draft";
 
 export type ReviewerState = "changesRequested" | "approved" | "commented" | "pending";
 
