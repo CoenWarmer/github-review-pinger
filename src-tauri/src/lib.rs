@@ -16,6 +16,7 @@ use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Manager, State, WindowEvent};
 use tauri_plugin_autostart::{MacosLauncher, ManagerExt};
+#[cfg(not(target_os = "linux"))]
 use tauri_plugin_positioner::{Position, WindowExt};
 
 use poller::{Poller, Snapshot};
