@@ -3,6 +3,7 @@
 
 use chrono::{DateTime, Utc};
 use serde::Deserialize;
+use serde::de::IgnoredAny;
 
 #[derive(Debug, Deserialize)]
 pub struct Nodes<T> {
@@ -32,6 +33,9 @@ pub struct PullRequest {
     pub created_at: DateTime<Utc>,
     pub review_decision: Option<ReviewDecision>,
     pub mergeable: Mergeable,
+    pub merge_state_status: MergeStateStatus,
+    /// Only presence matters: auto-merge is enabled.
+    pub auto_merge_request: Option<IgnoredAny>,
     pub repository: Repository,
     pub commits: Nodes<CommitNode>,
     #[serde(default)]
@@ -66,6 +70,22 @@ pub enum ReviewDecision {
 pub enum Mergeable {
     Mergeable,
     Conflicting,
+    #[serde(other)]
+    Unknown,
+}
+
+/// GitHub's overall verdict on whether the PR can be merged right now,
+/// including branch protection (required checks and reviews).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum MergeStateStatus {
+    Clean,
+    HasHooks,
+    Unstable,
+    Blocked,
+    Behind,
+    Dirty,
+    Draft,
     #[serde(other)]
     Unknown,
 }

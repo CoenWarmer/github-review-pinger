@@ -195,6 +195,13 @@ button {
   background: var(--accent-bg);
 }
 
+.badge-note {
+  font-weight: 500;
+  color: var(--muted);
+  background: var(--bg-hover);
+  border: 1px solid var(--border);
+}
+
 .badge-readyToMerge {
   color: var(--success);
   background: var(--success-bg);

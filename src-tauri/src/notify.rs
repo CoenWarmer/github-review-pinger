@@ -7,6 +7,8 @@ use chrono::{DateTime, Duration, TimeZone, Utc};
 
 use crate::calendar;
 use crate::memory::{Memory, PrMemory};
+#[cfg(test)]
+use crate::prs::Checks;
 use crate::prs::{Group, PrView, Response, ResponseKind};
 
 /// More events than this in one poll are folded into a single summary.
@@ -77,7 +79,9 @@ pub fn diff<Tz: TimeZone>(
         }
 
         let overdue = calendar::weekday_time(view.quiet_since, now, tz) >= nudge_after;
-        if view.group == Group::Waiting && overdue && entry.nudged_for != Some(view.quiet_since) {
+        // Approved PRs are waiting on checks or merging, not on reviewers.
+        let awaiting_review = view.group == Group::Waiting && !view.approved;
+        if awaiting_review && overdue && entry.nudged_for != Some(view.quiet_since) {
             events.push(Event::Stale {
                 pr: PrRef::of(view),
             });
@@ -190,6 +194,9 @@ mod tests {
             quiet_since: at(quiet_since),
             last_activity: at(quiet_since),
             snoozed_until: None,
+            approved: false,
+            checks: Checks::Passing,
+            auto_merge: false,
             reviewers: Vec::new(),
             responses,
         }
@@ -291,6 +298,14 @@ mod tests {
             view("draft", Group::Draft, TUESDAY, vec![]),
         ];
         assert!(run(&views, &mut memory, "2026-10-09T08:00:00Z").is_empty());
+    }
+
+    #[test]
+    fn approved_prs_are_not_nudged() {
+        let mut memory = Memory::default();
+        let mut approved = view("a", Group::Waiting, TUESDAY, vec![]);
+        approved.approved = true;
+        assert!(run(&[approved], &mut memory, "2026-10-09T08:00:00Z").is_empty());
     }
 
     #[test]

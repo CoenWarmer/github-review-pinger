@@ -84,6 +84,12 @@ function SnoozeControl({ pr }: { pr: PullRequest }) {
 
 export function PrRow({ pr, now }: { pr: PullRequest; now: number }) {
   const showActions = pr.group === "needsAction" || pr.group === "waiting";
+  // Neutral context for why an approved PR isn't "ready to merge" yet.
+  const notes = showActions
+    ? [pr.checks === "pending" && "Checks running", pr.autoMerge && "Auto-merge"].filter(
+        (note): note is string => Boolean(note),
+      )
+    : [];
 
   return (
     <li className="pr">
@@ -95,7 +101,7 @@ export function PrRow({ pr, now }: { pr: PullRequest; now: number }) {
           {pr.group === "dormant" && ` · idle ${elapsed(pr.lastActivity, now)}`}
           {pr.snoozedUntil && ` · until ${dayAndTime(pr.snoozedUntil)}`}
         </span>
-        {((showActions && pr.actions.length > 0) || pr.reviewers.length > 0) && (
+        {((showActions && pr.actions.length > 0) || notes.length > 0 || pr.reviewers.length > 0) && (
           <span className="pr-badges">
             {showActions &&
               pr.actions.map((action) => (
@@ -103,6 +109,11 @@ export function PrRow({ pr, now }: { pr: PullRequest; now: number }) {
                   {ACTION_LABELS[action]}
                 </span>
               ))}
+            {notes.map((note) => (
+              <span key={note} className="badge badge-note">
+                {note}
+              </span>
+            ))}
             {pr.reviewers.map((reviewer) => (
               <ReviewerChip key={reviewer.login} reviewer={reviewer} />
             ))}

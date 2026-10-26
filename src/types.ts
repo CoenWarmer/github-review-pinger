@@ -32,6 +32,9 @@ export interface PullRequest {
   quietSince: string;
   lastActivity: string;
   snoozedUntil: string | null;
+  approved: boolean;
+  checks: "passing" | "pending" | "failing" | "none";
+  autoMerge: boolean;
   reviewers: Reviewer[];
 }
 

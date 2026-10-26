@@ -10,7 +10,7 @@ import "./App.css";
 
 const SECTIONS: { group: Group; title: string }[] = [
   { group: "needsAction", title: "Needs your action" },
-  { group: "waiting", title: "Waiting on review" },
+  { group: "waiting", title: "Waiting on others" },
   { group: "snoozed", title: "Snoozed" },
   { group: "dormant", title: "Dormant" },
   { group: "draft", title: "Drafts" },

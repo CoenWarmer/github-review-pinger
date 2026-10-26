@@ -17,6 +17,10 @@ query OpenPullRequests($q: String!, $first: Int!, $cursor: String) {
         createdAt
         reviewDecision
         mergeable
+        mergeStateStatus
+        autoMergeRequest {
+          enabledAt
+        }
         repository {
           nameWithOwner
         }

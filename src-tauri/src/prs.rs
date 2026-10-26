@@ -8,8 +8,8 @@ use chrono::{DateTime, Utc};
 use serde::Serialize;
 
 use crate::github::types::{
-    Actor, CheckState, Mergeable, PullRequest, RequestedReviewer, ReviewDecision, ReviewState,
-    TimelineItem,
+    Actor, CheckState, MergeStateStatus, Mergeable, PullRequest, RequestedReviewer, ReviewDecision,
+    ReviewState, TimelineItem,
 };
 
 /// Ordered by sort priority; a pull request is sorted by its first action.
@@ -33,6 +33,16 @@ pub enum Group {
     Snoozed,
     Dormant,
     Draft,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Checks {
+    Passing,
+    Pending,
+    Failing,
+    /// The repo runs no checks on this PR.
+    None,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -77,6 +87,10 @@ pub struct PrView {
     /// The last push, or review or comment by a human including the author.
     pub last_activity: DateTime<Utc>,
     pub snoozed_until: Option<DateTime<Utc>>,
+    /// Has the approvals it needs; any further wait is on checks or merging.
+    pub approved: bool,
+    pub checks: Checks,
+    pub auto_merge: bool,
     pub reviewers: Vec<Reviewer>,
     /// Reviews and comments from other humans, oldest first, for notifications.
     #[serde(skip)]
@@ -159,7 +173,15 @@ fn view(pr: &PullRequest, people: &People, rules: &Rules, now: DateTime<Utc>) ->
     let last_activity = last_activity(pr, people, open_since);
     let reviewers = reviewers(pr, people);
     let responses = responses(pr, people);
-    let actions = actions(pr, &reviewers, has_new_feedback(pr, people, &responses));
+    let approved = is_approved(pr, &reviewers);
+    let checks = checks(pr);
+    let actions = actions(
+        pr,
+        &reviewers,
+        approved,
+        checks,
+        has_new_feedback(pr, people, &responses),
+    );
     let snoozed_until = rules
         .snoozed
         .get(&pr.id)
@@ -190,6 +212,9 @@ fn view(pr: &PullRequest, people: &People, rules: &Rules, now: DateTime<Utc>) ->
         quiet_since,
         last_activity,
         snoozed_until,
+        approved,
+        checks,
+        auto_merge: pr.auto_merge_request.is_some(),
         reviewers,
         responses,
     }
@@ -369,7 +394,36 @@ fn reviewers(pr: &PullRequest, people: &People) -> Vec<Reviewer> {
     reviewers
 }
 
-fn actions(pr: &PullRequest, reviewers: &[Reviewer], new_feedback: bool) -> Vec<Action> {
+fn checks(pr: &PullRequest) -> Checks {
+    let rollup = pr
+        .commits
+        .iter()
+        .last()
+        .and_then(|node| node.commit.status_check_rollup.as_ref());
+    match rollup.map(|r| r.state) {
+        None => Checks::None,
+        Some(CheckState::Success) => Checks::Passing,
+        Some(CheckState::Failure | CheckState::Error) => Checks::Failing,
+        Some(CheckState::Pending | CheckState::Expected | CheckState::Other) => Checks::Pending,
+    }
+}
+
+fn is_approved(pr: &PullRequest, reviewers: &[Reviewer]) -> bool {
+    match pr.review_decision {
+        Some(ReviewDecision::Approved) => true,
+        // No required reviews in this repo: one approval will do.
+        None => reviewers.iter().any(|r| r.state == ReviewerState::Approved),
+        _ => false,
+    }
+}
+
+fn actions(
+    pr: &PullRequest,
+    reviewers: &[Reviewer],
+    approved: bool,
+    checks: Checks,
+    new_feedback: bool,
+) -> Vec<Action> {
     // Once the author re-requests review from whoever asked for changes, the
     // ball is in the reviewer's court even though GitHub still reports
     // CHANGES_REQUESTED.
@@ -384,22 +438,18 @@ fn actions(pr: &PullRequest, reviewers: &[Reviewer], new_feedback: bool) -> Vec<
     };
 
     let conflicts = pr.mergeable == Mergeable::Conflicting;
-    let ci_failing = pr
-        .commits
-        .iter()
-        .last()
-        .and_then(|node| node.commit.status_check_rollup.as_ref())
-        .is_some_and(|rollup| matches!(rollup.state, CheckState::Failure | CheckState::Error));
+    let ci_failing = checks == Checks::Failing;
 
-    let approved = match pr.review_decision {
-        Some(ReviewDecision::Approved) => true,
-        None => reviewers.iter().any(|r| r.state == ReviewerState::Approved),
-        _ => false,
-    };
+    // Only when merging is up to the author right now: checks done, branch
+    // protection satisfied, and auto-merge not already queued.
     let ready_to_merge = approved
         && blocking_reviewers.is_empty()
-        && pr.mergeable == Mergeable::Mergeable
-        && !ci_failing;
+        && matches!(checks, Checks::Passing | Checks::None)
+        && matches!(
+            pr.merge_state_status,
+            MergeStateStatus::Clean | MergeStateStatus::HasHooks
+        )
+        && pr.auto_merge_request.is_none();
 
     [
         (ready_to_merge, Action::ReadyToMerge),
@@ -432,6 +482,8 @@ mod tests {
             "createdAt": "2026-10-01T09:00:00Z",
             "reviewDecision": "REVIEW_REQUIRED",
             "mergeable": "MERGEABLE",
+            "mergeStateStatus": "CLEAN",
+            "autoMergeRequest": null,
             "repository": { "nameWithOwner": "o/r" },
             "commits": { "nodes": [commit("2026-10-01T09:00:00Z", "SUCCESS")] },
             "reviewRequests": { "nodes": [] },
@@ -680,9 +732,51 @@ mod tests {
     }
 
     #[test]
-    fn unknown_mergeability_is_not_ready() {
-        let pr = derive_one(json!({ "reviewDecision": "APPROVED", "mergeable": "UNKNOWN" }));
+    fn unknown_merge_state_is_not_ready() {
+        let pr = derive_one(json!({
+            "reviewDecision": "APPROVED",
+            "mergeable": "UNKNOWN",
+            "mergeStateStatus": "UNKNOWN",
+        }));
         assert_eq!(pr.group, Group::Waiting);
+    }
+
+    #[test]
+    fn running_checks_are_not_ready_yet() {
+        let pr = derive_one(json!({
+            "reviewDecision": "APPROVED",
+            "mergeStateStatus": "BLOCKED",
+            "commits": { "nodes": [commit("2026-10-01T09:00:00Z", "PENDING")] },
+        }));
+        assert_eq!(pr.group, Group::Waiting);
+        assert_eq!(pr.checks, Checks::Pending);
+        assert!(pr.approved);
+    }
+
+    #[test]
+    fn branch_protection_blocking_merge_is_not_ready() {
+        let pr = derive_one(json!({ "reviewDecision": "APPROVED", "mergeStateStatus": "BLOCKED" }));
+        assert_eq!(pr.group, Group::Waiting);
+    }
+
+    #[test]
+    fn auto_merge_means_nothing_to_do() {
+        let pr = derive_one(json!({
+            "reviewDecision": "APPROVED",
+            "autoMergeRequest": { "enabledAt": "2026-10-02T09:00:00Z" },
+        }));
+        assert_eq!(pr.group, Group::Waiting);
+        assert!(pr.auto_merge);
+    }
+
+    #[test]
+    fn auto_merge_does_not_hide_what_blocks_it() {
+        let pr = derive_one(json!({
+            "reviewDecision": "APPROVED",
+            "autoMergeRequest": { "enabledAt": "2026-10-02T09:00:00Z" },
+            "commits": { "nodes": [commit("2026-10-01T09:00:00Z", "FAILURE")] },
+        }));
+        assert_eq!(pr.actions, vec![Action::CiFailing]);
     }
 
     #[test]

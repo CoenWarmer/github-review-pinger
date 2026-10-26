@@ -46,7 +46,8 @@ have been open and waiting.
 | **Open** clock | Since the latest `ReadyForReviewEvent`, falling back to `createdAt`. |
 | **Quiet** clock | Since the last review or comment by someone other than the author, but never earlier than the open clock. Bots (`__typename: Bot`, `[bot]` logins, plus `ignoredLogins` in settings) never reset it. |
 | **Changes requested** | A reviewer's latest opinionated review is `CHANGES_REQUESTED` and the author hasn't re-requested their review since (re-requesting hands the ball back). Falls back to `reviewDecision` when no such review is visible. |
-| **Ready to merge** | (`reviewDecision == APPROVED`, or `reviewDecision == null` with ≥1 approval and no outstanding changes requested) and `mergeable == MERGEABLE` and no failing checks. |
+| **Approved** | `reviewDecision == APPROVED`, or `reviewDecision == null` (no required reviews) with ≥1 approval. |
+| **Ready to merge** | Approved, no outstanding changes requested, checks passed (or none run), `mergeStateStatus` is `CLEAN` or `HAS_HOOKS` (branch protection satisfied), and auto-merge is off. Approved PRs with running checks or auto-merge enabled wait instead, labeled "Checks running" / "Auto-merge". |
 | **CI failing** | Head commit `statusCheckRollup.state` is `FAILURE` or `ERROR`. |
 | **New feedback** | Another human's comment (a comment review, inline or not, or a plain PR comment) is newer than the author's last push, own comment or reply, or review request. Approvals and change requests don't trigger it, and it's suppressed while changes are requested. |
 | **Conflicts** | `mergeable == CONFLICTING`. |
@@ -65,7 +66,8 @@ Grouped, top to bottom:
 
 1. **Needs action**: ready to merge first, then changes requested, new
    feedback, conflicts, CI failing; oldest quiet first within each.
-2. **Waiting on review**: sorted by longest quiet first.
+2. **Waiting on others**: reviews, running checks, or auto-merge; sorted by
+   longest quiet first.
 3. **Snoozed**: collapsed, ending soonest first, with the snooze end time.
 4. **Dormant**: collapsed, most recently active first, with an `idle` time.
 5. **Drafts**: collapsed and not counted.
@@ -103,7 +105,8 @@ Support/dev.coenwarmer.reviewpinger/` on macOS), re-read on every poll:
 - One notification per new response from another human: an approval, a
   change request, or a comment (review or plain PR comment). Applies to every
   PR, snoozed and dormant included.
-- Staleness nudge: once per quiet period for PRs in Waiting on review, after
+- Staleness nudge: once per quiet period for unapproved PRs in Waiting on
+  others (approved ones wait on checks, not people), after
   `nudgeAfterHours` (default 24) of weekday time in the local time zone.
   Weekdays count in full, so 24 hours is one working day; a Friday-afternoon
   PR is nudged Monday afternoon. A new response starts a new quiet period.
