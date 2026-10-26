@@ -134,6 +134,7 @@ pub fn derive(prs: &[PullRequest], viewer: &str, rules: &Rules, now: DateTime<Ut
         ignored_logins: rules.ignored_logins,
     };
     let mut views: Vec<PrView> = prs.iter().map(|pr| view(pr, &people, rules, now)).collect();
+    // Within every section the stalest PRs sink to the bottom.
     views.sort_by(|a, b| {
         a.group.cmp(&b.group).then_with(|| match a.group {
             // PRs with an action come first (ready to merge leading), then
@@ -143,9 +144,8 @@ pub fn derive(prs: &[PullRequest], viewer: &str, rules: &Rules, now: DateTime<Ut
                 .is_empty()
                 .cmp(&b.actions.is_empty())
                 .then(a.actions.first().cmp(&b.actions.first()))
-                .then(a.quiet_since.cmp(&b.quiet_since)),
-            Group::Waiting => a.quiet_since.cmp(&b.quiet_since),
-            Group::Snoozed => a.snoozed_until.cmp(&b.snoozed_until),
+                .then(b.quiet_since.cmp(&a.quiet_since)),
+            Group::Waiting | Group::Snoozed => b.quiet_since.cmp(&a.quiet_since),
             Group::Dormant => b.last_activity.cmp(&a.last_activity),
             Group::Draft => b.open_since.cmp(&a.open_since),
         })
@@ -949,6 +949,11 @@ mod tests {
                 "mergeStateStatus": "BLOCKED",
             })),
             with(json!({ "id": "conflict", "mergeable": "CONFLICTING" })),
+            with(json!({
+                "id": "conflict-old",
+                "mergeable": "CONFLICTING",
+                "createdAt": "2026-09-28T09:00:00Z",
+            })),
         ];
         let ids: Vec<String> = derive_all(prs, &[]).into_iter().map(|p| p.id).collect();
         assert_eq!(
@@ -957,8 +962,9 @@ mod tests {
                 "ready",
                 "approved-pending",
                 "conflict",
-                "waiting-old",
+                "conflict-old",
                 "waiting-new",
+                "waiting-old",
                 "dormant",
                 "draft"
             ]

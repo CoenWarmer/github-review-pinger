@@ -74,16 +74,19 @@ elsewhere). Zero means nothing to do.
 
 ## Popover
 
-Grouped, top to bottom:
+Grouped, top to bottom. Within every section the stalest PRs are at the
+bottom:
 
 1. **Approved**: every approved PR (per the rule above) that isn't a draft,
    snoozed, or dormant, keeping its action badges. Ready to merge first, then
-   other actions, then those waiting on checks or auto-merge.
+   other actions, then those waiting on checks or auto-merge; most recently
+   active first within each.
 2. **Needs your action**: ready to merge first, then changes requested, new
-   feedback, conflicts, CI failing; oldest quiet first within each.
+   feedback, conflicts, CI failing; most recently active first within each.
 3. **Waiting on others**: reviews, running checks, or auto-merge; sorted by
-   longest quiet first.
-4. **Snoozed**: collapsed, ending soonest first, with the snooze end time.
+   most recently active first.
+4. **Snoozed**: collapsed, most recently active first, with the snooze end
+   time.
 5. **Dormant**: collapsed, most recently active first, with an `idle` time.
 6. **Drafts**: collapsed and not counted.
 
