@@ -13,6 +13,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
+use tauri::image::Image;
 use tauri::{AppHandle, Manager, State, WindowEvent};
 use tauri_plugin_autostart::{MacosLauncher, ManagerExt};
 use tauri_plugin_positioner::{Position, WindowExt};
@@ -20,6 +21,13 @@ use tauri_plugin_positioner::{Position, WindowExt};
 use poller::{Poller, Snapshot};
 
 const POPOVER: &str = "main";
+
+// macOS tints a black template image to match the menu bar. Windows and Linux
+// get a white glyph, matching their default dark taskbars and panels.
+#[cfg(target_os = "macos")]
+const TRAY_ICON: &[u8] = include_bytes!("../icons/tray/tray-template@2x.png");
+#[cfg(not(target_os = "macos"))]
+const TRAY_ICON: &[u8] = include_bytes!("../icons/tray/tray-white.png");
 
 // Clicking the tray icon while the popover is open first blurs (and hides) the
 // popover, then delivers the click. Without this guard the click would reopen it.
@@ -161,7 +169,8 @@ pub fn run() {
             let menu = Menu::with_items(app, &[&open, &quit])?;
 
             TrayIconBuilder::with_id(poller::TRAY_ID)
-                .icon(app.default_window_icon().unwrap().clone())
+                .icon(Image::from_bytes(TRAY_ICON)?)
+                .icon_as_template(cfg!(target_os = "macos"))
                 .tooltip("Review Pinger")
                 .menu(&menu)
                 .show_menu_on_left_click(cfg!(target_os = "linux"))

@@ -1,0 +1,5 @@
+<!-- Source for the tray icons; see README.md in this folder to regenerate the PNGs. -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 18 18" fill="none" stroke="#000" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+  <path d="M3.2 2.8h11.6a1.4 1.4 0 0 1 1.4 1.4v7.4a1.4 1.4 0 0 1-1.4 1.4H8.5L5 16v-3H3.2a1.4 1.4 0 0 1-1.4-1.4V4.2a1.4 1.4 0 0 1 1.4-1.4z"/>
+  <path d="m6 7.9 2 2 4-4"/>
+</svg>
