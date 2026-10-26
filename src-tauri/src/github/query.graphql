@@ -69,11 +69,19 @@ query OpenPullRequests($q: String!, $first: Int!, $cursor: String) {
         }
         timelineItems(
           last: 50
-          itemTypes: [READY_FOR_REVIEW_EVENT, PULL_REQUEST_REVIEW, ISSUE_COMMENT]
+          itemTypes: [
+            READY_FOR_REVIEW_EVENT
+            REVIEW_REQUESTED_EVENT
+            PULL_REQUEST_REVIEW
+            ISSUE_COMMENT
+          ]
         ) {
           nodes {
             __typename
             ... on ReadyForReviewEvent {
+              createdAt
+            }
+            ... on ReviewRequestedEvent {
               createdAt
             }
             ... on PullRequestReview {

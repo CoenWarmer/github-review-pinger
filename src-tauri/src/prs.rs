@@ -20,6 +20,7 @@ use crate::github::types::{
 pub enum Action {
     ReadyToMerge,
     ChangesRequested,
+    NewFeedback,
     Conflicts,
     CiFailing,
 }
@@ -157,7 +158,8 @@ fn view(pr: &PullRequest, people: &People, rules: &Rules, now: DateTime<Utc>) ->
         .map_or(open_since, |t| t.max(open_since));
     let last_activity = last_activity(pr, people, open_since);
     let reviewers = reviewers(pr, people);
-    let actions = actions(pr, &reviewers);
+    let responses = responses(pr, people);
+    let actions = actions(pr, &reviewers, has_new_feedback(pr, people, &responses));
     let snoozed_until = rules
         .snoozed
         .get(&pr.id)
@@ -189,7 +191,7 @@ fn view(pr: &PullRequest, people: &People, rules: &Rules, now: DateTime<Utc>) ->
         last_activity,
         snoozed_until,
         reviewers,
-        responses: responses(pr, people),
+        responses,
     }
 }
 
@@ -217,6 +219,39 @@ fn last_activity(pr: &PullRequest, people: &People, open_since: DateTime<Utc>) -
         .flatten()
         .max()
         .unwrap_or(open_since)
+}
+
+/// Someone else commented (in a review or on the conversation) after the
+/// author last pushed, replied, or requested review. Approvals and change
+/// requests have their own handling and don't count.
+fn has_new_feedback(pr: &PullRequest, people: &People, responses: &[Response]) -> bool {
+    let Some(latest_comment) = responses
+        .iter()
+        .filter(|r| r.kind == ResponseKind::Commented)
+        .map(|r| r.at)
+        .max()
+    else {
+        return false;
+    };
+    let last_push = pr
+        .commits
+        .iter()
+        .last()
+        .map(|node| node.commit.committed_date);
+    let last_reply = latest_response(pr, |author| people.is_viewer(&author.login));
+    let last_request = pr
+        .timeline_items
+        .iter()
+        .filter_map(|item| match item {
+            TimelineItem::ReviewRequestedEvent { created_at } => Some(*created_at),
+            _ => None,
+        })
+        .max();
+    [last_push, last_reply, last_request]
+        .into_iter()
+        .flatten()
+        .max()
+        .is_none_or(|author_acted| latest_comment > author_acted)
 }
 
 /// The latest review or comment whose author passes `counts`.
@@ -334,7 +369,7 @@ fn reviewers(pr: &PullRequest, people: &People) -> Vec<Reviewer> {
     reviewers
 }
 
-fn actions(pr: &PullRequest, reviewers: &[Reviewer]) -> Vec<Action> {
+fn actions(pr: &PullRequest, reviewers: &[Reviewer], new_feedback: bool) -> Vec<Action> {
     // Once the author re-requests review from whoever asked for changes, the
     // ball is in the reviewer's court even though GitHub still reports
     // CHANGES_REQUESTED.
@@ -369,6 +404,8 @@ fn actions(pr: &PullRequest, reviewers: &[Reviewer]) -> Vec<Action> {
     [
         (ready_to_merge, Action::ReadyToMerge),
         (changes_requested, Action::ChangesRequested),
+        // A change request already says "your turn"; don't repeat it.
+        (new_feedback && !changes_requested, Action::NewFeedback),
         (conflicts, Action::Conflicts),
         (ci_failing, Action::CiFailing),
     ]
@@ -538,6 +575,71 @@ mod tests {
         }));
         assert_eq!(pr.group, Group::Waiting);
         assert!(pr.reviewers[0].rerequested);
+    }
+
+    fn feedback(extra: Vec<Value>) -> PrView {
+        let mut items = vec![timeline_review(user("rev"), "2026-10-03T09:00:00Z")];
+        items.extend(extra);
+        derive_one(json!({ "timelineItems": { "nodes": items } }))
+    }
+
+    #[test]
+    fn a_comment_review_is_new_feedback() {
+        let pr = feedback(vec![]);
+        assert_eq!(pr.group, Group::NeedsAction);
+        assert_eq!(pr.actions, vec![Action::NewFeedback]);
+    }
+
+    #[test]
+    fn a_conversation_comment_is_new_feedback() {
+        let pr = derive_one(json!({ "timelineItems": { "nodes": [
+            comment(user("rev"), "2026-10-03T09:00:00Z"),
+        ] } }));
+        assert_eq!(pr.actions, vec![Action::NewFeedback]);
+    }
+
+    #[test]
+    fn replying_pushing_or_re_requesting_answers_feedback() {
+        let replied = feedback(vec![comment(user("author"), "2026-10-03T10:00:00Z")]);
+        assert_eq!(replied.group, Group::Waiting);
+
+        let thread_reply = feedback(vec![timeline_review(
+            user("author"),
+            "2026-10-03T10:00:00Z",
+        )]);
+        assert_eq!(thread_reply.group, Group::Waiting);
+
+        let re_requested = feedback(vec![json!({
+            "__typename": "ReviewRequestedEvent",
+            "createdAt": "2026-10-03T10:00:00Z",
+        })]);
+        assert_eq!(re_requested.group, Group::Waiting);
+
+        let pushed = derive_one(json!({
+            "commits": { "nodes": [commit("2026-10-03T10:00:00Z", "SUCCESS")] },
+            "timelineItems": { "nodes": [timeline_review(user("rev"), "2026-10-03T09:00:00Z")] },
+        }));
+        assert_eq!(pushed.group, Group::Waiting);
+    }
+
+    #[test]
+    fn bots_approvals_and_change_requests_are_not_new_feedback() {
+        let bot_comment = derive_one(json!({ "timelineItems": { "nodes": [
+            comment(bot("github-actions"), "2026-10-03T09:00:00Z"),
+        ] } }));
+        assert_eq!(bot_comment.group, Group::Waiting);
+
+        let approval = derive_one(json!({ "timelineItems": { "nodes": [
+            timeline_review_with(user("rev"), "APPROVED", "2026-10-03T09:00:00Z"),
+        ] } }));
+        assert!(!approval.actions.contains(&Action::NewFeedback));
+
+        let changes = derive_one(json!({
+            "reviewDecision": "CHANGES_REQUESTED",
+            "latestOpinionatedReviews": { "nodes": [review(user("rev"), "CHANGES_REQUESTED")] },
+            "timelineItems": { "nodes": [comment(user("rev"), "2026-10-03T09:00:00Z")] },
+        }));
+        assert_eq!(changes.actions, vec![Action::ChangesRequested]);
     }
 
     #[test]

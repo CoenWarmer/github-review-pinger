@@ -6,6 +6,7 @@ import type { Action, PullRequest, Reviewer, ReviewerState } from "../types";
 
 const ACTION_LABELS: Record<Action, string> = {
   changesRequested: "Changes requested",
+  newFeedback: "New feedback",
   conflicts: "Conflicts",
   ciFailing: "CI failing",
   readyToMerge: "Ready to merge",

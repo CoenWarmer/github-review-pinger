@@ -156,6 +156,9 @@ pub enum TimelineItem {
     ReadyForReviewEvent {
         created_at: DateTime<Utc>,
     },
+    ReviewRequestedEvent {
+        created_at: DateTime<Utc>,
+    },
     PullRequestReview {
         state: ReviewState,
         submitted_at: Option<DateTime<Utc>>,

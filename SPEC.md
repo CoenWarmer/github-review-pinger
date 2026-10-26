@@ -48,10 +48,11 @@ have been open and waiting.
 | **Changes requested** | A reviewer's latest opinionated review is `CHANGES_REQUESTED` and the author hasn't re-requested their review since (re-requesting hands the ball back). Falls back to `reviewDecision` when no such review is visible. |
 | **Ready to merge** | (`reviewDecision == APPROVED`, or `reviewDecision == null` with ≥1 approval and no outstanding changes requested) and `mergeable == MERGEABLE` and no failing checks. |
 | **CI failing** | Head commit `statusCheckRollup.state` is `FAILURE` or `ERROR`. |
+| **New feedback** | Another human's comment (a comment review, inline or not, or a plain PR comment) is newer than the author's last push, own comment or reply, or review request. Approvals and change requests don't trigger it, and it's suppressed while changes are requested. |
 | **Conflicts** | `mergeable == CONFLICTING`. |
 | **Last activity** | The latest of: the last commit's `committedDate` (approximates the last push), the open clock, or a review or comment by any human, the author included. |
 | **Dormant** | A non-draft PR whose last activity is older than `dormantAfterDays` (default 30). Listed in its own collapsed section, never counted or nudged. Any push or human comment revives it. |
-| **Needs action** | Any of the four states above, excluding drafts, dormant, and snoozed PRs. |
+| **Needs action** | Any of the five states above, excluding drafts, dormant, and snoozed PRs. |
 
 ## Tray icon
 
@@ -62,8 +63,8 @@ elsewhere). Zero means nothing to do.
 
 Grouped, top to bottom:
 
-1. **Needs action**: ready to merge first, then changes requested,
-   conflicts, CI failing; oldest quiet first within each.
+1. **Needs action**: ready to merge first, then changes requested, new
+   feedback, conflicts, CI failing; oldest quiet first within each.
 2. **Waiting on review**: sorted by longest quiet first.
 3. **Snoozed**: collapsed, ending soonest first, with the snooze end time.
 4. **Dormant**: collapsed, most recently active first, with an `idle` time.

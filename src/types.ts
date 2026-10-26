@@ -2,7 +2,12 @@
 
 export type TokenSource = "pat" | "gh";
 
-export type Action = "changesRequested" | "conflicts" | "ciFailing" | "readyToMerge";
+export type Action =
+  | "readyToMerge"
+  | "changesRequested"
+  | "newFeedback"
+  | "conflicts"
+  | "ciFailing";
 
 export type Group = "needsAction" | "waiting" | "snoozed" | "dormant" | "draft";
 
