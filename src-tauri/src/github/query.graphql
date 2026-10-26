@@ -1,0 +1,97 @@
+query OpenPullRequests($q: String!, $first: Int!, $cursor: String) {
+  viewer {
+    login
+  }
+  search(type: ISSUE, query: $q, first: $first, after: $cursor) {
+    pageInfo {
+      hasNextPage
+      endCursor
+    }
+    nodes {
+      ... on PullRequest {
+        id
+        number
+        title
+        url
+        isDraft
+        createdAt
+        reviewDecision
+        mergeable
+        repository {
+          nameWithOwner
+        }
+        commits(last: 1) {
+          nodes {
+            commit {
+              statusCheckRollup {
+                state
+              }
+            }
+          }
+        }
+        reviewRequests(first: 25) {
+          nodes {
+            requestedReviewer {
+              __typename
+              ... on User {
+                login
+              }
+              ... on Bot {
+                login
+              }
+              ... on Mannequin {
+                login
+              }
+              ... on Team {
+                slug
+              }
+            }
+          }
+        }
+        latestReviews(first: 50) {
+          nodes {
+            state
+            author {
+              __typename
+              login
+            }
+          }
+        }
+        latestOpinionatedReviews(first: 50) {
+          nodes {
+            state
+            author {
+              __typename
+              login
+            }
+          }
+        }
+        timelineItems(
+          last: 50
+          itemTypes: [READY_FOR_REVIEW_EVENT, PULL_REQUEST_REVIEW, ISSUE_COMMENT]
+        ) {
+          nodes {
+            __typename
+            ... on ReadyForReviewEvent {
+              createdAt
+            }
+            ... on PullRequestReview {
+              submittedAt
+              author {
+                __typename
+                login
+              }
+            }
+            ... on IssueComment {
+              createdAt
+              author {
+                __typename
+                login
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

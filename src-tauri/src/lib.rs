@@ -1,10 +1,19 @@
+mod auth;
+mod github;
+mod poller;
+mod prs;
+mod settings;
+
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
-use tauri::{AppHandle, Manager, WindowEvent};
+use tauri::{AppHandle, Manager, State, WindowEvent};
 use tauri_plugin_positioner::{Position, WindowExt};
+
+use poller::{Poller, Snapshot};
 
 const POPOVER: &str = "main";
 
@@ -24,6 +33,9 @@ fn show_popover(app: &AppHandle) {
     let Some(window) = app.get_webview_window(POPOVER) else {
         return;
     };
+    if let Some(poller) = app.try_state::<Arc<Poller>>() {
+        poller.refresh_if_stale();
+    }
     #[cfg(not(target_os = "linux"))]
     let _ = window.move_window(Position::TrayBottomCenter);
     let _ = window.show();
@@ -41,11 +53,56 @@ fn toggle_popover(app: &AppHandle) {
     }
 }
 
+#[tauri::command]
+fn get_snapshot(poller: State<Arc<Poller>>) -> Snapshot {
+    poller.snapshot()
+}
+
+#[tauri::command]
+fn refresh(poller: State<Arc<Poller>>) {
+    poller.refresh();
+}
+
+#[tauri::command]
+async fn save_token(token: String, poller: State<'_, Arc<Poller>>) -> Result<(), String> {
+    let token = token.trim().to_string();
+    if token.is_empty() {
+        return Err("Token is empty".into());
+    }
+    tauri::async_runtime::spawn_blocking(move || auth::save_pat(&token))
+        .await
+        .map_err(|e| e.to_string())?
+        .map_err(|e| format!("Could not store token in the keychain: {e}"))?;
+    poller.refresh();
+    Ok(())
+}
+
+#[tauri::command]
+async fn clear_token(poller: State<'_, Arc<Poller>>) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(auth::clear_pat)
+        .await
+        .map_err(|e| e.to_string())?
+        .map_err(|e| format!("Could not remove token from the keychain: {e}"))?;
+    poller.refresh();
+    Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .plugin(
+            tauri_plugin_log::Builder::new()
+                .level(log::LevelFilter::Info)
+                .build(),
+        )
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_positioner::init())
+        .invoke_handler(tauri::generate_handler![
+            get_snapshot,
+            refresh,
+            save_token,
+            clear_token
+        ])
         .setup(|app| {
             #[cfg(target_os = "macos")]
             app.set_activation_policy(tauri::ActivationPolicy::Accessory);
@@ -63,7 +120,7 @@ pub fn run() {
             let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
             let menu = Menu::with_items(app, &[&open, &quit])?;
 
-            TrayIconBuilder::with_id("tray")
+            TrayIconBuilder::with_id(poller::TRAY_ID)
                 .icon(app.default_window_icon().unwrap().clone())
                 .tooltip("Review Pinger")
                 .menu(&menu)
@@ -85,6 +142,9 @@ pub fn run() {
                     }
                 })
                 .build(app)?;
+
+            let poller = poller::start(app.handle());
+            app.manage(poller);
 
             Ok(())
         })
