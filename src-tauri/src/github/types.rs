@@ -56,6 +56,9 @@ pub struct PullRequest {
     pub merge_queue_entry: Option<MergeQueueEntry>,
     pub repository: Repository,
     pub commits: Nodes<CommitNode>,
+    /// The last commits with their authors, `None` when not requested.
+    #[serde(default)]
+    pub recent_commits: Option<Nodes<RecentCommitNode>>,
     #[serde(default)]
     pub review_requests: Option<Nodes<ReviewRequest>>,
     #[serde(default)]
@@ -122,6 +125,29 @@ pub struct MergeQueueEntry {
 #[derive(Debug, Deserialize)]
 pub struct CommitNode {
     pub commit: Commit,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct RecentCommitNode {
+    pub commit: RecentCommit,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RecentCommit {
+    pub committed_date: DateTime<Utc>,
+    pub author: Option<CommitAuthor>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CommitAuthor {
+    /// `None` when the commit email isn't tied to a GitHub account.
+    pub user: Option<CommitUser>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CommitUser {
+    pub login: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -218,6 +244,17 @@ pub struct Review {
     #[serde(default, rename = "submittedAt")]
     pub submitted_at: Option<DateTime<Utc>>,
     pub author: Option<Actor>,
+    /// Only requested for `reviews`.
+    #[serde(default)]
+    pub url: Option<String>,
+    /// The review's last comment, only requested for `reviews`.
+    #[serde(default)]
+    pub comments: Option<Nodes<ReviewComment>>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ReviewComment {
+    pub url: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
@@ -252,6 +289,8 @@ pub enum TimelineItem {
     },
     IssueComment {
         created_at: DateTime<Utc>,
+        #[serde(default)]
+        url: Option<String>,
         author: Option<Actor>,
     },
     #[serde(other)]

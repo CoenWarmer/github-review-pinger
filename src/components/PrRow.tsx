@@ -1,7 +1,9 @@
-import { useState, type CSSProperties } from "react";
+import { useState, type CSSProperties, type KeyboardEvent, type MouseEvent } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { cn } from "@/lib/utils";
 import { chipClass, fillStyle } from "./Chips";
+import { ReviewerCard } from "./ReviewerCard";
 import { invoke } from "@tauri-apps/api/core";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { checksProgress, dayAndTime, elapsed, queueProgress, remaining } from "../format";
@@ -55,36 +57,67 @@ const SNOOZE_OPTIONS = [
 
 export function ReviewerChip({
   reviewer,
+  prId,
   prUrl,
+  now,
   onAsk,
 }: {
   reviewer: Reviewer;
+  prId: string;
   prUrl: string;
+  now: number;
   /** Asks for a team's Slack channel, which a team chip links to. */
   onAsk: (team: string) => void;
 }) {
   const label = `${reviewer.login} ${REVIEWER_LABELS[reviewer.state]}${
     reviewer.rerequested ? ", re-requested" : ""
   }`;
-  if (reviewer.team) {
-    return (
-      <TeamChip
-        team={reviewer.team}
-        login={reviewer.rerequested ? `${reviewer.login} ↻` : reviewer.login}
-        glyph={REVIEWER_GLYPHS[reviewer.state]}
-        className={chipClass(reviewer.state)}
-        title={label}
-        prUrl={prUrl}
-        onAsk={onAsk}
-      />
-    );
-  }
-  return (
-    <span className={chipClass(reviewer.state)} title={label}>
+  // A user's chip opens their last comment, or review.
+  const responseUrl = reviewer.team ? null : reviewer.lastResponse?.url;
+  const chip = reviewer.team ? (
+    <TeamChip
+      team={reviewer.team}
+      login={reviewer.rerequested ? `${reviewer.login} ↻` : reviewer.login}
+      glyph={REVIEWER_GLYPHS[reviewer.state]}
+      className={chipClass(reviewer.state)}
+      label={label}
+      prUrl={prUrl}
+      onAsk={onAsk}
+    />
+  ) : (
+    // The hover card says more than a native tooltip would.
+    <span
+      className={cn(
+        chipClass(reviewer.state),
+        responseUrl && "cursor-pointer outline-none hover:border-info focus-visible:border-info",
+      )}
+      aria-label={label}
+      {...(responseUrl && {
+        role: "button",
+        tabIndex: 0,
+        // Inside the row's button, so it mustn't also open the PR.
+        onClick: (e: MouseEvent) => {
+          e.stopPropagation();
+          visitPr({ id: prId, url: responseUrl });
+        },
+        onKeyDown: (e: KeyboardEvent) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            e.stopPropagation();
+            visitPr({ id: prId, url: responseUrl });
+          }
+        },
+      })}
+    >
       <span aria-hidden="true">{REVIEWER_GLYPHS[reviewer.state]}</span>
       {reviewer.login}
       {reviewer.rerequested && <span aria-hidden="true"> ↻</span>}
     </span>
+  );
+  return (
+    <ReviewerCard reviewer={reviewer} now={now}>
+      {chip}
+    </ReviewerCard>
   );
 }
 
@@ -220,7 +253,9 @@ export function PrRow({ pr, now }: { pr: PullRequest; now: number }) {
               <ReviewerChip
                 key={reviewer.login}
                 reviewer={reviewer}
+                prId={pr.id}
                 prUrl={pr.url}
+                now={now}
                 onAsk={setAskingTeam}
               />
             ))}

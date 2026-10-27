@@ -76,6 +76,13 @@ retried twice per request.
   stay with the full poll. For a review-request PR, whether it's still
   requested is inferred: you're listed directly, or a team is and it was
   requested through it before.
+- Team members (for the reviewer hover cards) come from a separate
+  lookup, cached in memory for an hour and refreshed by the poll: the members
+  of every team requested on a PR, now or earlier, in batched queries. It
+  needs the `read:org` scope.
+  Without it the lookup fails once per hour, quietly, and the cards show what
+  they can; Settings says how to add the scope. Recent commits (author and
+  date, last 20) are fetched with each PR to see who pushed.
 - Poll every 2 minutes; also refresh when the popover opens and data is older
   than 30 s (wall-clock, so time asleep counts). Wait out rate limits until
   the reset time; back off exponentially (up to 10 min) on network and API
@@ -225,6 +232,45 @@ reduced motion.
 
 The footer shows when data was refreshed and a refresh icon button, which spins while refreshing.
 
+### Reviewer hover cards
+
+Hovering a reviewer chip on either tab (or focusing it with the keyboard)
+shows a card after about 300 ms. It closes when the pointer leaves, can't be
+entered. A team chip still opens its Slack channel on click (Shift-click
+changes it); a user chip opens their last response, below.
+
+- **User chip**:
+  - **Teams**: only the teams that matter for this PR, as "ana for
+    workchat-eng": the teams requested on the PR, now or earlier, that the
+    user belongs to. Code owners are requested automatically, and a team's
+    request goes away once one of its members reviews, so the request history
+    says which teams own what the PR changes. Up to 5, then "+N more". Left
+    out when the user is in none of them, when the members aren't known (no
+    `read:org`), or when the request is older than the last 50 timeline items.
+  - **Review**: for an approval or change request, when it was submitted:
+    "Approved 2h ago", "Requested changes 3h ago".
+  - **Last response**: how long since their latest review, review-thread
+    reply, or PR comment: "Last response 8h ago (commented)". That is how
+    long you've been waiting on them, and it's there even when GitHub no
+    longer lists them under latest reviews because they were asked again.
+    Shown for approvers only when they responded after approving.
+  - **Click**: a user chip with a response opens it on GitHub: the review's
+    last comment (`#discussion_r…`), a PR comment, or the review itself, and
+    marks the PR visited. A chip without a response isn't clickable.
+  - **Not responded**: "Hasn't responded yet, requested 4h ago". After a
+    response, a newer re-request adds "Re-requested 1h ago".
+- **Team chip**:
+  - **Requested**: how long since the team was requested on this PR, or since
+    it was requested again: "Requested 3h ago". Left out when the request is
+    older than the PR timeline the app reads (the last 50 items).
+  - **Last activity**: the latest review, review comment, PR comment, or push
+    by any member of the team on this PR, with who and what: "Last activity
+    40m ago by ana (commented)", or "No response yet". Without `read:org`
+    the line says membership is unavailable.
+  - **Slack**: whether clicking opens its Slack channel (with Shift-click to
+    change it) or adds one, which replaces the chip's native tooltip.
+- Bots don't get cards.
+
 ### Settings
 
 The third tab holds, top to bottom:
@@ -236,6 +282,9 @@ The third tab holds, top to bottom:
   selector, who is signed in ("Signed in as CoenWarmer"), and the token form
   when the token is selected. With the CLI selected, a saved token is noted
   as kept but unused.
+  When the team lookup was denied, a hint says to add the `read:org` scope
+  (`gh auth refresh -s read:org`, or add it to the token) to see team details
+  on the reviewer hover cards. It goes away once a lookup succeeds.
 - **Slack channels**: every team with a configured channel, as the team name
   and its link, labeled "settings.json" or "saved". Saved channels (pasted
   into a team chip) can be clicked to change their link in place, and have a

@@ -18,6 +18,26 @@ export interface Reviewer {
   rerequested: boolean;
   /** For team requests, the lowercase `org/slug` Slack channels are keyed by. */
   team: string | null;
+  /** When the review that sets the state was submitted. */
+  at: string | null;
+  /** When they were last asked to review this PR. */
+  requestedAt: string | null;
+  /** For users: their latest review or comment on this PR. */
+  lastResponse: Activity | null;
+  /** For users: the teams requested on this PR that they belong to. */
+  teams: string[];
+  /** For teams: whether the members are known, so `activity` means something. */
+  membersKnown: boolean;
+  /** For teams: the latest thing a member did on this PR. */
+  activity: Activity | null;
+}
+
+export interface Activity {
+  login: string;
+  kind: "approved" | "changesRequested" | "commented" | "pushed";
+  at: string;
+  /** Where to read it: the comment, or the review when it has none. */
+  url: string | null;
 }
 
 export interface PullRequest {
@@ -108,6 +128,8 @@ export interface Snapshot {
   hasSavedToken: boolean;
   /** Notification cards are muted. */
   notificationsMuted: boolean;
+  /** The team lookup was refused for lack of the `read:org` scope. */
+  teamLookupDenied: boolean;
   fetchedAt: string | null;
   ssoPartial: boolean;
   pullRequests: PullRequest[];

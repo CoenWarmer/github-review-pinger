@@ -231,6 +231,7 @@ function App() {
               authSource={snapshot.authChoice ?? (snapshot.hasSavedToken ? "pat" : "gh")}
               hasSavedToken={snapshot.hasSavedToken}
               notificationsMuted={snapshot.notificationsMuted}
+              teamLookupDenied={snapshot.teamLookupDenied}
               channels={snapshot.teamChannels}
             />
           ) : tab === "mine" ? (

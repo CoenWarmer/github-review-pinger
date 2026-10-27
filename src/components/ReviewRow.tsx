@@ -49,7 +49,9 @@ export function ReviewRow({ pr, now }: { pr: ReviewRequest; now: number }) {
               <ReviewerChip
                 key={reviewer.login}
                 reviewer={reviewer}
+                prId={pr.id}
                 prUrl={pr.url}
+                now={now}
                 onAsk={setAskingTeam}
               />
             ))}

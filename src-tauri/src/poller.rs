@@ -16,6 +16,7 @@ use tokio::sync::Notify;
 use crate::auth::{self, AuthError, TokenSource};
 use crate::card;
 use crate::checks;
+use crate::directory::Directory;
 use crate::github::types::{PullRequest, RequestedReviewer};
 use crate::github::{self, FetchError};
 use crate::memory::Memory;
@@ -46,6 +47,8 @@ pub struct Snapshot {
     pub has_saved_token: bool,
     /// Notification cards are muted.
     pub notifications_muted: bool,
+    /// The team lookup was refused for lack of the `read:org` scope.
+    pub team_lookup_denied: bool,
     /// Wall-clock time, so staleness survives the machine sleeping.
     pub fetched_at: Option<DateTime<Utc>>,
     pub sso_partial: bool,
@@ -88,6 +91,8 @@ pub struct Poller {
     latest: Mutex<Option<Fetched>>,
     memory: Mutex<Memory>,
     memory_path: Option<PathBuf>,
+    /// Team members and users' teams, for the reviewer hover cards.
+    directory: Mutex<Directory>,
     /// Pull requests the user opened on GitHub since the popover last
     /// showed; refreshed first when it next opens. Not persisted.
     visited: Mutex<HashSet<String>>,
@@ -198,9 +203,11 @@ impl Poller {
         let latest = self.latest.lock().unwrap();
         if let Some(fetched) = latest.as_ref() {
             let (views, review_views) = self.derive(app, fetched, Utc::now());
+            let denied = self.directory.lock().unwrap().is_denied();
             self.update(app, |s| {
                 s.pull_requests = views;
                 s.review_requests = review_views;
+                s.team_lookup_denied = denied;
             });
         }
     }
@@ -231,7 +238,9 @@ impl Poller {
                 checks::estimates(&memory, &settings.check_durations),
             )
         };
+        let directory = self.directory.lock().unwrap();
         let rules = prs::Rules {
+            directory: &directory,
             ignored_logins: &settings.ignored_logins,
             dormant_after: dormant_after(&settings),
             snoozed: &snoozed,
@@ -285,6 +294,7 @@ pub fn start(app: &AppHandle) -> Arc<Poller> {
             auth_choice: None,
             has_saved_token: false,
             notifications_muted: memory.notifications_muted,
+            team_lookup_denied: false,
             fetched_at: None,
             sso_partial: false,
             pull_requests: Vec::new(),
@@ -295,6 +305,7 @@ pub fn start(app: &AppHandle) -> Arc<Poller> {
         latest: Mutex::new(None),
         memory: Mutex::new(memory),
         memory_path,
+        directory: Mutex::new(Directory::default()),
         visited: Mutex::new(HashSet::new()),
         first_poll: AtomicBool::new(true),
         wake: Notify::new(),
@@ -518,7 +529,47 @@ async fn poll_once(app: &AppHandle, poller: &Poller) -> Result<(), Problem> {
         s.slack_opens_in = settings.slack_opens_in;
     });
     *poller.latest.lock().unwrap() = Some(fetched);
+    refresh_directory(app, poller).await;
     Ok(())
+}
+
+/// Looks up whatever the hover cards still need to know about teams and
+/// users, and redraws the lists when something arrived. Failures are only
+/// logged: the cards then show what they can, and the next poll tries again.
+async fn refresh_directory(app: &AppHandle, poller: &Poller) {
+    let needs = match poller.latest.lock().unwrap().as_ref() {
+        Some(fetched) => prs::directory_needs(
+            fetched
+                .pull_requests
+                .iter()
+                .chain(&fetched.review_pull_requests),
+        ),
+        None => return,
+    };
+    let missing = poller.directory.lock().unwrap().missing(&needs, Utc::now());
+    if missing.is_empty() {
+        return;
+    }
+
+    let chosen = poller.auth_source();
+    let Ok(Ok(token)) =
+        tauri::async_runtime::spawn_blocking(move || auth::resolve_token(chosen)).await
+    else {
+        return;
+    };
+    match github::fetch_directory(&poller.http, &token.value, &missing).await {
+        Ok(found) => {
+            let changed = poller
+                .directory
+                .lock()
+                .unwrap()
+                .merge(&missing, found, Utc::now());
+            if changed {
+                poller.rederive(app);
+            }
+        }
+        Err(e) => log::warn!("Could not look up teams: {e:?}"),
+    }
 }
 
 struct Fetched {
