@@ -217,7 +217,7 @@ order above), Oldest first and Newest first (by open clock), Recently active,
 and Repository. The choice is per section and remembered across restarts in
 the webview's local storage; the icon is highlighted when it isn't Default.
 
-The footer shows when data was refreshed and a Refresh button.
+The footer shows when data was refreshed and a refresh icon button, which spins while refreshing.
 
 ### Settings
 

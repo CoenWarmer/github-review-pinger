@@ -191,11 +191,11 @@ export function PrRow({ pr, now }: { pr: PullRequest; now: number }) {
     <li className="group relative border-b hover:bg-accent/50 focus-within:bg-accent/50">
       <button
         type="button"
-        className="flex w-full cursor-pointer flex-col gap-[3px] border-0 bg-transparent px-3 py-2 text-left outline-none"
+        className="flex w-full cursor-pointer flex-col gap-[3px] border-0 bg-transparent px-3 py-3 text-left outline-none"
         onClick={() => visitPr(pr)}
       >
         <span className="truncate font-medium">{pr.title}</span>
-        <span className="text-xs text-muted-foreground tabular-nums">
+        <span className="text-xs text-muted-foreground tabular-nums mb-1.5">
           {pr.repo}#{pr.number} · open {elapsed(pr.openSince, now)} · quiet{" "}
           {elapsed(pr.quietSince, now)}
           {pr.group === "dormant" && ` · idle ${elapsed(pr.lastActivity, now)}`}
@@ -204,7 +204,7 @@ export function PrRow({ pr, now }: { pr: PullRequest; now: number }) {
         {((showActions && pr.actions.length > 0) ||
           notes.length > 0 ||
           pr.reviewers.length > 0) && (
-          <span className="flex flex-wrap gap-1">
+          <span className="flex flex-wrap gap-1.5">
             {showActions &&
               pr.actions.map((action) => (
                 <Badge key={action} variant={ACTION_VARIANTS[action]} className={BADGE_SIZE}>

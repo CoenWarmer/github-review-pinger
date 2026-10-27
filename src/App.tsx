@@ -1,6 +1,6 @@
 import { useState, type ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { ArrowDownWideNarrow, ChevronDown, ChevronRight, Settings } from "lucide-react";
+import { ArrowDownWideNarrow, ChevronDown, ChevronRight, RefreshCw, Settings } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import {
@@ -139,7 +139,7 @@ function Section<
 
 function Footer({ snapshot, now }: { snapshot: Snapshot; now: number }) {
   return (
-    <footer className="flex items-center justify-between gap-2 border-t px-3 py-1 text-xs text-muted-foreground">
+    <footer className="flex items-center justify-between gap-2 border-t px-3 py-1 text-xs text-muted-background">
       <span>
         {snapshot.refreshing
           ? "Refreshing…"
@@ -147,12 +147,14 @@ function Footer({ snapshot, now }: { snapshot: Snapshot; now: number }) {
       </span>
       <Button
         type="button"
-        variant="link"
-        size="xs"
+        variant="ghost"
+        size="icon-xs"
+        aria-label="Refresh"
+        title="Refresh"
         disabled={snapshot.refreshing}
         onClick={() => invoke("refresh")}
       >
-        Refresh
+        <RefreshCw className={cn(snapshot.refreshing && "animate-spin")} />
       </Button>
     </footer>
   );
