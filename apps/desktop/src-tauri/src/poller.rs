@@ -15,23 +15,18 @@ use tokio::sync::Notify;
 
 use crate::auth::{self, AuthError, TokenSource};
 use crate::card;
-use crate::checks;
 use crate::directory::Directory;
-use crate::github::types::{PullRequest, RequestedReviewer};
+use crate::engine::{self, Fetched};
 use crate::github::{self, FetchError};
 use crate::memory::Memory;
-use crate::notify;
 use crate::prs::{self, PrView};
-use crate::reviews::{self, ReviewView};
+use crate::reviews::ReviewView;
 use crate::settings::{self, Settings, SlackOpensIn};
 use crate::slack::{self, Channel};
 
 const POLL_INTERVAL: Duration = Duration::from_secs(120);
 const STALE_AFTER: chrono::Duration = chrono::Duration::seconds(30);
 const MAX_BACKOFF: Duration = Duration::from_secs(600);
-/// A gap this long between polls means the machine slept or was offline, so
-/// whatever happened meanwhile is summarized rather than replayed.
-const COLD_START_GAP: chrono::Duration = chrono::Duration::minutes(15);
 pub const TRAY_ID: &str = "tray";
 
 #[derive(Debug, Clone, Serialize)]
@@ -231,28 +226,9 @@ impl Poller {
         now: DateTime<Utc>,
     ) -> (Vec<PrView>, Vec<ReviewView>) {
         let settings = settings::load(app);
-        let (snoozed, estimates) = {
-            let memory = self.memory.lock().unwrap();
-            (
-                memory.snoozes(),
-                checks::estimates(&memory, &settings.check_durations),
-            )
-        };
+        let memory = self.memory.lock().unwrap();
         let directory = self.directory.lock().unwrap();
-        let rules = prs::Rules {
-            directory: &directory,
-            ignored_logins: &settings.ignored_logins,
-            dormant_after: dormant_after(&settings),
-            snoozed: &snoozed,
-        };
-        let mut views = prs::derive(&fetched.pull_requests, &fetched.viewer, &rules, now);
-        for view in &mut views {
-            view.checks_estimate_secs = estimates.get(&view.repo).copied();
-        }
-        (
-            views,
-            reviews::derive(&fetched.review_pull_requests, &fetched.viewer, &rules, now),
-        )
+        engine::derive(fetched, &settings, &memory, &directory, now)
     }
 
     fn save(&self, memory: &Memory) {
@@ -359,7 +335,7 @@ async fn refresh_visited(app: &AppHandle, poller: &Poller, ids: Vec<String>) {
         own.extend(others);
 
         if let Some(fetched) = poller.latest.lock().unwrap().as_mut() {
-            apply_refresh(fetched, own);
+            engine::apply_refresh(fetched, own);
         }
         Ok::<(), FetchError>(())
     }
@@ -369,51 +345,6 @@ async fn refresh_visited(app: &AppHandle, poller: &Poller, ids: Vec<String>) {
         Ok(()) => poller.rederive(app),
         Err(e) => log::warn!("Could not refresh visited pull requests: {e:?}"),
     }
-}
-
-/// Replaces each refreshed PR in place, or drops it if it was merged or
-/// closed. PRs the last fetch didn't list are ignored; the full refresh
-/// decides what belongs in the lists.
-fn apply_refresh(fetched: &mut Fetched, fresh: Vec<PullRequest>) {
-    for pr in fresh {
-        if let Some(at) = fetched.pull_requests.iter().position(|p| p.id == pr.id) {
-            if pr.closed {
-                fetched.pull_requests.remove(at);
-            } else {
-                fetched.pull_requests[at] = pr;
-            }
-        } else if let Some(at) = fetched
-            .review_pull_requests
-            .iter()
-            .position(|p| p.id == pr.id)
-        {
-            if pr.closed {
-                fetched.review_pull_requests.remove(at);
-            } else {
-                let was_requested = fetched.review_pull_requests[at].review_requested;
-                let mut pr = pr;
-                pr.review_requested = still_requested(&pr, &fetched.viewer, was_requested);
-                fetched.review_pull_requests[at] = pr;
-            }
-        }
-    }
-}
-
-/// The `review-requested` search isn't repeated for one PR, so infer it:
-/// the viewer is asked directly, or a team still is and they were requested
-/// through it before. A review by the viewer clears only their own request.
-fn still_requested(pr: &PullRequest, viewer: &str, was_requested: bool) -> bool {
-    let pending = || {
-        pr.review_requests
-            .iter()
-            .flat_map(|n| n.iter())
-            .filter_map(|r| r.requested_reviewer.as_ref())
-    };
-    let directly = pending().any(
-        |r| matches!(r, RequestedReviewer::User { login } if login.eq_ignore_ascii_case(viewer)),
-    );
-    let via_team = was_requested && pending().any(|r| matches!(r, RequestedReviewer::Team { .. }));
-    directly || via_team
 }
 
 async fn run(app: AppHandle, poller: Arc<Poller>) {
@@ -460,7 +391,7 @@ async fn poll_once(app: &AppHandle, poller: &Poller) -> Result<(), Problem> {
     });
 
     let settings = settings::load(app);
-    let reviewed_since = (Utc::now() - dormant_after(&settings)).date_naive();
+    let reviewed_since = (Utc::now() - engine::dormant_after(&settings)).date_naive();
     let fetched = match fetch(poller, reviewed_since).await {
         Ok(fetched) => fetched,
         Err(problem) => {
@@ -481,31 +412,19 @@ async fn poll_once(app: &AppHandle, poller: &Poller) -> Result<(), Problem> {
     let channels = poller.channels(&settings, &poller.memory.lock().unwrap());
     let notifications = {
         let mut memory = poller.memory.lock().unwrap();
-        let first_ever = memory.last_poll_at.is_none();
-        let cold_start = poller.first_poll.swap(false, Ordering::Relaxed)
-            || memory
-                .last_poll_at
-                .is_some_and(|at| now - at > COLD_START_GAP);
-        let nudge_after = chrono::Duration::hours(settings.nudge_after_hours.into());
-        let review_nudge_after = chrono::Duration::hours(settings.review_nudge_after_hours.into());
-
-        let events = notify::diff(
+        let first_poll = poller.first_poll.swap(false, Ordering::Relaxed);
+        let notifications = engine::record_poll(
             &views,
             &review_views,
+            &fetched.pull_requests,
+            &settings,
             &mut memory,
             now,
-            nudge_after,
-            review_nudge_after,
+            first_poll,
             &Local,
         );
-        checks::track(&fetched.pull_requests, &mut memory);
         poller.save(&memory);
-        // Right after install everything is new; the list itself says what's pending.
-        if first_ever {
-            Vec::new()
-        } else {
-            notify::compose(&events, cold_start)
-        }
+        notifications
     };
     // The list already shows what changed while it's open, and muting drops
     // the cards, but both still count the events as seen.
@@ -570,18 +489,6 @@ async fn refresh_directory(app: &AppHandle, poller: &Poller) {
         }
         Err(e) => log::warn!("Could not look up teams: {e:?}"),
     }
-}
-
-struct Fetched {
-    viewer: String,
-    token_source: TokenSource,
-    sso_partial: bool,
-    pull_requests: Vec<PullRequest>,
-    review_pull_requests: Vec<PullRequest>,
-}
-
-fn dormant_after(settings: &Settings) -> chrono::Duration {
-    chrono::Duration::days(settings.dormant_after_days.into())
 }
 
 async fn fetch(poller: &Poller, reviewed_since: NaiveDate) -> Result<Fetched, Problem> {
@@ -694,86 +601,5 @@ mod tests {
             tray_text(false, 1, 2).1,
             "Review Pinger: 1 PR needs your action, 2 reviews are waiting on you"
         );
-    }
-
-    fn pr(id: &str, overrides: serde_json::Value) -> PullRequest {
-        let mut pr = serde_json::json!({
-            "id": id,
-            "number": 1,
-            "title": "Old",
-            "url": "https://github.com/o/r/pull/1",
-            "isDraft": false,
-            "createdAt": "2026-10-01T09:00:00Z",
-            "reviewDecision": null,
-            "mergeable": "MERGEABLE",
-            "autoMergeRequest": null,
-            "repository": { "nameWithOwner": "o/r" },
-            "commits": { "nodes": [] },
-            "timelineItems": { "nodes": [] },
-        });
-        for (key, value) in overrides.as_object().unwrap() {
-            pr[key] = value.clone();
-        }
-        serde_json::from_value(pr).unwrap()
-    }
-
-    fn fetched() -> Fetched {
-        Fetched {
-            viewer: "me".into(),
-            token_source: TokenSource::Gh,
-            sso_partial: false,
-            pull_requests: vec![pr("mine", serde_json::json!({}))],
-            review_pull_requests: vec![pr(
-                "theirs",
-                serde_json::json!({ "reviewRequested": true }),
-            )],
-        }
-    }
-
-    #[test]
-    fn a_refreshed_pr_replaces_its_old_self() {
-        let mut fetched = fetched();
-        apply_refresh(
-            &mut fetched,
-            vec![pr("mine", serde_json::json!({ "title": "New" }))],
-        );
-        assert_eq!(fetched.pull_requests[0].title, "New");
-        assert_eq!(fetched.review_pull_requests[0].title, "Old");
-    }
-
-    #[test]
-    fn merged_or_closed_prs_are_dropped() {
-        let mut fetched = fetched();
-        let closed = serde_json::json!({ "closed": true });
-        apply_refresh(
-            &mut fetched,
-            vec![pr("mine", closed.clone()), pr("theirs", closed)],
-        );
-        assert!(fetched.pull_requests.is_empty());
-        assert!(fetched.review_pull_requests.is_empty());
-    }
-
-    #[test]
-    fn unknown_prs_are_left_to_the_full_refresh() {
-        let mut fetched = fetched();
-        apply_refresh(&mut fetched, vec![pr("other", serde_json::json!({}))]);
-        assert_eq!(fetched.pull_requests.len(), 1);
-        assert_eq!(fetched.review_pull_requests.len(), 1);
-    }
-
-    #[test]
-    fn reviewing_clears_a_direct_request_but_not_a_team_one() {
-        let direct = serde_json::json!({ "reviewRequests": { "nodes": [
-            { "requestedReviewer": { "__typename": "User", "login": "Me" } },
-        ] } });
-        let team = serde_json::json!({ "reviewRequests": { "nodes": [
-            { "requestedReviewer": { "__typename": "Team", "slug": "t" } },
-        ] } });
-        let none = serde_json::json!({ "reviewRequests": { "nodes": [] } });
-
-        assert!(still_requested(&pr("p", direct), "me", false));
-        assert!(still_requested(&pr("p", team.clone()), "me", true));
-        assert!(!still_requested(&pr("p", team), "me", false));
-        assert!(!still_requested(&pr("p", none), "me", true));
     }
 }

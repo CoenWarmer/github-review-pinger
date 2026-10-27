@@ -19,7 +19,9 @@ use tauri_plugin_positioner::{Position, WindowExt};
 use poller::{Poller, Snapshot};
 
 // The pure logic lives in its own crate; these keep the old `crate::` paths working.
-pub use review_pinger_core::{calendar, checks, directory, memory, notify, prs, reviews, slack};
+pub use review_pinger_core::{
+    calendar, checks, directory, engine, memory, notify, prs, reviews, slack,
+};
 
 const POPOVER: &str = "main";
 
