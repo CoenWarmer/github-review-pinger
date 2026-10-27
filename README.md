@@ -34,7 +34,8 @@ pnpm tauri dev
 
 The repository is a Cargo workspace:
 
-- `src-tauri/`: the desktop app (tray, notification cards, keychain, polling).
+- `apps/desktop/`: the desktop app. `src/` is the React UI and `src-tauri/`
+  the Rust shell (tray, notification cards, keychain, polling).
 - `crates/core/`: the pull request logic, with no dependency on Tauri, so
   other front ends can share it.
 
@@ -43,7 +44,7 @@ Run all Rust checks from the repository root: `cargo test --workspace`.
 ## Releasing
 
 1. Bump `version` in `Cargo.toml` (the workspace version),
-   `src-tauri/tauri.conf.json`, and `package.json`.
+   `apps/desktop/src-tauri/tauri.conf.json`, and `apps/desktop/package.json`.
 2. Tag and push: `git tag v0.4.0 && git push origin v0.4.0`. The Release
    workflow builds all platforms into a draft GitHub release.
 3. Publish the draft. The Homebrew workflow then updates
