@@ -247,9 +247,15 @@ Slack channel, Shift-click still changes it).
     says which teams own what the PR changes. Up to 5, then "+N more". Left
     out when the user is in none of them, when the members aren't known (no
     `read:org`), or when the request is older than the last 50 timeline items.
-  - **Review**: when their review on this PR was submitted: "Approved 2h
-    ago", "Requested changes 3h ago", "Commented 1h ago". A requested reviewer
-    who hasn't reviewed shows "Hasn't reviewed yet".
+  - **Review**: for an approval or change request, when it was submitted:
+    "Approved 2h ago", "Requested changes 3h ago".
+  - **Last response**: how long since their latest review, review-thread
+    reply, or PR comment: "Last response 8h ago (commented)". That is how
+    long you've been waiting on them, and it's there even when GitHub no
+    longer lists them under latest reviews because they were asked again.
+    Shown for approvers only when they responded after approving.
+  - **Not responded**: "Hasn't responded yet, requested 4h ago". After a
+    response, a newer re-request adds "Re-requested 1h ago".
 - **Team chip**:
   - **Requested**: how long since the team was requested on this PR, or since
     it was requested again: "Requested 3h ago". Left out when the request is

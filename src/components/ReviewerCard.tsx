@@ -53,15 +53,11 @@ function Line({ children }: { children: ReactNode }) {
 }
 
 function UserDetails({ reviewer, now }: { reviewer: Reviewer; now: number }) {
-  const { state, at, requestedAt, teams } = reviewer;
-  const review =
-    state === "pending"
-      ? requestedAt
-        ? `Hasn't reviewed yet, requested ${ago(requestedAt, now)}`
-        : "Hasn't reviewed yet"
-      : at
-        ? `${REVIEW_LABELS[state]} ${ago(at, now)}`
-        : REVIEW_LABELS[state];
+  const { state, at, requestedAt, lastResponse, teams } = reviewer;
+  const settled = state === "approved" || state === "changesRequested";
+  const showResponse = lastResponse && (!settled || !at || lastResponse.at > at);
+  // Asked again after answering, so the request is the newer news.
+  const reRequested = lastResponse && requestedAt && requestedAt > lastResponse.at;
 
   return (
     <>
@@ -75,7 +71,18 @@ function UserDetails({ reviewer, now }: { reviewer: Reviewer; now: number }) {
           </span>
         )}
       </p>
-      <Line>{review}</Line>
+      {settled && (
+        <Line>{at ? `${REVIEW_LABELS[state]} ${ago(at, now)}` : REVIEW_LABELS[state]}</Line>
+      )}
+      {showResponse && (
+        <p className="m-0 mt-1">
+          Last response {ago(lastResponse.at, now)} ({ACTIVITY_LABELS[lastResponse.kind]})
+        </p>
+      )}
+      {!lastResponse && !settled && (
+        <Line>Hasn't responded yet{requestedAt && `, requested ${ago(requestedAt, now)}`}</Line>
+      )}
+      {reRequested && <Line>Re-requested {ago(requestedAt, now)}</Line>}
     </>
   );
 }

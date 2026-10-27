@@ -81,6 +81,10 @@ pub struct Reviewer {
     pub at: Option<DateTime<Utc>>,
     /// When they were last asked to review this PR.
     pub requested_at: Option<DateTime<Utc>>,
+    /// For users: their latest review or comment on this PR. Reviewers who
+    /// were asked again are missing from GitHub's latest reviews, so this is
+    /// how long they have been quiet.
+    pub last_response: Option<Activity>,
     /// For users: the teams requested on this PR that they belong to, as
     /// slugs. Empty when none, or when the members aren't known.
     pub teams: Vec<String>,
@@ -422,6 +426,7 @@ pub(crate) fn reviewers(pr: &PullRequest, people: &People) -> Vec<Reviewer> {
                 team: None,
                 at: review.submitted_at,
                 requested_at: None,
+                last_response: None,
                 teams: Vec::new(),
                 members_known: false,
                 activity: None,
@@ -460,6 +465,7 @@ pub(crate) fn reviewers(pr: &PullRequest, people: &People) -> Vec<Reviewer> {
                 team,
                 at: None,
                 requested_at: None,
+                last_response: None,
                 teams: Vec::new(),
                 members_known: false,
                 activity: None,
@@ -474,6 +480,8 @@ pub(crate) fn reviewers(pr: &PullRequest, people: &People) -> Vec<Reviewer> {
         match (reviewer.kind, &reviewer.team) {
             (ReviewerKind::User, _) => {
                 let login = reviewer.login.to_lowercase();
+                reviewer.last_response =
+                    latest_response_by(pr, people, |author| author.to_lowercase() == login);
                 reviewer.teams = teams
                     .iter()
                     .filter(|team| {
@@ -573,25 +581,35 @@ fn request_times(pr: &PullRequest) -> HashMap<String, DateTime<Utc>> {
     times
 }
 
-/// The latest review, comment, or push on `pr` by one of `members` (lowercase
-/// logins), leaving out the author and bots.
-fn team_activity(pr: &PullRequest, people: &People, members: &HashSet<String>) -> Option<Activity> {
-    let responses = interactions(pr).filter_map(|(author, state, at)| {
-        let kind = match state {
-            None | Some(ReviewState::Commented) => ActivityKind::Commented,
-            Some(ReviewState::Approved) => ActivityKind::Approved,
-            Some(ReviewState::ChangesRequested) => ActivityKind::ChangesRequested,
-            Some(_) => return None,
-        };
-        (members.contains(&author.login.to_lowercase()) && people.is_other_human(author)).then(
-            || Activity {
+/// The latest review or comment on `pr` by a human other than the author
+/// whose login passes `matches`.
+fn latest_response_by(
+    pr: &PullRequest,
+    people: &People,
+    matches: impl Fn(&str) -> bool,
+) -> Option<Activity> {
+    interactions(pr)
+        .filter_map(|(author, state, at)| {
+            let kind = match state {
+                None | Some(ReviewState::Commented) => ActivityKind::Commented,
+                Some(ReviewState::Approved) => ActivityKind::Approved,
+                Some(ReviewState::ChangesRequested) => ActivityKind::ChangesRequested,
+                Some(_) => return None,
+            };
+            (matches(&author.login) && people.is_other_human(author)).then(|| Activity {
                 login: author.login.clone(),
                 kind,
                 at,
-            },
-        )
-    });
-    let pushes = pr
+            })
+        })
+        .max_by_key(|activity| activity.at)
+}
+
+/// The latest review, comment, or push on `pr` by one of `members` (lowercase
+/// logins), leaving out the author and bots.
+fn team_activity(pr: &PullRequest, people: &People, members: &HashSet<String>) -> Option<Activity> {
+    let response = latest_response_by(pr, people, |login| members.contains(&login.to_lowercase()));
+    let push = pr
         .recent_commits
         .iter()
         .flat_map(|commits| commits.iter())
@@ -605,8 +623,12 @@ fn team_activity(pr: &PullRequest, people: &People, members: &HashSet<String>) -
                 kind: ActivityKind::Pushed,
                 at: node.commit.committed_date,
             })
-        });
-    responses.chain(pushes).max_by_key(|activity| activity.at)
+        })
+        .max_by_key(|activity| activity.at);
+    response
+        .into_iter()
+        .chain(push)
+        .max_by_key(|activity| activity.at)
 }
 
 pub(crate) fn checks(pr: &PullRequest) -> Checks {
@@ -852,6 +874,39 @@ mod tests {
         );
         assert_eq!(chip("waiter").at, None);
         assert!(chip("waiter").teams.is_empty());
+    }
+
+    #[test]
+    fn a_reviewer_asked_again_still_has_a_last_response() {
+        // GitHub leaves reviewers with a pending request out of latestReviews.
+        let pr = with(json!({
+            "reviewRequests": { "nodes": [{ "requestedReviewer": user("jcger") }] },
+            "timelineItems": { "nodes": [
+                { "__typename": "ReviewRequestedEvent", "createdAt": "2026-10-27T11:52:30Z",
+                  "requestedReviewer": user("jcger") },
+                comment(user("JCGER"), "2026-10-27T13:00:00Z"),
+            ] },
+            "reviews": { "nodes": [
+                submitted(user("jcger"), "COMMENTED", "2026-10-27T08:34:28Z"),
+                submitted(user("jcger"), "COMMENTED", "2026-10-27T12:08:35Z"),
+                // Not him, and the author's own replies don't count.
+                submitted(user("other"), "APPROVED", "2026-10-27T15:00:00Z"),
+                submitted(user(ME), "COMMENTED", "2026-10-27T12:29:17Z"),
+            ] },
+        }));
+        let view = derive_all(vec![pr], &[]).remove(0);
+        let chip = view.reviewers.iter().find(|r| r.login == "jcger").unwrap();
+
+        assert_eq!(chip.state, ReviewerState::Pending);
+        assert_eq!(chip.requested_at, Some(at("2026-10-27T11:52:30Z")));
+        assert_eq!(
+            chip.last_response,
+            Some(Activity {
+                login: "JCGER".into(),
+                kind: ActivityKind::Commented,
+                at: at("2026-10-27T13:00:00Z"),
+            })
+        );
     }
 
     #[test]

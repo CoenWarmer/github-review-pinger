@@ -22,6 +22,8 @@ export interface Reviewer {
   at: string | null;
   /** When they were last asked to review this PR. */
   requestedAt: string | null;
+  /** For users: their latest review or comment on this PR. */
+  lastResponse: Activity | null;
   /** For users: the teams requested on this PR that they belong to. */
   teams: string[];
   /** For teams: whether the members are known, so `activity` means something. */
