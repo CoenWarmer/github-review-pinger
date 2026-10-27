@@ -217,11 +217,11 @@ order above), Oldest first and Newest first (by open clock), Recently active,
 and Repository. The choice is per section and remembered across restarts in
 the webview's local storage; the icon is highlighted when it isn't Default.
 
-While the first load is in progress the popover shows a halftone sphere (an
-11 x 11 grid of dots sized by their distance from an orbiting light, after the
-Halftone Sphere pattern on bookofshapes.com by Nikolaj Sokolowski) above
-"Loading pull requests…". It holds still when the system asks for reduced
-motion.
+While the first load is in progress the popover shows slowly morphing
+concentric rings (11 rings whose radii wobble with drifting noise, after the
+Concentric Noise Rings pattern on bookofshapes.com by Nikolaj Sokolowski)
+above "Loading pull requests…". It holds still when the system asks for
+reduced motion.
 
 The footer shows when data was refreshed and a refresh icon button, which spins while refreshing.
 

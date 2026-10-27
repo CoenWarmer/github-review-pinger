@@ -13,9 +13,9 @@ import {
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { cn } from "@/lib/utils";
-import { HalftoneLoader } from "./components/HalftoneLoader";
 import { PrRow } from "./components/PrRow";
 import { ReviewRow } from "./components/ReviewRow";
+import { RingsLoader } from "./components/RingsLoader";
 import { SettingsPanel } from "./components/SettingsPanel";
 import { Setup, problemMessage } from "./components/Setup";
 import { elapsed } from "./format";
@@ -168,7 +168,7 @@ function App() {
   if (!snapshot || (snapshot.status.kind === "loading" && !snapshot.fetchedAt)) {
     return (
       <div className="flex h-full flex-col items-center justify-center gap-3 text-muted-foreground">
-        <HalftoneLoader />
+        <RingsLoader />
         <p className="m-0">Loading pull requests…</p>
       </div>
     );
