@@ -1,5 +1,5 @@
-//! State that survives restarts: which responses have been notified, which
-//! quiet periods have been nudged, and snoozes.
+//! State that survives restarts: which responses and review requests have been
+//! notified, which quiet and waiting periods have been nudged, and snoozes.
 
 use std::collections::HashMap;
 use std::fs;
@@ -30,6 +30,10 @@ pub struct PrMemory {
     pub nudged_for: Option<DateTime<Utc>>,
     #[serde(default)]
     pub snoozed_until: Option<DateTime<Utc>>,
+    /// Review requests at or before this time have been notified; `None`
+    /// falls back to `seen_until`.
+    #[serde(default)]
+    pub requested_seen_until: Option<DateTime<Utc>>,
 }
 
 impl PrMemory {
@@ -38,6 +42,7 @@ impl PrMemory {
             seen_until,
             nudged_for: None,
             snoozed_until: None,
+            requested_seen_until: None,
         }
     }
 }

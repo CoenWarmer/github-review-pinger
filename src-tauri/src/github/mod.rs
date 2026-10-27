@@ -1,10 +1,10 @@
 pub mod types;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 
-use chrono::{DateTime, Utc};
-use futures_util::{StreamExt, TryStreamExt, stream};
+use chrono::{DateTime, NaiveDate, Utc};
+use futures_util::{StreamExt, TryStreamExt, future, stream};
 use reqwest::{StatusCode, header};
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
@@ -19,7 +19,8 @@ const DETAILS_QUERY: &str = concat!(
     include_str!("pull_request.graphql")
 );
 const MERGE_STATE_QUERY: &str = include_str!("merge_state.graphql");
-const SEARCH: &str = "is:pr is:open author:@me archived:false";
+const AUTHORED: &str = "is:pr is:open author:@me archived:false";
+const REVIEW_REQUESTED: &str = "is:pr is:open review-requested:@me -author:@me archived:false";
 const MAX_SEARCH_PAGES: usize = 10;
 /// Small enough that each request finishes well inside GitHub's ~10 s
 /// GraphQL timeout; batches run concurrently.
@@ -29,7 +30,11 @@ const MAX_ATTEMPTS: u32 = 3;
 
 pub struct Fetched {
     pub viewer: String,
+    /// Open PRs the viewer authored.
     pub pull_requests: Vec<PullRequest>,
+    /// Open PRs by others that the viewer is asked to review or already
+    /// reviewed; `review_requested` tells which.
+    pub review_pull_requests: Vec<PullRequest>,
     /// GitHub omitted results from orgs whose SAML SSO the token isn't authorized for.
     pub sso_partial: bool,
 }
@@ -53,14 +58,39 @@ pub fn http_client() -> reqwest::Client {
 /// Fetches in three steps, because a single search query with all fields
 /// takes long enough to hit GitHub's timeout: list the open PR ids, fetch
 /// their details in concurrent batches, then fetch the expensive merge state
-/// only for PRs that could be ready to merge.
+/// only for the viewer's own PRs that could be ready to merge.
+///
+/// `reviewed_since` bounds the PRs the viewer reviewed earlier by last update;
+/// requested reviews are never bounded, since they're still waiting.
 pub async fn fetch_open_pull_requests(
     http: &reqwest::Client,
     token: &str,
+    reviewed_since: NaiveDate,
 ) -> Result<Fetched, FetchError> {
-    let (viewer, ids, sso_partial) = search_ids(http, token).await?;
+    let reviewed = format!(
+        "is:pr is:open reviewed-by:@me -author:@me archived:false updated:>={reviewed_since}"
+    );
+    let (authored, requested, reviewed) = future::try_join3(
+        search_ids(http, token, AUTHORED),
+        search_ids(http, token, REVIEW_REQUESTED),
+        search_ids(http, token, &reviewed),
+    )
+    .await?;
+    let sso_partial = authored.sso_partial || requested.sso_partial || reviewed.sso_partial;
+    let authored_ids: HashSet<String> = authored.ids.iter().cloned().collect();
+    let requested_ids: HashSet<String> = requested.ids.iter().cloned().collect();
 
-    let mut pull_requests: Vec<PullRequest> = in_batches(
+    // A PR can be both requested and reviewed (a re-request), so dedupe.
+    let mut seen = HashSet::new();
+    let ids: Vec<String> = authored
+        .ids
+        .into_iter()
+        .chain(requested.ids)
+        .chain(reviewed.ids)
+        .filter(|id| seen.insert(id.clone()))
+        .collect();
+
+    let all: Vec<PullRequest> = in_batches(
         http,
         token,
         DETAILS_QUERY,
@@ -68,6 +98,12 @@ pub async fn fetch_open_pull_requests(
         |nodes: Nodes<PullRequest>| nodes.nodes,
     )
     .await?;
+    let (mut pull_requests, mut review_pull_requests): (Vec<_>, Vec<_>) = all
+        .into_iter()
+        .partition(|pr| authored_ids.contains(&pr.id));
+    for pr in &mut review_pull_requests {
+        pr.review_requested = requested_ids.contains(&pr.id);
+    }
 
     let candidates: Vec<String> = pull_requests
         .iter()
@@ -90,8 +126,9 @@ pub async fn fetch_open_pull_requests(
     }
 
     Ok(Fetched {
-        viewer,
+        viewer: authored.viewer,
         pull_requests,
+        review_pull_requests,
         sso_partial,
     })
 }
@@ -122,13 +159,22 @@ fn could_be_ready(pr: &PullRequest) -> bool {
         && pr.auto_merge_request.is_none()
 }
 
+struct SearchResult {
+    viewer: String,
+    ids: Vec<String>,
+    sso_partial: bool,
+}
+
 async fn search_ids(
     http: &reqwest::Client,
     token: &str,
-) -> Result<(String, Vec<String>, bool), FetchError> {
-    let mut viewer = String::new();
-    let mut ids = Vec::new();
-    let mut sso_partial = false;
+    search: &str,
+) -> Result<SearchResult, FetchError> {
+    let mut result = SearchResult {
+        viewer: String::new(),
+        ids: Vec::new(),
+        sso_partial: false,
+    };
     let mut cursor: Option<String> = None;
 
     for _ in 0..MAX_SEARCH_PAGES {
@@ -136,12 +182,14 @@ async fn search_ids(
             http,
             token,
             SEARCH_QUERY,
-            json!({ "q": SEARCH, "cursor": cursor }),
+            json!({ "q": search, "cursor": cursor }),
         )
         .await?;
-        viewer = page.data.viewer.login;
-        sso_partial |= page.sso_partial;
-        ids.extend(page.data.search.nodes.into_iter().flatten().map(|n| n.id));
+        result.viewer = page.data.viewer.login;
+        result.sso_partial |= page.sso_partial;
+        result
+            .ids
+            .extend(page.data.search.nodes.into_iter().flatten().map(|n| n.id));
 
         let info = page.data.search.page_info;
         match info.end_cursor {
@@ -149,7 +197,7 @@ async fn search_ids(
             _ => break,
         }
     }
-    Ok((viewer, ids, sso_partial))
+    Ok(result)
 }
 
 /// Runs `query` for `ids` in concurrent batches and collects the non-null nodes.
@@ -406,13 +454,23 @@ mod tests {
     #[ignore = "calls the GitHub API with your gh token"]
     fn live_fetch() {
         let token = auth::resolve_token().expect("gh is logged in");
-        let fetched =
-            tauri::async_runtime::block_on(fetch_open_pull_requests(&http_client(), &token.value))
-                .expect("fetch succeeds");
+        let since = (Utc::now() - chrono::Duration::days(30)).date_naive();
+        let fetched = tauri::async_runtime::block_on(fetch_open_pull_requests(
+            &http_client(),
+            &token.value,
+            since,
+        ))
+        .expect("fetch succeeds");
         println!(
-            "{} open PRs for {}, sso_partial={}",
+            "{} open PRs for {}, {} review PRs ({} requested), sso_partial={}",
             fetched.pull_requests.len(),
             fetched.viewer,
+            fetched.review_pull_requests.len(),
+            fetched
+                .review_pull_requests
+                .iter()
+                .filter(|pr| pr.review_requested)
+                .count(),
             fetched.sso_partial
         );
         let ignored = ["kibanamachine".to_string(), "elasticmachine".to_string()];

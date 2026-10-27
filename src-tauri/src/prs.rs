@@ -153,9 +153,9 @@ pub fn derive(prs: &[PullRequest], viewer: &str, rules: &Rules, now: DateTime<Ut
     views
 }
 
-struct People<'a> {
-    viewer: &'a str,
-    ignored_logins: &'a [String],
+pub(crate) struct People<'a> {
+    pub viewer: &'a str,
+    pub ignored_logins: &'a [String],
 }
 
 impl People<'_> {
@@ -236,7 +236,7 @@ fn view(pr: &PullRequest, people: &People, rules: &Rules, now: DateTime<Utc>) ->
 }
 
 /// Time spent as a draft doesn't count against reviewers.
-fn open_since(pr: &PullRequest) -> DateTime<Utc> {
+pub(crate) fn open_since(pr: &PullRequest) -> DateTime<Utc> {
     pr.timeline_items
         .iter()
         .filter_map(|item| match item {
@@ -247,7 +247,11 @@ fn open_since(pr: &PullRequest) -> DateTime<Utc> {
         .unwrap_or(pr.created_at)
 }
 
-fn last_activity(pr: &PullRequest, people: &People, open_since: DateTime<Utc>) -> DateTime<Utc> {
+pub(crate) fn last_activity(
+    pr: &PullRequest,
+    people: &People,
+    open_since: DateTime<Utc>,
+) -> DateTime<Utc> {
     let last_push = pr
         .commits
         .iter()
@@ -283,7 +287,7 @@ fn has_new_feedback(pr: &PullRequest, people: &People, responses: &[Response]) -
         .timeline_items
         .iter()
         .filter_map(|item| match item {
-            TimelineItem::ReviewRequestedEvent { created_at } => Some(*created_at),
+            TimelineItem::ReviewRequestedEvent { created_at, .. } => Some(*created_at),
             _ => None,
         })
         .max();
@@ -345,7 +349,7 @@ fn responses(pr: &PullRequest, people: &People) -> Vec<Response> {
     responses
 }
 
-fn reviewers(pr: &PullRequest, people: &People) -> Vec<Reviewer> {
+pub(crate) fn reviewers(pr: &PullRequest, people: &People) -> Vec<Reviewer> {
     let mut by_login: BTreeMap<String, Reviewer> = BTreeMap::new();
 
     // Opinionated reviews (approve / request changes) stand even if the

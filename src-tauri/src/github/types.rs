@@ -29,6 +29,9 @@ pub struct PullRequest {
     pub number: u64,
     pub title: String,
     pub url: String,
+    /// `None` when the account was deleted.
+    #[serde(default)]
+    pub author: Option<Actor>,
     pub is_draft: bool,
     pub created_at: DateTime<Utc>,
     pub review_decision: Option<ReviewDecision>,
@@ -37,6 +40,11 @@ pub struct PullRequest {
     /// be ready to merge, and `None` for the rest.
     #[serde(default)]
     pub merge_state_status: Option<MergeStateStatus>,
+    /// Not part of the details query; set for PRs by others that came back
+    /// from the `review-requested` search, i.e. a review is pending from the
+    /// viewer or one of their teams.
+    #[serde(default)]
+    pub review_requested: bool,
     /// Only presence matters: auto-merge is enabled.
     pub auto_merge_request: Option<IgnoredAny>,
     pub repository: Repository,
@@ -186,6 +194,8 @@ pub enum TimelineItem {
     },
     ReviewRequestedEvent {
         created_at: DateTime<Utc>,
+        #[serde(default)]
+        requested_reviewer: Option<RequestedReviewer>,
     },
     IssueComment {
         created_at: DateTime<Utc>,

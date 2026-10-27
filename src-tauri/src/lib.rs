@@ -5,6 +5,7 @@ mod memory;
 mod notify;
 mod poller;
 mod prs;
+mod reviews;
 mod settings;
 
 use std::sync::Arc;

@@ -17,6 +17,8 @@ pub struct Settings {
     /// Nudge about a PR waiting on review after this much weekday time
     /// without a response.
     pub nudge_after_hours: u32,
+    /// Nudge about a PR waiting on your review after this much weekday time.
+    pub review_nudge_after_hours: u32,
 }
 
 impl Default for Settings {
@@ -25,6 +27,7 @@ impl Default for Settings {
             ignored_logins: Vec::new(),
             dormant_after_days: 30,
             nudge_after_hours: 24,
+            review_nudge_after_hours: 24,
         }
     }
 }

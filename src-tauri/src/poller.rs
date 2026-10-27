@@ -7,7 +7,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use chrono::{DateTime, Local, Utc};
+use chrono::{DateTime, Local, NaiveDate, Utc};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_notification::NotificationExt;
@@ -19,7 +19,8 @@ use crate::github::{self, FetchError};
 use crate::memory::Memory;
 use crate::notify;
 use crate::prs::{self, PrView};
-use crate::settings;
+use crate::reviews::{self, ReviewView};
+use crate::settings::{self, Settings};
 
 const POLL_INTERVAL: Duration = Duration::from_secs(120);
 const STALE_AFTER: chrono::Duration = chrono::Duration::seconds(30);
@@ -40,6 +41,7 @@ pub struct Snapshot {
     pub fetched_at: Option<DateTime<Utc>>,
     pub sso_partial: bool,
     pub pull_requests: Vec<PrView>,
+    pub review_requests: Vec<ReviewView>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -104,8 +106,11 @@ impl Poller {
         }
         let latest = self.latest.lock().unwrap();
         if let Some(fetched) = latest.as_ref() {
-            let views = self.derive(app, fetched, Utc::now());
-            self.update(app, |s| s.pull_requests = views);
+            let (views, review_views) = self.derive(app, fetched, Utc::now());
+            self.update(app, |s| {
+                s.pull_requests = views;
+                s.review_requests = review_views;
+            });
         }
     }
 
@@ -121,15 +126,23 @@ impl Poller {
         true
     }
 
-    fn derive(&self, app: &AppHandle, fetched: &Fetched, now: DateTime<Utc>) -> Vec<PrView> {
+    fn derive(
+        &self,
+        app: &AppHandle,
+        fetched: &Fetched,
+        now: DateTime<Utc>,
+    ) -> (Vec<PrView>, Vec<ReviewView>) {
         let settings = settings::load(app);
         let snoozed = self.memory.lock().unwrap().snoozes();
         let rules = prs::Rules {
             ignored_logins: &settings.ignored_logins,
-            dormant_after: chrono::Duration::days(settings.dormant_after_days.into()),
+            dormant_after: dormant_after(&settings),
             snoozed: &snoozed,
         };
-        prs::derive(&fetched.pull_requests, &fetched.viewer, &rules, now)
+        (
+            prs::derive(&fetched.pull_requests, &fetched.viewer, &rules, now),
+            reviews::derive(&fetched.review_pull_requests, &fetched.viewer, &rules, now),
+        )
     }
 
     fn save(&self, memory: &Memory) {
@@ -171,6 +184,7 @@ pub fn start(app: &AppHandle) -> Arc<Poller> {
             fetched_at: None,
             sso_partial: false,
             pull_requests: Vec::new(),
+            review_requests: Vec::new(),
         }),
         latest: Mutex::new(None),
         memory: Mutex::new(memory),
@@ -218,7 +232,9 @@ fn backoff(failures: u32) -> Duration {
 async fn poll_once(app: &AppHandle, poller: &Poller) -> Result<(), Problem> {
     poller.update(app, |s| s.refreshing = true);
 
-    let fetched = match fetch(poller).await {
+    let settings = settings::load(app);
+    let reviewed_since = (Utc::now() - dormant_after(&settings)).date_naive();
+    let fetched = match fetch(poller, reviewed_since).await {
         Ok(fetched) => fetched,
         Err(problem) => {
             // Keep showing the last good data alongside the problem.
@@ -234,7 +250,7 @@ async fn poll_once(app: &AppHandle, poller: &Poller) -> Result<(), Problem> {
     };
 
     let now = Utc::now();
-    let views = poller.derive(app, &fetched, now);
+    let (views, review_views) = poller.derive(app, &fetched, now);
     let notifications = {
         let mut memory = poller.memory.lock().unwrap();
         let first_ever = memory.last_poll_at.is_none();
@@ -242,9 +258,18 @@ async fn poll_once(app: &AppHandle, poller: &Poller) -> Result<(), Problem> {
             || memory
                 .last_poll_at
                 .is_some_and(|at| now - at > COLD_START_GAP);
-        let nudge_after = chrono::Duration::hours(settings::load(app).nudge_after_hours.into());
+        let nudge_after = chrono::Duration::hours(settings.nudge_after_hours.into());
+        let review_nudge_after = chrono::Duration::hours(settings.review_nudge_after_hours.into());
 
-        let events = notify::diff(&views, &mut memory, now, nudge_after, &Local);
+        let events = notify::diff(
+            &views,
+            &review_views,
+            &mut memory,
+            now,
+            nudge_after,
+            review_nudge_after,
+            &Local,
+        );
         poller.save(&memory);
         // Right after install everything is new; the list itself says what's pending.
         if first_ever {
@@ -273,6 +298,7 @@ async fn poll_once(app: &AppHandle, poller: &Poller) -> Result<(), Problem> {
         s.fetched_at = Some(now);
         s.sso_partial = fetched.sso_partial;
         s.pull_requests = views;
+        s.review_requests = review_views;
     });
     *poller.latest.lock().unwrap() = Some(fetched);
     Ok(())
@@ -283,9 +309,14 @@ struct Fetched {
     token_source: TokenSource,
     sso_partial: bool,
     pull_requests: Vec<PullRequest>,
+    review_pull_requests: Vec<PullRequest>,
 }
 
-async fn fetch(poller: &Poller) -> Result<Fetched, Problem> {
+fn dormant_after(settings: &Settings) -> chrono::Duration {
+    chrono::Duration::days(settings.dormant_after_days.into())
+}
+
+async fn fetch(poller: &Poller, reviewed_since: NaiveDate) -> Result<Fetched, Problem> {
     let token = tauri::async_runtime::spawn_blocking(auth::resolve_token)
         .await
         .map_err(|e| Problem::Api {
@@ -296,7 +327,7 @@ async fn fetch(poller: &Poller) -> Result<Fetched, Problem> {
             AuthError::GhNotLoggedIn => Problem::GhNotLoggedIn,
         })?;
 
-    let fetched = github::fetch_open_pull_requests(&poller.http, &token.value)
+    let fetched = github::fetch_open_pull_requests(&poller.http, &token.value, reviewed_since)
         .await
         .map_err(|e| match e {
             FetchError::Unauthorized => Problem::TokenRejected {
@@ -312,6 +343,7 @@ async fn fetch(poller: &Poller) -> Result<Fetched, Problem> {
         token_source: token.source,
         sso_partial: fetched.sso_partial,
         pull_requests: fetched.pull_requests,
+        review_pull_requests: fetched.review_pull_requests,
     })
 }
 
@@ -324,28 +356,73 @@ fn update_tray(app: &AppHandle, snapshot: &Snapshot) {
         .iter()
         .filter(|pr| pr.needs_author())
         .count();
+    let needs_review = snapshot
+        .review_requests
+        .iter()
+        .filter(|pr| pr.needs_review())
+        .count();
     let failed_without_data =
         matches!(snapshot.status, Status::Error { .. }) && snapshot.fetched_at.is_none();
 
-    // Titles show next to the icon on macOS and Linux; Windows only has the tooltip.
-    let (title, tooltip) = if failed_without_data {
-        (
-            Some("!".to_string()),
-            "Review Pinger: needs setup".to_string(),
-        )
-    } else if needs_action == 0 {
-        (None, "Review Pinger: nothing needs your action".to_string())
-    } else {
-        let noun = if needs_action == 1 {
-            "PR needs"
-        } else {
-            "PRs need"
-        };
-        (
-            Some(needs_action.to_string()),
-            format!("Review Pinger: {needs_action} {noun} your action"),
-        )
-    };
+    let (title, tooltip) = tray_text(failed_without_data, needs_action, needs_review);
     let _ = tray.set_title(title);
     let _ = tray.set_tooltip(Some(tooltip));
+}
+
+/// The title shows next to the icon on macOS and Linux; Windows only has the
+/// tooltip. Both numbers show whenever either is nonzero, so the position is
+/// what tells them apart.
+fn tray_text(
+    failed_without_data: bool,
+    needs_action: usize,
+    needs_review: usize,
+) -> (Option<String>, String) {
+    if failed_without_data {
+        return (
+            Some("!".to_string()),
+            "Review Pinger: needs setup".to_string(),
+        );
+    }
+    if needs_action == 0 && needs_review == 0 {
+        return (None, "Review Pinger: nothing needs your action".to_string());
+    }
+    let prs = if needs_action == 1 {
+        "1 PR needs"
+    } else {
+        &format!("{needs_action} PRs need")
+    };
+    let reviews = if needs_review == 1 {
+        "1 review is".to_string()
+    } else {
+        format!("{needs_review} reviews are")
+    };
+    (
+        Some(format!("{needs_action} · {needs_review}")),
+        format!("Review Pinger: {prs} your action, {reviews} waiting on you"),
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_tray_shows_both_numbers() {
+        assert_eq!(tray_text(false, 3, 0).0.as_deref(), Some("3 · 0"));
+        assert_eq!(tray_text(false, 0, 2).0.as_deref(), Some("0 · 2"));
+        assert_eq!(tray_text(false, 0, 0).0, None);
+        assert_eq!(tray_text(true, 0, 0).0.as_deref(), Some("!"));
+    }
+
+    #[test]
+    fn the_tooltip_spells_both_out() {
+        assert_eq!(
+            tray_text(false, 3, 1).1,
+            "Review Pinger: 3 PRs need your action, 1 review is waiting on you"
+        );
+        assert_eq!(
+            tray_text(false, 1, 2).1,
+            "Review Pinger: 1 PR needs your action, 2 reviews are waiting on you"
+        );
+    }
 }

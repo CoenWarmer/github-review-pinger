@@ -3,6 +3,10 @@ fragment PullRequestFields on PullRequest {
   number
   title
   url
+  author {
+    __typename
+    login
+  }
   isDraft
   createdAt
   reviewDecision
@@ -45,6 +49,7 @@ fragment PullRequestFields on PullRequest {
   latestReviews(first: 50) {
     nodes {
       state
+      submittedAt
       author {
         __typename
         login
@@ -54,6 +59,7 @@ fragment PullRequestFields on PullRequest {
   latestOpinionatedReviews(first: 50) {
     nodes {
       state
+      submittedAt
       author {
         __typename
         login
@@ -87,6 +93,21 @@ fragment PullRequestFields on PullRequest {
       }
       ... on ReviewRequestedEvent {
         createdAt
+        requestedReviewer {
+          __typename
+          ... on User {
+            login
+          }
+          ... on Bot {
+            login
+          }
+          ... on Mannequin {
+            login
+          }
+          ... on Team {
+            slug
+          }
+        }
       }
       ... on IssueComment {
         createdAt
