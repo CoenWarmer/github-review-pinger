@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { usePlatform } from "../platform";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
@@ -34,18 +34,22 @@ export function SettingsPanel({
   /** Slack channels by team. */
   channels: Record<string, TeamChannel>;
 }) {
+  const platform = usePlatform();
+  const { githubCli, autostart: hasAutostart, notifications } = platform.features;
   const [autostart, setAutostart] = useState<boolean | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    invoke<boolean>("get_autostart")
+    if (!hasAutostart) return;
+    platform
+      .getAutostart()
       .then(setAutostart)
       .catch((e) => setError(String(e)));
-  }, []);
+  }, [platform, hasAutostart]);
 
   async function toggleAutostart(enabled: boolean) {
     try {
-      await invoke("set_autostart", { enabled });
+      await platform.setAutostart(enabled);
       setAutostart(enabled);
       setError(null);
     } catch (e) {
@@ -55,67 +59,67 @@ export function SettingsPanel({
 
   return (
     <div className="flex flex-col px-3">
-      <Section>
-        <Heading>Startup</Heading>
-        <div className="flex items-center gap-2">
-          <Checkbox
-            id="autostart"
-            checked={autostart ?? false}
-            disabled={autostart === null}
-            onCheckedChange={(checked) => toggleAutostart(checked === true)}
-          />
-          <Label htmlFor="autostart" className="font-normal">
-            Launch at login
-          </Label>
-        </div>
-        {error && <p className="m-0 text-destructive">{error}</p>}
-      </Section>
-      <Section>
-        <Heading>Notifications</Heading>
-        <div className="flex items-center gap-2">
-          <Switch
-            id="mute"
-            checked={notificationsMuted}
-            onCheckedChange={(muted) =>
-              invoke("set_notifications_muted", { muted })
-            }
-          />
-          <Label htmlFor="mute" className="font-normal">
-            Mute notifications
-          </Label>
-        </div>
-        <Button
-          type="button"
-          variant="outline"
-          size="xs"
-          className="mt-3"
-          onClick={() => invoke("send_test_notification")}
-        >
-          Send test notification
-        </Button>
-      </Section>
+      {hasAutostart && (
+        <Section>
+          <Heading>Startup</Heading>
+          <div className="flex items-center gap-2">
+            <Checkbox
+              id="autostart"
+              checked={autostart ?? false}
+              disabled={autostart === null}
+              onCheckedChange={(checked) => toggleAutostart(checked === true)}
+            />
+            <Label htmlFor="autostart" className="font-normal">
+              Launch at login
+            </Label>
+          </div>
+          {error && <p className="m-0 text-destructive">{error}</p>}
+        </Section>
+      )}
+      {notifications && (
+        <Section>
+          <Heading>Notifications</Heading>
+          <div className="flex items-center gap-2">
+            <Switch
+              id="mute"
+              checked={notificationsMuted}
+              onCheckedChange={(muted) => platform.setNotificationsMuted(muted)}
+            />
+            <Label htmlFor="mute" className="font-normal">
+              Mute notifications
+            </Label>
+          </div>
+          <Button
+            type="button"
+            variant="outline"
+            size="xs"
+            className="mt-3"
+            onClick={() => platform.sendTestNotification()}
+          >
+            Send test notification
+          </Button>
+        </Section>
+      )}
       <Section>
         <Heading>Authentication</Heading>
-        <RadioGroup
-          value={authSource}
-          onValueChange={(source) => invoke("set_auth_source", { source })}
-          className="mb-2 gap-1.5"
-        >
-          {AUTH_OPTIONS.map(({ source, label }) => (
-            <div key={source} className="flex items-center gap-2">
-              <RadioGroupItem value={source} id={`auth-${source}`} />
-              <Label htmlFor={`auth-${source}`} className="font-normal">
-                {label}
-              </Label>
-            </div>
-          ))}
-        </RadioGroup>
-        {account && (
-          <p className="mt-0 mb-2 text-muted-foreground">
-            Signed in as {account}
-          </p>
+        {githubCli && (
+          <RadioGroup
+            value={authSource}
+            onValueChange={(source) => platform.setAuthSource(source as TokenSource)}
+            className="mb-2 gap-1.5"
+          >
+            {AUTH_OPTIONS.map(({ source, label }) => (
+              <div key={source} className="flex items-center gap-2">
+                <RadioGroupItem value={source} id={`auth-${source}`} />
+                <Label htmlFor={`auth-${source}`} className="font-normal">
+                  {label}
+                </Label>
+              </div>
+            ))}
+          </RadioGroup>
         )}
-        {authSource === "pat" ? (
+        {account && <p className="mt-0 mb-2 text-muted-foreground">Signed in as {account}</p>}
+        {!githubCli || authSource === "pat" ? (
           <TokenForm hasSavedToken={hasSavedToken} />
         ) : (
           hasSavedToken && (
@@ -127,8 +131,13 @@ export function SettingsPanel({
         {teamLookupDenied && (
           <p className="mt-3 mb-0 text-xs text-muted-foreground">
             Add the read:org scope to see team details on reviewer hover cards:
-            run <code>gh auth refresh -s read:org</code>, or add the scope to
-            your token.
+            {githubCli ? (
+              <>
+                run <code>gh auth refresh -s read:org</code>, or add the scope to your token.
+              </>
+            ) : (
+              "add the scope to your token."
+            )}
           </p>
         )}
       </Section>
@@ -149,12 +158,9 @@ function Section({ children }: { children: React.ReactNode }) {
   return <section className="py-3">{children}</section>;
 }
 
-function SlackChannels({
-  channels,
-}: {
-  channels: Record<string, TeamChannel>;
-}) {
+function SlackChannels({ channels }: { channels: Record<string, TeamChannel> }) {
   const teams = Object.keys(channels).sort();
+  const platform = usePlatform();
   const [editing, setEditing] = useState<string | null>(null);
 
   return (
@@ -162,8 +168,7 @@ function SlackChannels({
       <Heading>Slack channels</Heading>
       {teams.length === 0 ? (
         <p className="m-0 text-xs text-muted-foreground">
-          No team has a Slack channel yet. Click a team chip on a pull request
-          to add one.
+          No team has a Slack channel yet. Click a team chip on a pull request to add one.
         </p>
       ) : (
         <ul className="m-0 list-none p-0 pb-6">
@@ -173,10 +178,7 @@ function SlackChannels({
             const entry = (
               <>
                 <span className="truncate font-medium">{team}</span>
-                <span
-                  className="truncate text-xs text-muted-foreground"
-                  title={link}
-                >
+                <span className="truncate text-xs text-muted-foreground" title={link}>
                   {link}
                 </span>
               </>
@@ -188,11 +190,7 @@ function SlackChannels({
               >
                 {saved && editing === team ? (
                   <div className="col-span-2 -mx-3">
-                    <TeamChannelForm
-                      team={team}
-                      initial={link}
-                      onDone={() => setEditing(null)}
-                    />
+                    <TeamChannelForm team={team} initial={link} onDone={() => setEditing(null)} />
                   </div>
                 ) : (
                   <>
@@ -214,7 +212,7 @@ function SlackChannels({
                         variant="link"
                         size="xs"
                         aria-label={`Remove the Slack channel for ${team}`}
-                        onClick={() => invoke("remove_team_channel", { team })}
+                        onClick={() => platform.removeTeamChannel(team)}
                       >
                         Remove
                       </Button>

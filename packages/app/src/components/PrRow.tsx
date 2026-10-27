@@ -4,16 +4,15 @@ import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { chipClass, fillStyle } from "./Chips";
 import { ReviewerCard } from "./ReviewerCard";
-import { invoke } from "@tauri-apps/api/core";
-import { openUrl } from "@tauri-apps/plugin-opener";
+import { usePlatform } from "../platform";
 import { checksProgress, dayAndTime, elapsed, queueProgress, remaining } from "../format";
 import { TeamChannelForm, TeamChip } from "../slack";
 import type { Action, PullRequest, Reviewer, ReviewerState } from "../types";
 
-/** Opens the PR on GitHub, and has it refreshed first the next time the popover shows. */
-export function visitPr(pr: Pick<PullRequest, "id" | "url">) {
-  invoke("visit", { id: pr.id });
-  openUrl(pr.url);
+/** Opens a PR on GitHub, and has it refreshed first the next time the list shows. */
+export function useVisitPr() {
+  const platform = usePlatform();
+  return (pr: Pick<PullRequest, "id" | "url">) => platform.visit(pr.id, pr.url);
 }
 
 const ACTION_LABELS: Record<Action, string> = {
@@ -69,6 +68,7 @@ export function ReviewerChip({
   /** Asks for a team's Slack channel, which a team chip links to. */
   onAsk: (team: string) => void;
 }) {
+  const visitPr = useVisitPr();
   const label = `${reviewer.login} ${REVIEWER_LABELS[reviewer.state]}${
     reviewer.rerequested ? ", re-requested" : ""
   }`;
@@ -122,16 +122,12 @@ export function ReviewerChip({
 }
 
 export function SnoozeControl({ pr }: { pr: Pick<PullRequest, "id" | "snoozedUntil"> }) {
+  const platform = usePlatform();
   const [choosing, setChoosing] = useState(false);
 
   if (pr.snoozedUntil) {
     return (
-      <Button
-        type="button"
-        variant="link"
-        size="xs"
-        onClick={() => invoke("unsnooze", { id: pr.id })}
-      >
+      <Button type="button" variant="link" size="xs" onClick={() => platform.unsnooze(pr.id)}>
         Unsnooze
       </Button>
     );
@@ -152,7 +148,7 @@ export function SnoozeControl({ pr }: { pr: Pick<PullRequest, "id" | "snoozedUnt
           variant="link"
           size="xs"
           aria-label={`Snooze for ${days} ${days === 1 ? "day" : "days"}`}
-          onClick={() => invoke("snooze", { id: pr.id, days })}
+          onClick={() => platform.snooze(pr.id, days)}
         >
           {label}
         </Button>
@@ -171,6 +167,7 @@ export function SnoozeControl({ pr }: { pr: Pick<PullRequest, "id" | "snoozedUnt
 }
 
 export function PrRow({ pr, now }: { pr: PullRequest; now: number }) {
+  const visitPr = useVisitPr();
   const [askingTeam, setAskingTeam] = useState<string | null>(null);
   const showActions =
     pr.group === "approved" || pr.group === "needsAction" || pr.group === "waiting";

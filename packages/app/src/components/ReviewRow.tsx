@@ -10,10 +10,11 @@ import {
   REVIEWER_LABELS,
   ReviewerChip,
   RowActions,
-  visitPr,
+  useVisitPr,
 } from "./PrRow";
 
 export function ReviewRow({ pr, now }: { pr: ReviewRequest; now: number }) {
+  const visitPr = useVisitPr();
   const [askingTeam, setAskingTeam] = useState<string | null>(null);
   const waiting = pr.waitingSince && `waiting ${elapsed(pr.waitingSince, now)}`;
   const reviewed = pr.reviewedAt && `reviewed ${elapsed(pr.reviewedAt, now)} ago`;

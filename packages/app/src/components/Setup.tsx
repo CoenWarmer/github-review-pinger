@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { usePlatform } from "../platform";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -30,12 +30,13 @@ export function problemMessage(problem: Problem): string {
 }
 
 export function TokenForm({ hasSavedToken }: { hasSavedToken: boolean }) {
+  const platform = usePlatform();
   const [token, setToken] = useState("");
   const [error, setError] = useState<string | null>(null);
 
   async function save() {
     try {
-      await invoke("save_token", { token });
+      await platform.saveToken(token);
       setToken("");
       setError(null);
     } catch (e) {
@@ -45,7 +46,7 @@ export function TokenForm({ hasSavedToken }: { hasSavedToken: boolean }) {
 
   async function remove() {
     try {
-      await invoke("clear_token");
+      await platform.clearToken();
       setError(null);
     } catch (e) {
       setError(String(e));
@@ -102,6 +103,7 @@ const AUTH_PROBLEMS: Problem["code"][] = [
 ];
 
 export function Setup({ problem }: { problem: Problem }) {
+  const platform = usePlatform();
   const isAuthProblem = AUTH_PROBLEMS.includes(problem.code);
   return (
     <section className="flex flex-col gap-3 p-4">
@@ -112,13 +114,13 @@ export function Setup({ problem }: { problem: Problem }) {
       {isAuthProblem && (
         <TokenForm hasSavedToken={problem.code === "tokenRejected" && problem.source === "pat"} />
       )}
-      {problem.code === "noSavedToken" && (
+      {problem.code === "noSavedToken" && platform.features.githubCli && (
         <Button
           type="button"
           variant="link"
           size="xs"
           className="h-auto self-start p-0"
-          onClick={() => invoke("set_auth_source", { source: "gh" })}
+          onClick={() => platform.setAuthSource("gh")}
         >
           Use the GitHub CLI instead
         </Button>
@@ -128,7 +130,7 @@ export function Setup({ problem }: { problem: Problem }) {
         variant="secondary"
         size="sm"
         className="self-start"
-        onClick={() => invoke("refresh")}
+        onClick={() => platform.refresh()}
       >
         Try again
       </Button>

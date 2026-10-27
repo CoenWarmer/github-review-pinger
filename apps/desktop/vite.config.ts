@@ -10,7 +10,8 @@ export default defineConfig(() => ({
   plugins: [react(), tailwindcss()],
 
   resolve: {
-    alias: { "@": path.resolve(import.meta.dirname, "src") },
+    // The shared UI imports itself through `@/`, which resolves to its sources.
+    alias: { "@": path.resolve(import.meta.dirname, "../../packages/app/src") },
   },
 
   // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`

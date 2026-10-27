@@ -34,8 +34,12 @@ pnpm tauri dev
 
 The repository is a Cargo workspace:
 
-- `apps/desktop/`: the desktop app. `src/` is the React UI and `src-tauri/`
-  the Rust shell (tray, notification cards, keychain, polling).
+- `apps/desktop/`: the desktop app: a thin entry point and a Tauri
+  implementation of the platform interface in `src/`, and the Rust shell in
+  `src-tauri/` (tray, notification cards, keychain, polling).
+- `packages/app/`: the React UI, shared by every front end. It asks its host
+  for what it needs (data, opening links, tokens) through a `Platform`
+  interface, so it doesn't depend on Tauri.
 - `crates/core/`: the pull request logic, with no dependency on Tauri, so
   other front ends can share it.
 
