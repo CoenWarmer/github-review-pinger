@@ -1,6 +1,6 @@
 [package]
 name = "github-review-pinger"
-version = "0.1.1"
+version = "0.1.2"
 description = "Tray app showing your open GitHub PRs and their review status"
 authors = ["Coen Warmer"]
 edition = "2024"
