@@ -120,6 +120,7 @@ fn could_be_ready(pr: &PullRequest) -> bool {
         && !pr.is_draft
         && pr.mergeable != Mergeable::Conflicting
         && pr.auto_merge_request.is_none()
+        && pr.merge_queue_entry.is_none()
 }
 
 async fn search_ids(
@@ -391,6 +392,9 @@ mod tests {
         assert!(!could_be_ready(&pr(json!({ "mergeable": "CONFLICTING" }))));
         assert!(!could_be_ready(&pr(
             json!({ "autoMergeRequest": { "enabledAt": null } })
+        )));
+        assert!(!could_be_ready(&pr(
+            json!({ "mergeQueueEntry": { "position": 1 } })
         )));
         assert!(!could_be_ready(&pr(
             json!({ "commits": { "nodes": [{ "commit": {

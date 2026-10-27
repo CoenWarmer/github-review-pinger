@@ -197,6 +197,9 @@ mod tests {
             approved: false,
             checks: Checks::Passing,
             auto_merge: false,
+            merge_queue_position: None,
+            merge_eta: None,
+            queued: false,
             reviewers: Vec::new(),
             responses,
         }

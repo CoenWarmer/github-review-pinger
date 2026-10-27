@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { dayAndTime, elapsed } from "../format";
+import { dayAndTime, elapsed, remaining } from "../format";
 import type { Action, PullRequest, Reviewer, ReviewerState } from "../types";
 
 const ACTION_LABELS: Record<Action, string> = {
@@ -90,6 +90,15 @@ export function PrRow({ pr, now }: { pr: PullRequest; now: number }) {
     ? [
         pr.checks === "pending" && { label: "Checks running", className: "badge-checksRunning" },
         pr.autoMerge && { label: "Auto-merge", className: "badge-autoMerge" },
+        pr.queued && {
+          label: [
+            pr.mergeQueuePosition ? `Queued #${pr.mergeQueuePosition}` : "Queued",
+            pr.mergeEta && remaining(pr.mergeEta, now),
+          ]
+            .filter(Boolean)
+            .join(" · "),
+          className: "badge-queued",
+        },
       ].filter((note) => note !== false)
     : [];
 

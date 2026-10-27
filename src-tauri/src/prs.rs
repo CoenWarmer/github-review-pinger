@@ -93,6 +93,12 @@ pub struct PrView {
     pub approved: bool,
     pub checks: Checks,
     pub auto_merge: bool,
+    /// Position in the merge queue (1 is next), when queued.
+    pub merge_queue_position: Option<u32>,
+    /// When GitHub expects the queue to merge it, so the UI can count down
+    /// between polls.
+    pub merge_eta: Option<DateTime<Utc>>,
+    pub queued: bool,
     pub reviewers: Vec<Reviewer>,
     /// Reviews and comments from other humans, oldest first, for notifications.
     #[serde(skip)]
@@ -230,6 +236,13 @@ fn view(pr: &PullRequest, people: &People, rules: &Rules, now: DateTime<Utc>) ->
         approved,
         checks,
         auto_merge: pr.auto_merge_request.is_some(),
+        merge_queue_position: pr.merge_queue_entry.as_ref().and_then(|e| e.position),
+        merge_eta: pr
+            .merge_queue_entry
+            .as_ref()
+            .and_then(|e| e.estimated_time_to_merge)
+            .map(|seconds| now + chrono::Duration::seconds(seconds)),
+        queued: pr.merge_queue_entry.is_some(),
         reviewers,
         responses,
     }
@@ -452,7 +465,8 @@ fn actions(
     let ci_failing = checks == Checks::Failing;
 
     // Only when merging is up to the author right now: checks done, branch
-    // protection satisfied, and auto-merge not already queued.
+    // protection satisfied, and neither auto-merge nor the merge queue
+    // already handling it.
     let ready_to_merge = approved
         && blocking_reviewers.is_empty()
         && !conflicts
@@ -461,7 +475,8 @@ fn actions(
             pr.merge_state_status,
             Some(MergeStateStatus::Clean | MergeStateStatus::HasHooks)
         )
-        && pr.auto_merge_request.is_none();
+        && pr.auto_merge_request.is_none()
+        && pr.merge_queue_entry.is_none();
 
     [
         (ready_to_merge, Action::ReadyToMerge),
@@ -807,6 +822,19 @@ mod tests {
         }));
         assert!(pr.actions.is_empty());
         assert!(pr.auto_merge);
+    }
+
+    #[test]
+    fn queued_prs_are_approved_but_not_ready_to_merge() {
+        let pr = derive_one(json!({
+            "reviewDecision": "APPROVED",
+            "mergeQueueEntry": { "position": 5, "estimatedTimeToMerge": 1800 },
+        }));
+        assert_eq!(pr.group, Group::Approved);
+        assert!(pr.actions.is_empty());
+        assert!(pr.queued);
+        assert_eq!(pr.merge_queue_position, Some(5));
+        assert_eq!(pr.merge_eta, Some(at("2026-10-10T09:30:00Z")));
     }
 
     #[test]

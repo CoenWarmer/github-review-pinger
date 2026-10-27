@@ -6,6 +6,16 @@ export function elapsed(iso: string, now: number): string {
   return `${Math.floor(hours / 24)}d`;
 }
 
+/** Time until `iso`, e.g. "~29m" or "~1h 20m". */
+export function remaining(iso: string, now: number): string {
+  const minutes = Math.round((Date.parse(iso) - now) / 60_000);
+  if (minutes <= 0) return "any minute";
+  if (minutes < 60) return `~${minutes}m`;
+  const hours = Math.floor(minutes / 60);
+  const rest = minutes % 60;
+  return rest ? `~${hours}h ${rest}m` : `~${hours}h`;
+}
+
 export function dayAndTime(iso: string): string {
   return new Date(iso).toLocaleString([], { weekday: "short", hour: "2-digit", minute: "2-digit" });
 }

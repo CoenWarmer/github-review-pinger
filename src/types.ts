@@ -35,6 +35,9 @@ export interface PullRequest {
   approved: boolean;
   checks: "passing" | "pending" | "failing" | "none";
   autoMerge: boolean;
+  queued: boolean;
+  mergeQueuePosition: number | null;
+  mergeEta: string | null;
   reviewers: Reviewer[];
 }
 
