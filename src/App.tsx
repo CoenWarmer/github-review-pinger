@@ -13,6 +13,7 @@ import {
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { cn } from "@/lib/utils";
+import { HalftoneLoader } from "./components/HalftoneLoader";
 import { PrRow } from "./components/PrRow";
 import { ReviewRow } from "./components/ReviewRow";
 import { SettingsPanel } from "./components/SettingsPanel";
@@ -166,7 +167,10 @@ function App() {
 
   if (!snapshot || (snapshot.status.kind === "loading" && !snapshot.fetchedAt)) {
     return (
-      <p className="m-0 px-3 py-6 text-center text-muted-foreground">Loading pull requests…</p>
+      <div className="flex h-full flex-col items-center justify-center gap-3 text-muted-foreground">
+        <HalftoneLoader />
+        <p className="m-0">Loading pull requests…</p>
+      </div>
     );
   }
   if (snapshot.status.kind === "error" && !snapshot.fetchedAt) {
