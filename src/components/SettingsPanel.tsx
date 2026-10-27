@@ -4,7 +4,6 @@ import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
-import { Separator } from "@/components/ui/separator";
 import { TeamChannelForm } from "../slack";
 import type { TeamChannel, TokenSource } from "../types";
 import { TokenForm } from "./Setup";
@@ -48,8 +47,8 @@ export function SettingsPanel({
   }
 
   return (
-    <div className="flex flex-col gap-3 p-3">
-      <section>
+    <div className="flex flex-col px-3">
+      <Section>
         <Heading>Startup</Heading>
         <div className="flex items-center gap-2">
           <Checkbox
@@ -63,9 +62,8 @@ export function SettingsPanel({
           </Label>
         </div>
         {error && <p className="m-0 text-destructive">{error}</p>}
-      </section>
-      <Separator />
-      <section>
+      </Section>
+      <Section>
         <Heading>Authentication</Heading>
         <RadioGroup
           value={authSource}
@@ -81,7 +79,11 @@ export function SettingsPanel({
             </div>
           ))}
         </RadioGroup>
-        {account && <p className="mt-0 mb-2">Signed in as {account}</p>}
+        {account && (
+          <p className="mt-0 mb-2 text-muted-foreground">
+            Signed in as {account}
+          </p>
+        )}
         {authSource === "pat" ? (
           <TokenForm hasSavedToken={hasSavedToken} />
         ) : (
@@ -91,8 +93,7 @@ export function SettingsPanel({
             </p>
           )
         )}
-      </section>
-      <Separator />
+      </Section>
       <SlackChannels channels={channels} />
     </div>
   );
@@ -100,13 +101,21 @@ export function SettingsPanel({
 
 function Heading({ children }: { children: string }) {
   return (
-    <h3 className="mt-0 mb-1 text-[11px] font-semibold tracking-wide text-muted-foreground uppercase">
+    <h3 className="mt-0 mb-3 text-[11px] font-semibold tracking-wide text-muted-foreground uppercase">
       {children}
     </h3>
   );
 }
 
-function SlackChannels({ channels }: { channels: Record<string, TeamChannel> }) {
+function Section({ children }: { children: React.ReactNode }) {
+  return <section className="py-3">{children}</section>;
+}
+
+function SlackChannels({
+  channels,
+}: {
+  channels: Record<string, TeamChannel>;
+}) {
   const teams = Object.keys(channels).sort();
   const [editing, setEditing] = useState<string | null>(null);
 
@@ -115,7 +124,8 @@ function SlackChannels({ channels }: { channels: Record<string, TeamChannel> }) 
       <Heading>Slack channels</Heading>
       {teams.length === 0 ? (
         <p className="m-0 text-xs text-muted-foreground">
-          No team has a Slack channel yet. Click a team chip on a pull request to add one.
+          No team has a Slack channel yet. Click a team chip on a pull request
+          to add one.
         </p>
       ) : (
         <ul className="m-0 list-none p-0">
@@ -125,7 +135,10 @@ function SlackChannels({ channels }: { channels: Record<string, TeamChannel> }) 
             const entry = (
               <>
                 <span className="truncate font-medium">{team}</span>
-                <span className="truncate text-xs text-muted-foreground" title={link}>
+                <span
+                  className="truncate text-xs text-muted-foreground"
+                  title={link}
+                >
                   {link}
                 </span>
               </>
@@ -137,7 +150,11 @@ function SlackChannels({ channels }: { channels: Record<string, TeamChannel> }) 
               >
                 {saved && editing === team ? (
                   <div className="col-span-2 -mx-3">
-                    <TeamChannelForm team={team} initial={link} onDone={() => setEditing(null)} />
+                    <TeamChannelForm
+                      team={team}
+                      initial={link}
+                      onDone={() => setEditing(null)}
+                    />
                   </div>
                 ) : (
                   <>

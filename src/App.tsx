@@ -198,7 +198,7 @@ function App() {
             Some organizations are hidden because this token isn't authorized for their SSO.
           </Banner>
         )}
-        <Tabs value={tab} onValueChange={(value) => setTab(value as Tab)} className="gap-0">
+        <Tabs value={tab} onValueChange={(value) => setTab(value as Tab)} className="gap-0 py-1">
           <TabsList variant="line" className="h-auto w-full rounded-none border-b p-0">
             {TABS.map(({ id, label, icon }) => (
               <TabsTrigger
@@ -207,7 +207,7 @@ function App() {
                 aria-label={icon ? label : undefined}
                 title={icon ? label : undefined}
                 className={cn(
-                  "h-9 rounded-none after:bottom-0 after:h-0.5 after:bg-info",
+                  "h-9 rounded-none after:bottom-0 after:h-0.5 after:bg-info text-[12px]",
                   icon && "flex-none px-4",
                 )}
               >
