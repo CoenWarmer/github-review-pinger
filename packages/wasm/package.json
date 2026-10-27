@@ -1,0 +1,17 @@
+{
+  "name": "@review-pinger/wasm",
+  "private": true,
+  "version": "0.3.0",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "build:wasm": "cargo build -p review-pinger-wasm --target wasm32-unknown-unknown --release && wasm-bindgen ../../target/wasm32-unknown-unknown/release/review_pinger_wasm.wasm --out-dir pkg --target web --typescript",
+    "typecheck": "tsc",
+    "smoke": "node scripts/smoke.mjs"
+  },
+  "devDependencies": {
+    "typescript": "~6.0.3"
+  }
+}

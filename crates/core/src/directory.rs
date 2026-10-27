@@ -5,7 +5,7 @@
 use std::collections::{BTreeSet, HashMap, HashSet};
 
 use chrono::{DateTime, Duration, Utc};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 /// How long a lookup is trusted. Memberships rarely change.
 const TTL: Duration = Duration::hours(1);
@@ -31,7 +31,7 @@ pub struct Activity {
 }
 
 /// The teams still to look up, lowercase `(org, slug)`.
-#[derive(Debug, Default, PartialEq, Eq)]
+#[derive(Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Needs {
     pub teams: BTreeSet<(String, String)>,
 }
@@ -43,7 +43,8 @@ impl Needs {
 }
 
 /// The result of a lookup: lowercase member logins by team (`org/slug`).
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
 pub struct Found {
     pub teams: HashMap<String, HashSet<String>>,
     /// GitHub refused for lack of the `read:org` scope.
@@ -52,12 +53,14 @@ pub struct Found {
 
 /// A team's members. `None` when GitHub had nothing to say (an organization or
 /// team the token can't see), kept so it isn't asked again until it goes stale.
+#[derive(Serialize, Deserialize)]
 struct Entry {
     members: Option<HashSet<String>>,
     at: DateTime<Utc>,
 }
 
-#[derive(Default)]
+#[derive(Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
 pub struct Directory {
     teams: HashMap<String, Entry>,
     /// When the last lookup was refused for lack of the scope, until one works.
