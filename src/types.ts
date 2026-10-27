@@ -80,6 +80,12 @@ export type Problem =
 
 export type Status = { kind: "loading" } | { kind: "ok" } | { kind: "error"; problem: Problem };
 
+export interface TeamChannel {
+  link: string;
+  /** Pasted into the popover, or configured in settings.json. */
+  source: "saved" | "settings";
+}
+
 export interface Snapshot {
   status: Status;
   refreshing: boolean;
@@ -89,7 +95,7 @@ export interface Snapshot {
   ssoPartial: boolean;
   pullRequests: PullRequest[];
   reviewRequests: ReviewRequest[];
-  /** Slack channel links by lowercase `org/team-slug`. */
-  teamChannels: Record<string, string>;
+  /** Slack channels by lowercase `org/team-slug`. */
+  teamChannels: Record<string, TeamChannel>;
   slackOpensIn: "app" | "browser";
 }

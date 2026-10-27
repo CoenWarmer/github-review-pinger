@@ -23,7 +23,7 @@ use crate::notify;
 use crate::prs::{self, PrView};
 use crate::reviews::{self, ReviewView};
 use crate::settings::{self, Settings, SlackOpensIn};
-use crate::slack;
+use crate::slack::{self, Channel};
 
 const POLL_INTERVAL: Duration = Duration::from_secs(120);
 const STALE_AFTER: chrono::Duration = chrono::Duration::seconds(30);
@@ -47,7 +47,7 @@ pub struct Snapshot {
     pub review_requests: Vec<ReviewView>,
     /// Slack channel links by lowercase `org/team-slug`, from settings and
     /// those saved in the popover.
-    pub team_channels: HashMap<String, String>,
+    pub team_channels: HashMap<String, Channel>,
     pub slack_opens_in: SlackOpensIn,
 }
 
@@ -135,7 +135,18 @@ impl Poller {
         Ok(())
     }
 
-    fn channels(&self, settings: &Settings, memory: &Memory) -> HashMap<String, String> {
+    /// Forgets a team's saved channel, so its chip asks again.
+    pub fn remove_team_channel(&self, app: &AppHandle, team: &str) {
+        let channels = {
+            let mut memory = self.memory.lock().unwrap();
+            memory.team_channels.remove(&team.to_lowercase());
+            self.save(&memory);
+            self.channels(&settings::load(app), &memory)
+        };
+        self.update(app, |s| s.team_channels = channels);
+    }
+
+    fn channels(&self, settings: &Settings, memory: &Memory) -> HashMap<String, Channel> {
         slack::merged_channels(&memory.team_channels, &settings.team_channels)
     }
 

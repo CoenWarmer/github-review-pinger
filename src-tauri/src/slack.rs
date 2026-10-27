@@ -3,6 +3,8 @@
 
 use std::collections::HashMap;
 
+use serde::Serialize;
+
 /// Slack channel links we'll store and open: `slack://` links, and https
 /// links on `slack.com`. Anything else is rejected so a settings file or a
 /// pasted value can't make the app open an arbitrary URL.
@@ -18,19 +20,49 @@ pub fn is_valid_link(link: &str) -> bool {
     !host.contains('@') && (host == "slack.com" || host.ends_with(".slack.com"))
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Channel {
+    pub link: String,
+    pub source: ChannelSource,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ChannelSource {
+    /// Pasted into the popover and kept in `state.json`.
+    Saved,
+    /// Configured in `settings.json`.
+    Settings,
+}
+
 /// The channels to offer: those saved from the popover, overridden by
 /// `settings.json`. Teams are matched case-insensitively. Invalid links are
 /// dropped.
 pub fn merged_channels(
     saved: &HashMap<String, String>,
     configured: &HashMap<String, String>,
-) -> HashMap<String, String> {
-    saved
+) -> HashMap<String, Channel> {
+    let saved = saved
         .iter()
-        .chain(configured)
-        .filter(|(_, link)| is_valid_link(link))
-        .map(|(team, link)| (team.to_lowercase(), link.clone()))
-        .collect()
+        .map(|(team, link)| (team, link, ChannelSource::Saved));
+    let configured = configured
+        .iter()
+        .map(|(team, link)| (team, link, ChannelSource::Settings));
+    let mut channels = HashMap::new();
+    // Later entries win, so settings override saved ones.
+    for (team, link, source) in saved.chain(configured) {
+        if is_valid_link(link) {
+            channels.insert(
+                team.to_lowercase(),
+                Channel {
+                    link: link.clone(),
+                    source,
+                },
+            );
+        }
+    }
+    channels
 }
 
 #[cfg(test)]
@@ -89,8 +121,13 @@ mod tests {
             ),
         ]);
         let merged = merged_channels(&saved, &configured);
-        assert_eq!(merged["elastic/ops"], "https://a.slack.com/archives/C9");
-        assert_eq!(merged["elastic/ui"], "https://a.slack.com/archives/C2");
+        assert_eq!(
+            merged["elastic/ops"].link,
+            "https://a.slack.com/archives/C9"
+        );
+        assert_eq!(merged["elastic/ops"].source, ChannelSource::Settings);
+        assert_eq!(merged["elastic/ui"].link, "https://a.slack.com/archives/C2");
+        assert_eq!(merged["elastic/ui"].source, ChannelSource::Saved);
         assert!(!merged.contains_key("elastic/bad"));
     }
 }

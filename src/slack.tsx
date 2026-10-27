@@ -51,7 +51,7 @@ export function TeamChip({
 }) {
   const { channels, opensIn } = useContext(SlackContext);
   const [copied, setCopied] = useState(false);
-  const link = channels[team];
+  const link = channels[team]?.link;
 
   function activate(shift: boolean) {
     if (!link || shift) {

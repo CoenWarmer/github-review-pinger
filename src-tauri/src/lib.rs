@@ -90,6 +90,11 @@ fn set_team_channel(
 }
 
 #[tauri::command]
+fn remove_team_channel(app: AppHandle, poller: State<Arc<Poller>>, team: String) {
+    poller.remove_team_channel(&app, &team);
+}
+
+#[tauri::command]
 fn refresh(poller: State<Arc<Poller>>) {
     poller.refresh();
 }
@@ -165,6 +170,7 @@ pub fn run() {
             refresh,
             visit,
             set_team_channel,
+            remove_team_channel,
             save_token,
             clear_token,
             snooze,

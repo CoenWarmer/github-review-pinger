@@ -27,7 +27,7 @@ const REVIEW_SECTIONS: { group: ReviewGroup; title: string }[] = [
   { group: "draft", title: "Drafts" },
 ];
 
-type Tab = "mine" | "reviews";
+type Tab = "mine" | "reviews" | "settings";
 
 function SortMenu({ value, onChange }: { value: SortKey; onChange: (key: SortKey) => void }) {
   const [open, setOpen] = useState(false);
@@ -146,11 +146,12 @@ function Tabs({
 }: {
   tab: Tab;
   onChange: (tab: Tab) => void;
-  counts: Record<Tab, number>;
+  counts: Partial<Record<Tab, number>>;
 }) {
   const tabs: { id: Tab; label: string }[] = [
     { id: "mine", label: "My PRs" },
     { id: "reviews", label: "Review Requests" },
+    { id: "settings", label: "Settings" },
   ];
   return (
     <div className="tabs" role="tablist">
@@ -164,7 +165,7 @@ function Tabs({
           onClick={() => onChange(id)}
         >
           {label}
-          {counts[id] > 0 && <span className="tab-count">{counts[id]}</span>}
+          {!!counts[id] && <span className="tab-count">{counts[id]}</span>}
         </button>
       ))}
     </div>
@@ -172,17 +173,8 @@ function Tabs({
 }
 
 function Footer({ snapshot, now }: { snapshot: Snapshot; now: number }) {
-  const [showSettings, setShowSettings] = useState(false);
-  const source = snapshot.tokenSource === "pat" ? "saved token" : "GitHub CLI";
-
   return (
     <footer className="footer">
-      {showSettings && (
-        <SettingsPanel
-          account={snapshot.viewer && `${snapshot.viewer} via ${source}`}
-          hasSavedToken={snapshot.tokenSource === "pat"}
-        />
-      )}
       <div className="footer-row">
         <span>
           {snapshot.refreshing
@@ -190,9 +182,6 @@ function Footer({ snapshot, now }: { snapshot: Snapshot; now: number }) {
             : snapshot.fetchedAt && `Updated ${elapsed(snapshot.fetchedAt, now)} ago`}
         </span>
         <span className="footer-actions">
-          <button type="button" className="link" onClick={() => setShowSettings(!showSettings)}>
-            Settings
-          </button>
           <button
             type="button"
             className="link"
@@ -221,7 +210,8 @@ function App() {
 
   const prs = snapshot.pullRequests;
   const reviews = snapshot.reviewRequests;
-  const counts: Record<Tab, number> = {
+  const source = snapshot.tokenSource === "pat" ? "saved token" : "GitHub CLI";
+  const counts: Partial<Record<Tab, number>> = {
     mine: prs.filter(
       (pr) => pr.actions.length > 0 && ["approved", "needsAction"].includes(pr.group),
     ).length,
@@ -245,7 +235,13 @@ function App() {
         )}
         <Tabs tab={tab} onChange={setTab} counts={counts} />
         <div className="sections">
-          {tab === "mine" ? (
+          {tab === "settings" ? (
+            <SettingsPanel
+              account={snapshot.viewer && `${snapshot.viewer} via ${source}`}
+              hasSavedToken={snapshot.tokenSource === "pat"}
+              channels={snapshot.teamChannels}
+            />
+          ) : tab === "mine" ? (
             prs.length === 0 ? (
               <p className="empty">No open pull requests.</p>
             ) : (
