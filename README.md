@@ -39,6 +39,12 @@ a token you paste in, so it needs no GitHub CLI:
 pnpm web
 ```
 
+It's published to GitHub Pages by `.github/workflows/pages.yml` on every push to
+`main` that touches it, at <https://coenwarmer.github.io/github-review-pinger/>.
+On an iPhone, open that address in Safari and use Share → Add to Home Screen.
+The first deploy needs the repository's Settings → Pages → Source set to
+"GitHub Actions".
+
 The Rust toolchain needs the `wasm32-unknown-unknown` target and the
 `wasm-bindgen` CLI at the version pinned in `crates/wasm/Cargo.toml`
 (`rustup target add wasm32-unknown-unknown`, then
