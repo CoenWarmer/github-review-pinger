@@ -41,7 +41,7 @@ export function TeamChip({
   login,
   glyph,
   className,
-  title,
+  label,
   prUrl,
   onAsk,
 }: {
@@ -49,7 +49,8 @@ export function TeamChip({
   login: string;
   glyph: string;
   className: string;
-  title: string;
+  /** Names the chip for assistive technology; the hover card says the rest. */
+  label: string;
   prUrl: string;
   onAsk: (team: string) => void;
 }) {
@@ -77,11 +78,7 @@ export function TeamChip({
         // No Slack channel yet: hint that the chip can be linked.
         !link && "border-dashed",
       )}
-      title={
-        link
-          ? `${title}. Opens its Slack channel and copies the PR link (Shift-click to change the channel)`
-          : `${title}. Click to add its Slack channel`
-      }
+      aria-label={label}
       onClick={(e) => {
         e.stopPropagation();
         activate(e.shiftKey);

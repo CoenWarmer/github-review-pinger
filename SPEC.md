@@ -254,6 +254,8 @@ Slack channel, Shift-click still changes it).
     by any member of the team on this PR, with who and what: "Last activity
     40m ago by ana (commented)", or "No response yet". Without `read:org`
     the line says membership is unavailable.
+  - **Slack**: whether clicking opens its Slack channel (with Shift-click to
+    change it) or adds one, which replaces the chip's native tooltip.
 - Bots don't get cards.
 
 ### Settings

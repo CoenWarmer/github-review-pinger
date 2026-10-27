@@ -50,6 +50,7 @@ export function ReviewRow({ pr, now }: { pr: ReviewRequest; now: number }) {
                 key={reviewer.login}
                 reviewer={reviewer}
                 prUrl={pr.url}
+                now={now}
                 onAsk={setAskingTeam}
               />
             ))}

@@ -19,6 +19,7 @@ export function SettingsPanel({
   authSource,
   hasSavedToken,
   notificationsMuted,
+  teamLookupDenied,
   channels,
 }: {
   /** Who is signed in. */
@@ -28,6 +29,8 @@ export function SettingsPanel({
   hasSavedToken: boolean;
   /** Notification cards are muted. */
   notificationsMuted: boolean;
+  /** The team lookup was refused for lack of the read:org scope. */
+  teamLookupDenied: boolean;
   /** Slack channels by team. */
   channels: Record<string, TeamChannel>;
 }) {
@@ -120,6 +123,13 @@ export function SettingsPanel({
               A saved token is kept, but not used.
             </p>
           )
+        )}
+        {teamLookupDenied && (
+          <p className="mt-3 mb-0 text-xs text-muted-foreground">
+            Add the read:org scope to see team details on reviewer hover cards:
+            run <code>gh auth refresh -s read:org</code>, or add the scope to
+            your token.
+          </p>
         )}
       </Section>
       <SlackChannels channels={channels} />

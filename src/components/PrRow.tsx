@@ -2,6 +2,7 @@ import { useState, type CSSProperties } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { chipClass, fillStyle } from "./Chips";
+import { ReviewerCard } from "./ReviewerCard";
 import { invoke } from "@tauri-apps/api/core";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { checksProgress, dayAndTime, elapsed, queueProgress, remaining } from "../format";
@@ -56,35 +57,40 @@ const SNOOZE_OPTIONS = [
 export function ReviewerChip({
   reviewer,
   prUrl,
+  now,
   onAsk,
 }: {
   reviewer: Reviewer;
   prUrl: string;
+  now: number;
   /** Asks for a team's Slack channel, which a team chip links to. */
   onAsk: (team: string) => void;
 }) {
   const label = `${reviewer.login} ${REVIEWER_LABELS[reviewer.state]}${
     reviewer.rerequested ? ", re-requested" : ""
   }`;
-  if (reviewer.team) {
-    return (
-      <TeamChip
-        team={reviewer.team}
-        login={reviewer.rerequested ? `${reviewer.login} ↻` : reviewer.login}
-        glyph={REVIEWER_GLYPHS[reviewer.state]}
-        className={chipClass(reviewer.state)}
-        title={label}
-        prUrl={prUrl}
-        onAsk={onAsk}
-      />
-    );
-  }
-  return (
-    <span className={chipClass(reviewer.state)} title={label}>
+  const chip = reviewer.team ? (
+    <TeamChip
+      team={reviewer.team}
+      login={reviewer.rerequested ? `${reviewer.login} ↻` : reviewer.login}
+      glyph={REVIEWER_GLYPHS[reviewer.state]}
+      className={chipClass(reviewer.state)}
+      label={label}
+      prUrl={prUrl}
+      onAsk={onAsk}
+    />
+  ) : (
+    // The hover card says more than a native tooltip would.
+    <span className={chipClass(reviewer.state)} aria-label={label}>
       <span aria-hidden="true">{REVIEWER_GLYPHS[reviewer.state]}</span>
       {reviewer.login}
       {reviewer.rerequested && <span aria-hidden="true"> ↻</span>}
     </span>
+  );
+  return (
+    <ReviewerCard reviewer={reviewer} now={now}>
+      {chip}
+    </ReviewerCard>
   );
 }
 
@@ -221,6 +227,7 @@ export function PrRow({ pr, now }: { pr: PullRequest; now: number }) {
                 key={reviewer.login}
                 reviewer={reviewer}
                 prUrl={pr.url}
+                now={now}
                 onAsk={setAskingTeam}
               />
             ))}

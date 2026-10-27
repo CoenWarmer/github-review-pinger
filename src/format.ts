@@ -6,6 +6,11 @@ export function elapsed(iso: string, now: number): string {
   return `${Math.floor(hours / 24)}d`;
 }
 
+/** How long ago `iso` was, e.g. "5m ago", or "just now". */
+export function ago(iso: string, now: number): string {
+  return now - Date.parse(iso) < 60_000 ? "just now" : `${elapsed(iso, now)} ago`;
+}
+
 /** Time until `iso`, e.g. "~29m" or "~1h 20m". */
 export function remaining(iso: string, now: number): string {
   const minutes = Math.round((Date.parse(iso) - now) / 60_000);
