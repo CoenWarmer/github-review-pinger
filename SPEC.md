@@ -143,8 +143,9 @@ both are zero there is no title at all.
 
 ## Popover
 
-Two tabs, **My PRs** and **Review Requests**, each with a count badge: the
-numbers in the tray. The tab choice is not remembered between openings.
+Three tabs: **My PRs** and **Review Requests**, each with a count badge (the
+numbers in the tray), and **Settings**. The tab choice is not remembered
+between openings.
 
 ### My PRs
 
@@ -205,8 +206,21 @@ order above), Oldest first and Newest first (by open clock), Recently active,
 and Repository. The choice is per section and remembered across restarts in
 the webview's local storage; the icon is highlighted when it isn't Default.
 
-The footer shows when data was refreshed, a Refresh button, and Settings:
-launch at login (on by default in release builds) and the token form.
+The footer shows when data was refreshed and a Refresh button.
+
+### Settings
+
+The third tab holds, top to bottom:
+
+- Who is signed in and how ("Signed in as CoenWarmer via GitHub CLI").
+- Launch at login (on by default in release builds).
+- The token form.
+- **Slack channels**: every team with a configured channel, as the team name
+  and its link, labeled "settings.json" or "saved". Saved channels (pasted
+  into a team chip) have a Remove button, after which the chip asks for a
+  channel again. Channels from `settings.json` are read-only here, and one
+  there overrides a saved one for the same team, so only it is listed. Teams
+  are added by clicking their chip.
 
 ## Settings
 
