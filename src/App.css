@@ -17,7 +17,6 @@
   font-size: 13px;
   line-height: 1.4;
   color: var(--fg);
-  background-color: var(--bg);
   -webkit-font-smoothing: antialiased;
 }
 
@@ -49,9 +48,22 @@ body,
   height: 100%;
 }
 
+/* The window is transparent, so the root draws the popover and its corners. */
+#root {
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg);
+}
+
+/* Linux shows the list in a regular window with its own frame. */
+.native-frame #root {
+  border: 0;
+  border-radius: 0;
+}
+
 body {
   margin: 0;
-  background-color: var(--bg);
   user-select: none;
   cursor: default;
 }
