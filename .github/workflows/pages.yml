@@ -1,0 +1,61 @@
+name: Deploy web app
+
+# Builds the web app and publishes it to GitHub Pages, at
+# https://<owner>.github.io/<repo>/. One-time setup: in the repository's
+# Settings → Pages, set Source to "GitHub Actions".
+on:
+  push:
+    branches: [main]
+    paths:
+      - apps/web/**
+      - packages/**
+      - crates/**
+      - Cargo.toml
+      - Cargo.lock
+      - pnpm-lock.yaml
+      - .github/workflows/pages.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Let a running deploy finish, but skip the ones queued behind a newer push.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: swatinem/rust-cache@v2
+      # Must match the `wasm-bindgen` version pinned in crates/wasm/Cargo.toml.
+      - run: cargo install wasm-bindgen-cli --version 0.2.129 --locked
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @review-pinger/web test
+      - run: pnpm --filter @review-pinger/web build
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: apps/web/dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-22.04
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

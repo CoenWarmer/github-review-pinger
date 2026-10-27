@@ -417,6 +417,10 @@ lists. It differs from the desktop app only where a browser has to:
   while the page is closed, so the list is the only way to see what's waiting.
 - **Touch**: the snooze controls on a row are always visible, since there is
   no hover. The page fills the screen and respects the notch and home bar.
+- **Hosting**: GitHub Pages, at `https://<owner>.github.io/<repo>/`. A
+  workflow builds the app and deploys it on every push to `main` that changes
+  the web app, the shared UI or the Rust crates. The site is public, but holds
+  nothing: it shows the setup screen until a visitor pastes their own token.
 - **Installable**: a web app manifest, icons and a small service worker that
   keeps the page's own files, so it can be added to a home screen and opens
   without a network. GitHub's API is never cached.
