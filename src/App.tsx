@@ -1,6 +1,6 @@
 import { useState, type ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { ArrowDownWideNarrow, ChevronDown, ChevronRight } from "lucide-react";
+import { ArrowDownWideNarrow, ChevronDown, ChevronRight, Settings } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import {
@@ -42,10 +42,10 @@ const REVIEW_SECTIONS: { group: ReviewGroup; title: string }[] = [
 
 type Tab = "mine" | "reviews" | "settings";
 
-const TABS: { id: Tab; label: string }[] = [
+const TABS: { id: Tab; label: string; icon?: ReactNode }[] = [
   { id: "mine", label: "My PRs" },
   { id: "reviews", label: "Review Requests" },
-  { id: "settings", label: "Settings" },
+  { id: "settings", label: "Settings", icon: <Settings /> },
 ];
 
 function Empty({ children }: { children: ReactNode }) {
@@ -198,13 +198,18 @@ function App() {
         )}
         <Tabs value={tab} onValueChange={(value) => setTab(value as Tab)} className="gap-0">
           <TabsList variant="line" className="h-auto w-full rounded-none border-b p-0">
-            {TABS.map(({ id, label }) => (
+            {TABS.map(({ id, label, icon }) => (
               <TabsTrigger
                 key={id}
                 value={id}
-                className="h-9 rounded-none after:bottom-0 after:h-0.5 after:bg-info"
+                aria-label={icon ? label : undefined}
+                title={icon ? label : undefined}
+                className={cn(
+                  "h-9 rounded-none after:bottom-0 after:h-0.5 after:bg-info",
+                  icon && "flex-none px-4",
+                )}
               >
-                {label}
+                {icon ?? label}
                 {!!counts[id] && (
                   <span className="rounded-full bg-muted px-1.5 text-[11px] leading-[18px] tabular-nums">
                     {counts[id]}

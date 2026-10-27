@@ -155,7 +155,7 @@ both are zero there is no title at all.
 ## Popover
 
 Three tabs: **My PRs** and **Review Requests**, each with a count badge (the
-numbers in the tray), and **Settings**. The tab choice is not remembered
+numbers in the tray), and **Settings**, shown as a cog icon at the end of the tab bar. The tab choice is not remembered
 between openings.
 
 ### My PRs
