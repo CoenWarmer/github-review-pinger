@@ -153,6 +153,11 @@ for the rest, a `↻ re-requested` badge, your own verdict chip, and the other
 reviewers' chips. Rows can be snoozed like your own: out of the count and
 never nudged, though a new request still notifies.
 
+Every section header has a sort icon, on both tabs. It offers Default (the
+order above), Oldest first and Newest first (by open clock), Recently active,
+and Repository. The choice is per section and remembered across restarts in
+the webview's local storage; the icon is highlighted when it isn't Default.
+
 The footer shows when data was refreshed, a Refresh button, and Settings:
 launch at login (on by default in release builds) and the token form.
 

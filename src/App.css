@@ -107,6 +107,9 @@ button {
 }
 
 .section h2 {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
   position: sticky;
   top: 0;
   z-index: 1;
@@ -133,6 +136,71 @@ button {
 
 .count {
   font-weight: 400;
+}
+
+.sort {
+  position: relative;
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+.sort-button {
+  display: flex;
+  padding: 2px 4px;
+  border: 0;
+  border-radius: 4px;
+  background: none;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.sort-button:hover,
+.sort-button[aria-expanded="true"] {
+  background: var(--bg-hover);
+  color: var(--fg);
+}
+
+.sort-active {
+  color: var(--accent);
+}
+
+.sort-menu {
+  position: absolute;
+  top: 100%;
+  right: 0;
+  z-index: 2;
+  min-width: 150px;
+  margin: 2px 0 0;
+  padding: 4px;
+  list-style: none;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  box-shadow: 0 4px 12px rgb(0 0 0 / 0.18);
+  font-size: 12px;
+  font-weight: 400;
+}
+
+.sort-menu button {
+  display: flex;
+  gap: 6px;
+  width: 100%;
+  padding: 4px 8px;
+  border: 0;
+  border-radius: 4px;
+  background: none;
+  text-align: left;
+  cursor: pointer;
+}
+
+.sort-menu button:hover,
+.sort-menu button:focus-visible {
+  background: var(--bg-hover);
+  outline: none;
+}
+
+.sort-menu button span {
+  width: 10px;
 }
 
 .pr-list {

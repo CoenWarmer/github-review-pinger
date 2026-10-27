@@ -6,6 +6,7 @@ import { SettingsPanel } from "./components/SettingsPanel";
 import { Setup, problemMessage } from "./components/Setup";
 import { elapsed } from "./format";
 import { useNow, useSnapshot } from "./hooks";
+import { SORT_OPTIONS, sortRows, useSectionSort, type SortKey } from "./sort";
 import type { Group, ReviewGroup, Snapshot } from "./types";
 import "./App.css";
 
@@ -27,19 +28,70 @@ const REVIEW_SECTIONS: { group: ReviewGroup; title: string }[] = [
 
 type Tab = "mine" | "reviews";
 
-function Section({
+function SortMenu({ value, onChange }: { value: SortKey; onChange: (key: SortKey) => void }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <span
+      className="sort"
+      onBlur={(e) => {
+        if (!e.currentTarget.contains(e.relatedTarget)) setOpen(false);
+      }}
+      onKeyDown={(e) => e.key === "Escape" && setOpen(false)}
+    >
+      <button
+        type="button"
+        className={`sort-button${value !== "default" ? " sort-active" : ""}`}
+        aria-label="Sort"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        title="Sort"
+        onClick={() => setOpen(!open)}
+      >
+        <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+          <path d="M3.5 2.5v9.3L1.9 10.2 1 11.1l3 3 3-3-.9-.9-1.6 1.6V2.5h-1zM10 3h5v1.3h-5V3zm0 4h4v1.3h-4V7zm0 4h3v1.3h-3V11z" />
+        </svg>
+      </button>
+      {open && (
+        <ul className="sort-menu" role="menu">
+          {SORT_OPTIONS.map(({ key, label }) => (
+            <li key={key} role="none">
+              <button
+                type="button"
+                role="menuitemradio"
+                aria-checked={value === key}
+                onClick={() => {
+                  onChange(key);
+                  setOpen(false);
+                }}
+              >
+                <span aria-hidden="true">{value === key ? "✓" : ""}</span>
+                {label}
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </span>
+  );
+}
+
+function Section<T extends { id: string; repo: string; openSince: string; lastActivity: string }>({
+  id,
   title,
-  count,
+  rows,
   collapsible,
-  children,
+  render,
 }: {
+  /** Names the section for remembering its sort, e.g. `mine:approved`. */
+  id: string;
   title: string;
-  count: number;
+  rows: T[];
   collapsible: boolean;
-  children: ReactNode;
+  render: (row: T) => ReactNode;
 }) {
   const [collapsed, setCollapsed] = useState(collapsible);
-  if (count === 0) return null;
+  const [sort, setSort] = useSectionSort(id);
+  if (rows.length === 0) return null;
 
   return (
     <section className="section">
@@ -51,15 +103,16 @@ function Section({
             aria-expanded={!collapsed}
             onClick={() => setCollapsed(!collapsed)}
           >
-            {collapsed ? "▸" : "▾"} {title} <span className="count">{count}</span>
+            {collapsed ? "▸" : "▾"} {title} <span className="count">{rows.length}</span>
           </button>
         ) : (
-          <>
-            {title} <span className="count">{count}</span>
-          </>
+          <span>
+            {title} <span className="count">{rows.length}</span>
+          </span>
         )}
+        <SortMenu value={sort} onChange={setSort} />
       </h2>
-      {!collapsed && <ul className="pr-list">{children}</ul>}
+      {!collapsed && <ul className="pr-list">{sortRows(rows, sort).map(render)}</ul>}
     </section>
   );
 }
@@ -163,40 +216,30 @@ function App() {
           prs.length === 0 ? (
             <p className="empty">No open pull requests.</p>
           ) : (
-            SECTIONS.map(({ group, title }) => {
-              const rows = prs.filter((pr) => pr.group === group);
-              return (
-                <Section
-                  key={group}
-                  title={title}
-                  count={rows.length}
-                  collapsible={group === "snoozed" || group === "dormant" || group === "draft"}
-                >
-                  {rows.map((pr) => (
-                    <PrRow key={pr.id} pr={pr} now={now} />
-                  ))}
-                </Section>
-              );
-            })
+            SECTIONS.map(({ group, title }) => (
+              <Section
+                key={group}
+                id={`mine:${group}`}
+                title={title}
+                rows={prs.filter((pr) => pr.group === group)}
+                collapsible={group === "snoozed" || group === "dormant" || group === "draft"}
+                render={(pr) => <PrRow key={pr.id} pr={pr} now={now} />}
+              />
+            ))
           )
         ) : reviews.length === 0 ? (
           <p className="empty">No pull requests are waiting on your review.</p>
         ) : (
-          REVIEW_SECTIONS.map(({ group, title }) => {
-            const rows = reviews.filter((pr) => pr.group === group);
-            return (
-              <Section
-                key={group}
-                title={title}
-                count={rows.length}
-                collapsible={group === "snoozed" || group === "draft"}
-              >
-                {rows.map((pr) => (
-                  <ReviewRow key={pr.id} pr={pr} now={now} />
-                ))}
-              </Section>
-            );
-          })
+          REVIEW_SECTIONS.map(({ group, title }) => (
+            <Section
+              key={group}
+              id={`reviews:${group}`}
+              title={title}
+              rows={reviews.filter((pr) => pr.group === group)}
+              collapsible={group === "snoozed" || group === "draft"}
+              render={(pr) => <ReviewRow key={pr.id} pr={pr} now={now} />}
+            />
+          ))
         )}
       </div>
       <Footer snapshot={snapshot} now={now} />
