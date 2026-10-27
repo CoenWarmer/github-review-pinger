@@ -294,49 +294,45 @@ fn has_new_feedback(pr: &PullRequest, people: &People, responses: &[Response]) -
         .is_none_or(|author_acted| latest_comment > author_acted)
 }
 
+/// Every submitted review and conversation comment, as (author, review state
+/// or `None` for a comment, time). Reviews come from `reviews`, not the
+/// timeline, which omits reviews that only reply in existing threads.
+fn interactions(
+    pr: &PullRequest,
+) -> impl Iterator<Item = (&Actor, Option<ReviewState>, DateTime<Utc>)> {
+    let reviews = pr.reviews.iter().filter_map(|review| {
+        Some((
+            review.author.as_ref()?,
+            Some(review.state),
+            review.submitted_at?,
+        ))
+    });
+    let comments = pr.timeline_items.iter().filter_map(|item| match item {
+        TimelineItem::IssueComment {
+            created_at,
+            author: Some(author),
+        } => Some((author, None, *created_at)),
+        _ => None,
+    });
+    reviews.chain(comments)
+}
+
 /// The latest review or comment whose author passes `counts`.
 fn latest_response(pr: &PullRequest, counts: impl Fn(&Actor) -> bool) -> Option<DateTime<Utc>> {
-    pr.timeline_items
-        .iter()
-        .filter_map(|item| match item {
-            TimelineItem::PullRequestReview {
-                submitted_at: Some(at),
-                author: Some(author),
-                ..
-            }
-            | TimelineItem::IssueComment {
-                created_at: at,
-                author: Some(author),
-            } if counts(author) => Some(*at),
-            _ => None,
-        })
+    interactions(pr)
+        .filter(|(author, _, _)| counts(author))
+        .map(|(_, _, at)| at)
         .max()
 }
 
 fn responses(pr: &PullRequest, people: &People) -> Vec<Response> {
-    let mut responses: Vec<Response> = pr
-        .timeline_items
-        .iter()
-        .filter_map(|item| {
-            let (author, kind, at) = match item {
-                TimelineItem::PullRequestReview {
-                    state,
-                    submitted_at: Some(at),
-                    author: Some(author),
-                } => {
-                    let kind = match state {
-                        ReviewState::Approved => ResponseKind::Approved,
-                        ReviewState::ChangesRequested => ResponseKind::ChangesRequested,
-                        ReviewState::Commented => ResponseKind::Commented,
-                        _ => return None,
-                    };
-                    (author, kind, *at)
-                }
-                TimelineItem::IssueComment {
-                    created_at,
-                    author: Some(author),
-                } => (author, ResponseKind::Commented, *created_at),
-                _ => return None,
+    let mut responses: Vec<Response> = interactions(pr)
+        .filter_map(|(author, state, at)| {
+            let kind = match state {
+                None | Some(ReviewState::Commented) => ResponseKind::Commented,
+                Some(ReviewState::Approved) => ResponseKind::Approved,
+                Some(ReviewState::ChangesRequested) => ResponseKind::ChangesRequested,
+                Some(_) => return None,
             };
             people.is_other_human(author).then(|| Response {
                 login: author.login.clone(),
@@ -505,6 +501,7 @@ mod tests {
             "reviewRequests": { "nodes": [] },
             "latestReviews": { "nodes": [] },
             "latestOpinionatedReviews": { "nodes": [] },
+            "reviews": { "nodes": [] },
             "timelineItems": { "nodes": [] }
         })
     }
@@ -562,12 +559,9 @@ mod tests {
         json!({ "__typename": "IssueComment", "createdAt": at, "author": author })
     }
 
-    fn timeline_review(author: Value, at: &str) -> Value {
-        timeline_review_with(author, "COMMENTED", at)
-    }
-
-    fn timeline_review_with(author: Value, state: &str, at: &str) -> Value {
-        json!({ "__typename": "PullRequestReview", "state": state, "submittedAt": at, "author": author })
+    /// A submitted review, for the `reviews` connection.
+    fn submitted(author: Value, state: &str, at: &str) -> Value {
+        json!({ "state": state, "submittedAt": at, "author": author })
     }
 
     fn ready(at: &str) -> Value {
@@ -601,7 +595,9 @@ mod tests {
                 comment(user("Author"), "2026-10-03T09:00:00Z"),
                 comment(bot("github-actions"), "2026-10-04T09:00:00Z"),
                 comment(user("renovate[bot]"), "2026-10-05T09:00:00Z"),
-                timeline_review(user("KibanaMachine"), "2026-10-06T09:00:00Z"),
+            ] },
+            "reviews": { "nodes": [
+                submitted(user("KibanaMachine"), "COMMENTED", "2026-10-06T09:00:00Z"),
             ] } }),
             &ignored,
         );
@@ -645,15 +641,19 @@ mod tests {
         assert!(pr.reviewers[0].rerequested);
     }
 
-    fn feedback(extra: Vec<Value>) -> PrView {
-        let mut items = vec![timeline_review(user("rev"), "2026-10-03T09:00:00Z")];
-        items.extend(extra);
-        derive_one(json!({ "timelineItems": { "nodes": items } }))
+    /// A comment review from "rev" at 09:00, plus extra timeline items and reviews.
+    fn feedback(timeline: Vec<Value>, reviews: Vec<Value>) -> PrView {
+        let mut all_reviews = vec![submitted(user("rev"), "COMMENTED", "2026-10-03T09:00:00Z")];
+        all_reviews.extend(reviews);
+        derive_one(json!({
+            "reviews": { "nodes": all_reviews },
+            "timelineItems": { "nodes": timeline },
+        }))
     }
 
     #[test]
     fn a_comment_review_is_new_feedback() {
-        let pr = feedback(vec![]);
+        let pr = feedback(vec![], vec![]);
         assert_eq!(pr.group, Group::NeedsAction);
         assert_eq!(pr.actions, vec![Action::NewFeedback]);
     }
@@ -668,24 +668,36 @@ mod tests {
 
     #[test]
     fn replying_pushing_or_re_requesting_answers_feedback() {
-        let replied = feedback(vec![comment(user("author"), "2026-10-03T10:00:00Z")]);
+        let replied = feedback(
+            vec![comment(user("author"), "2026-10-03T10:00:00Z")],
+            vec![],
+        );
         assert_eq!(replied.group, Group::Waiting);
 
-        let thread_reply = feedback(vec![timeline_review(
-            user("author"),
-            "2026-10-03T10:00:00Z",
-        )]);
+        // A reply inside a review thread is a review of its own, which GitHub
+        // leaves out of the timeline.
+        let thread_reply = feedback(
+            vec![],
+            vec![submitted(
+                user("author"),
+                "COMMENTED",
+                "2026-10-03T10:00:00Z",
+            )],
+        );
         assert_eq!(thread_reply.group, Group::Waiting);
 
-        let re_requested = feedback(vec![json!({
-            "__typename": "ReviewRequestedEvent",
-            "createdAt": "2026-10-03T10:00:00Z",
-        })]);
+        let re_requested = feedback(
+            vec![json!({
+                "__typename": "ReviewRequestedEvent",
+                "createdAt": "2026-10-03T10:00:00Z",
+            })],
+            vec![],
+        );
         assert_eq!(re_requested.group, Group::Waiting);
 
         let pushed = derive_one(json!({
             "commits": { "nodes": [commit("2026-10-03T10:00:00Z", "SUCCESS")] },
-            "timelineItems": { "nodes": [timeline_review(user("rev"), "2026-10-03T09:00:00Z")] },
+            "reviews": { "nodes": [submitted(user("rev"), "COMMENTED", "2026-10-03T09:00:00Z")] },
         }));
         assert_eq!(pushed.group, Group::Waiting);
     }
@@ -697,8 +709,8 @@ mod tests {
         ] } }));
         assert_eq!(bot_comment.group, Group::Waiting);
 
-        let approval = derive_one(json!({ "timelineItems": { "nodes": [
-            timeline_review_with(user("rev"), "APPROVED", "2026-10-03T09:00:00Z"),
+        let approval = derive_one(json!({ "reviews": { "nodes": [
+            submitted(user("rev"), "APPROVED", "2026-10-03T09:00:00Z"),
         ] } }));
         assert!(!approval.actions.contains(&Action::NewFeedback));
 
@@ -870,13 +882,18 @@ mod tests {
 
     #[test]
     fn responses_are_other_humans_reviews_and_comments_in_order() {
-        let pr = derive_one(json!({ "timelineItems": { "nodes": [
-            timeline_review_with(user("rev"), "APPROVED", "2026-10-03T09:00:00Z"),
-            comment(user("other"), "2026-10-02T09:00:00Z"),
-            timeline_review_with(user("author"), "COMMENTED", "2026-10-04T09:00:00Z"),
-            comment(bot("github-actions"), "2026-10-05T09:00:00Z"),
-            timeline_review_with(user("rev"), "DISMISSED", "2026-10-06T09:00:00Z"),
-        ] } }));
+        let pr = derive_one(json!({
+            "timelineItems": { "nodes": [
+                comment(user("other"), "2026-10-02T09:00:00Z"),
+                comment(bot("github-actions"), "2026-10-05T09:00:00Z"),
+            ] },
+            "reviews": { "nodes": [
+                submitted(user("rev"), "APPROVED", "2026-10-03T09:00:00Z"),
+                submitted(user("author"), "COMMENTED", "2026-10-04T09:00:00Z"),
+                submitted(user("rev"), "DISMISSED", "2026-10-06T09:00:00Z"),
+                { "state": "PENDING", "submittedAt": null, "author": user("rev") },
+            ] },
+        }));
         let responses: Vec<(&str, ResponseKind)> = pr
             .responses
             .iter()

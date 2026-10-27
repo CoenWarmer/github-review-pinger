@@ -60,12 +60,23 @@ fragment PullRequestFields on PullRequest {
       }
     }
   }
+  # Every submitted review. Reviews that only reply in existing threads are
+  # left out of timelineItems, so they have to come from here.
+  reviews(last: 50) {
+    nodes {
+      state
+      submittedAt
+      author {
+        __typename
+        login
+      }
+    }
+  }
   timelineItems(
     last: 50
     itemTypes: [
       READY_FOR_REVIEW_EVENT
       REVIEW_REQUESTED_EVENT
-      PULL_REQUEST_REVIEW
       ISSUE_COMMENT
     ]
   ) {
@@ -76,14 +87,6 @@ fragment PullRequestFields on PullRequest {
       }
       ... on ReviewRequestedEvent {
         createdAt
-      }
-      ... on PullRequestReview {
-        state
-        submittedAt
-        author {
-          __typename
-          login
-        }
       }
       ... on IssueComment {
         createdAt
