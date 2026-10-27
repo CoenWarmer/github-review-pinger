@@ -55,9 +55,12 @@ export function SettingsPanel({
         </div>
         {error && <p className="m-0 text-destructive">{error}</p>}
       </section>
-      {account && <p className="m-0">Signed in as {account}</p>}
       <Separator />
-      <TokenForm hasSavedToken={hasSavedToken} />
+      <section>
+        <Heading>Authentication</Heading>
+        {account && <p className="mt-0 mb-2">Signed in as {account}</p>}
+        <TokenForm hasSavedToken={hasSavedToken} />
+      </section>
       <Separator />
       <SlackChannels channels={channels} />
     </div>
