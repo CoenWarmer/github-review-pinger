@@ -1,17 +1,19 @@
-//! Token resolution: a PAT the user pasted (kept in the OS keychain) wins over
-//! the `gh` CLI token, because pasting one is an explicit override, typically
-//! for orgs the gh token isn't SSO-authorized for.
+//! Token resolution. The user picks the source: a PAT they pasted (kept in the
+//! OS keychain) or the `gh` CLI token. Until they pick, a saved PAT wins over
+//! the CLI, because pasting one is an explicit override, typically for orgs the
+//! gh token isn't SSO-authorized for. A chosen source never falls back to the
+//! other, so a problem with it is reported rather than hidden.
 
 use std::env;
 use std::path::PathBuf;
 use std::process::Command;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 const KEYRING_SERVICE: &str = "dev.coenwarmer.reviewpinger";
 const KEYRING_USER: &str = "github-token";
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum TokenSource {
     Pat,
@@ -27,9 +29,28 @@ pub struct Token {
 pub enum AuthError {
     GhNotInstalled,
     GhNotLoggedIn,
+    /// The saved token was chosen, but none is saved.
+    NoSavedToken,
 }
 
-pub fn resolve_token() -> Result<Token, AuthError> {
+pub fn resolve_token(chosen: Option<TokenSource>) -> Result<Token, AuthError> {
+    match chosen {
+        Some(TokenSource::Gh) => return gh_token(),
+        Some(TokenSource::Pat) => {
+            return match stored_pat() {
+                Ok(Some(value)) => Ok(Token {
+                    value,
+                    source: TokenSource::Pat,
+                }),
+                Ok(None) => Err(AuthError::NoSavedToken),
+                Err(e) => {
+                    log::warn!("Could not read token from keychain: {e}");
+                    Err(AuthError::NoSavedToken)
+                }
+            };
+        }
+        None => {}
+    }
     match stored_pat() {
         Ok(Some(value)) => {
             return Ok(Token {
@@ -53,6 +74,11 @@ fn stored_pat() -> keyring::Result<Option<String>> {
         Err(keyring::Error::NoEntry) => Ok(None),
         Err(e) => Err(e),
     }
+}
+
+/// Whether a token is in the keychain, whichever source is chosen.
+pub fn has_saved_pat() -> bool {
+    matches!(stored_pat(), Ok(Some(_)))
 }
 
 pub fn save_pat(token: &str) -> keyring::Result<()> {

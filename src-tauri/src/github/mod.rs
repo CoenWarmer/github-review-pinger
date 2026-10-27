@@ -478,7 +478,7 @@ mod tests {
     #[test]
     #[ignore = "calls the GitHub API with your gh token"]
     fn live_fetch() {
-        let token = auth::resolve_token().expect("gh is logged in");
+        let token = auth::resolve_token(None).expect("gh is logged in");
         let since = (Utc::now() - chrono::Duration::days(30)).date_naive();
         let fetched = tauri::async_runtime::block_on(fetch_open_pull_requests(
             &http_client(),

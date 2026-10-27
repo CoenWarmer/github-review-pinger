@@ -9,6 +9,8 @@ use std::path::Path;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
+use crate::auth::TokenSource;
+
 #[derive(Debug, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Memory {
@@ -26,6 +28,9 @@ pub struct Memory {
     /// `org/team-slug`.
     #[serde(default)]
     pub team_channels: HashMap<String, String>,
+    /// Which token to use, once the user has picked.
+    #[serde(default)]
+    pub auth_source: Option<TokenSource>,
 }
 
 /// How many durations are kept per repo.

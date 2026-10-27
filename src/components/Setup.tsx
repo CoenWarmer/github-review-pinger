@@ -12,6 +12,8 @@ export function problemMessage(problem: Problem): string {
       return "The GitHub CLI isn't installed. Install it from cli.github.com and run `gh auth login`, or paste a token below.";
     case "ghNotLoggedIn":
       return "The GitHub CLI isn't logged in. Run `gh auth login` in a terminal, or paste a token below.";
+    case "noSavedToken":
+      return "The saved token is selected, but none is saved. Paste one below, or use the GitHub CLI instead.";
     case "tokenRejected":
       return problem.source === "pat"
         ? "GitHub rejected your saved token. Paste a new one or remove it to use the GitHub CLI."
@@ -92,7 +94,12 @@ export function TokenForm({ hasSavedToken }: { hasSavedToken: boolean }) {
   );
 }
 
-const AUTH_PROBLEMS: Problem["code"][] = ["ghNotInstalled", "ghNotLoggedIn", "tokenRejected"];
+const AUTH_PROBLEMS: Problem["code"][] = [
+  "ghNotInstalled",
+  "ghNotLoggedIn",
+  "noSavedToken",
+  "tokenRejected",
+];
 
 export function Setup({ problem }: { problem: Problem }) {
   const isAuthProblem = AUTH_PROBLEMS.includes(problem.code);
@@ -104,6 +111,17 @@ export function Setup({ problem }: { problem: Problem }) {
       <p className="m-0">{problemMessage(problem)}</p>
       {isAuthProblem && (
         <TokenForm hasSavedToken={problem.code === "tokenRejected" && problem.source === "pat"} />
+      )}
+      {problem.code === "noSavedToken" && (
+        <Button
+          type="button"
+          variant="link"
+          size="xs"
+          className="h-auto self-start p-0"
+          onClick={() => invoke("set_auth_source", { source: "gh" })}
+        >
+          Use the GitHub CLI instead
+        </Button>
       )}
       <Button
         type="button"

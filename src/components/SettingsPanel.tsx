@@ -3,18 +3,27 @@ import { invoke } from "@tauri-apps/api/core";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Separator } from "@/components/ui/separator";
 import { TeamChannelForm } from "../slack";
-import type { TeamChannel } from "../types";
+import type { TeamChannel, TokenSource } from "../types";
 import { TokenForm } from "./Setup";
+
+const AUTH_OPTIONS: { source: TokenSource; label: string }[] = [
+  { source: "gh", label: "GitHub CLI" },
+  { source: "pat", label: "Personal access token" },
+];
 
 export function SettingsPanel({
   account,
+  authSource,
   hasSavedToken,
   channels,
 }: {
-  /** Who is signed in and how, e.g. "CoenWarmer via GitHub CLI". */
+  /** Who is signed in. */
   account: string | null;
+  /** Which token the app uses. */
+  authSource: TokenSource;
   hasSavedToken: boolean;
   /** Slack channels by team. */
   channels: Record<string, TeamChannel>;
@@ -58,8 +67,30 @@ export function SettingsPanel({
       <Separator />
       <section>
         <Heading>Authentication</Heading>
+        <RadioGroup
+          value={authSource}
+          onValueChange={(source) => invoke("set_auth_source", { source })}
+          className="mb-2 gap-1.5"
+        >
+          {AUTH_OPTIONS.map(({ source, label }) => (
+            <div key={source} className="flex items-center gap-2">
+              <RadioGroupItem value={source} id={`auth-${source}`} />
+              <Label htmlFor={`auth-${source}`} className="font-normal">
+                {label}
+              </Label>
+            </div>
+          ))}
+        </RadioGroup>
         {account && <p className="mt-0 mb-2">Signed in as {account}</p>}
-        <TokenForm hasSavedToken={hasSavedToken} />
+        {authSource === "pat" ? (
+          <TokenForm hasSavedToken={hasSavedToken} />
+        ) : (
+          hasSavedToken && (
+            <p className="m-0 text-xs text-muted-foreground">
+              A saved token is kept, but not used.
+            </p>
+          )
+        )}
       </section>
       <Separator />
       <SlackChannels channels={channels} />

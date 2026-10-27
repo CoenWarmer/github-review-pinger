@@ -19,14 +19,23 @@ have been open and waiting, plus the pull requests waiting on your review.
 
 ## Authentication
 
-1. A pasted PAT stored in the OS keychain, if present. Pasting one is an
-   explicit override, typically for orgs the gh token isn't SSO-authorized for.
-2. Otherwise `gh auth token --hostname github.com`. GUI apps don't inherit
-   the shell's PATH, so Homebrew and other common install locations are
-   checked explicitly.
-3. If neither works, the popover shows a setup screen that names the problem
-   and accepts a PAT. When GitHub omits SSO-protected results
-   (`X-GitHub-SSO: partial-results`), a banner says so.
+The user picks the token source in Settings: the GitHub CLI or a pasted PAT.
+The choice is kept in `state.json` and never falls back to the other source,
+so a problem with the chosen one is reported rather than hidden.
+
+- **GitHub CLI**: `gh auth token --hostname github.com`. GUI apps don't
+  inherit the shell's PATH, so Homebrew and other common install locations
+  are checked explicitly.
+- **Personal access token**: stored in the OS keychain. Useful for orgs the
+  gh token isn't SSO-authorized for. Pasting a token selects it, and removing
+  the saved token selects the CLI. Selecting the CLI keeps a saved token.
+- **Before a choice is made**: a saved PAT wins over the CLI, so existing
+  setups keep working.
+
+If the chosen source doesn't work, the popover shows a setup screen that names
+the problem and accepts a PAT (with a way back to the CLI when no token is
+saved). When GitHub omits SSO-protected results (`X-GitHub-SSO:
+partial-results`), a banner says so.
 
 ## Data
 
@@ -215,8 +224,10 @@ The footer shows when data was refreshed and a Refresh button.
 The third tab holds, top to bottom:
 
 - A **Startup** section with Launch at login (on by default in release builds).
-- An **Authentication** section: who is signed in and how ("Signed in as
-  CoenWarmer via GitHub CLI"), above the token form.
+- An **Authentication** section: a GitHub CLI / Personal access token
+  selector, who is signed in ("Signed in as CoenWarmer"), and the token form
+  when the token is selected. With the CLI selected, a saved token is noted
+  as kept but unused.
 - **Slack channels**: every team with a configured channel, as the team name
   and its link, labeled "settings.json" or "saved". Saved channels (pasted
   into a team chip) can be clicked to change their link in place, and have a

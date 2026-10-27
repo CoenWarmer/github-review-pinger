@@ -3,11 +3,7 @@
 export type TokenSource = "pat" | "gh";
 
 export type Action =
-  | "readyToMerge"
-  | "changesRequested"
-  | "newFeedback"
-  | "conflicts"
-  | "ciFailing";
+  "readyToMerge" | "changesRequested" | "newFeedback" | "conflicts" | "ciFailing";
 
 export type Group = "approved" | "needsAction" | "waiting" | "snoozed" | "dormant" | "draft";
 
@@ -73,6 +69,7 @@ export interface ReviewRequest {
 export type Problem =
   | { code: "ghNotInstalled" }
   | { code: "ghNotLoggedIn" }
+  | { code: "noSavedToken" }
   | { code: "tokenRejected"; source: TokenSource }
   | { code: "rateLimited"; resetAt: string | null }
   | { code: "network"; message: string }
@@ -91,6 +88,10 @@ export interface Snapshot {
   refreshing: boolean;
   viewer: string | null;
   tokenSource: TokenSource | null;
+  /** The source the user picked; null until they do. */
+  authChoice: TokenSource | null;
+  /** A token is in the keychain, used or not. */
+  hasSavedToken: boolean;
   fetchedAt: string | null;
   ssoPartial: boolean;
   pullRequests: PullRequest[];

@@ -100,7 +100,11 @@ fn refresh(poller: State<Arc<Poller>>) {
 }
 
 #[tauri::command]
-async fn save_token(token: String, poller: State<'_, Arc<Poller>>) -> Result<(), String> {
+async fn save_token(
+    app: AppHandle,
+    token: String,
+    poller: State<'_, Arc<Poller>>,
+) -> Result<(), String> {
     let token = token.trim().to_string();
     if token.is_empty() {
         return Err("Token is empty".into());
@@ -109,18 +113,24 @@ async fn save_token(token: String, poller: State<'_, Arc<Poller>>) -> Result<(),
         .await
         .map_err(|e| e.to_string())?
         .map_err(|e| format!("Could not store token in the keychain: {e}"))?;
-    poller.refresh();
+    // Pasting a token is a choice to use it.
+    poller.set_auth_source(&app, auth::TokenSource::Pat);
     Ok(())
 }
 
 #[tauri::command]
-async fn clear_token(poller: State<'_, Arc<Poller>>) -> Result<(), String> {
+async fn clear_token(app: AppHandle, poller: State<'_, Arc<Poller>>) -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(auth::clear_pat)
         .await
         .map_err(|e| e.to_string())?
         .map_err(|e| format!("Could not remove token from the keychain: {e}"))?;
-    poller.refresh();
+    poller.set_auth_source(&app, auth::TokenSource::Gh);
     Ok(())
+}
+
+#[tauri::command]
+fn set_auth_source(app: AppHandle, poller: State<Arc<Poller>>, source: auth::TokenSource) {
+    poller.set_auth_source(&app, source);
 }
 
 #[tauri::command]
@@ -173,6 +183,7 @@ pub fn run() {
             remove_team_channel,
             save_token,
             clear_token,
+            set_auth_source,
             snooze,
             unsnooze,
             get_autostart,

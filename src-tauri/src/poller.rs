@@ -40,6 +40,10 @@ pub struct Snapshot {
     pub refreshing: bool,
     pub viewer: Option<String>,
     pub token_source: Option<TokenSource>,
+    /// The source the user picked; `None` until they do.
+    pub auth_choice: Option<TokenSource>,
+    /// Whether a token is saved in the keychain, used or not.
+    pub has_saved_token: bool,
     /// Wall-clock time, so staleness survives the machine sleeping.
     pub fetched_at: Option<DateTime<Utc>>,
     pub sso_partial: bool,
@@ -68,6 +72,7 @@ pub enum Status {
 pub enum Problem {
     GhNotInstalled,
     GhNotLoggedIn,
+    NoSavedToken,
     TokenRejected { source: TokenSource },
     RateLimited { reset_at: Option<DateTime<Utc>> },
     Network { message: String },
@@ -148,6 +153,21 @@ impl Poller {
 
     fn channels(&self, settings: &Settings, memory: &Memory) -> HashMap<String, Channel> {
         slack::merged_channels(&memory.team_channels, &settings.team_channels)
+    }
+
+    /// Picks which token to use, and refreshes with it.
+    pub fn set_auth_source(&self, app: &AppHandle, source: TokenSource) {
+        {
+            let mut memory = self.memory.lock().unwrap();
+            memory.auth_source = Some(source);
+            self.save(&memory);
+        }
+        self.update(app, |s| s.auth_choice = Some(source));
+        self.refresh();
+    }
+
+    fn auth_source(&self) -> Option<TokenSource> {
+        self.memory.lock().unwrap().auth_source
     }
 
     /// Remembers that the user opened this PR on GitHub, so it's refreshed
@@ -246,6 +266,8 @@ pub fn start(app: &AppHandle) -> Arc<Poller> {
             refreshing: false,
             viewer: None,
             token_source: None,
+            auth_choice: None,
+            has_saved_token: false,
             fetched_at: None,
             sso_partial: false,
             pull_requests: Vec::new(),
@@ -286,7 +308,10 @@ pub fn on_popover_open(app: &AppHandle, poller: Arc<Poller>) {
 /// leaves untouched. Failures are only logged, since the full refresh reports
 /// problems.
 async fn refresh_visited(app: &AppHandle, poller: &Poller, ids: Vec<String>) {
-    let Ok(Ok(token)) = tauri::async_runtime::spawn_blocking(auth::resolve_token).await else {
+    let chosen = poller.auth_source();
+    let Ok(Ok(token)) =
+        tauri::async_runtime::spawn_blocking(move || auth::resolve_token(chosen)).await
+    else {
         return;
     };
     let result = async {
@@ -396,7 +421,15 @@ fn backoff(failures: u32) -> Duration {
 }
 
 async fn poll_once(app: &AppHandle, poller: &Poller) -> Result<(), Problem> {
-    poller.update(app, |s| s.refreshing = true);
+    let has_saved_token = tauri::async_runtime::spawn_blocking(auth::has_saved_pat)
+        .await
+        .unwrap_or(false);
+    let auth_choice = poller.auth_source();
+    poller.update(app, |s| {
+        s.refreshing = true;
+        s.has_saved_token = has_saved_token;
+        s.auth_choice = auth_choice;
+    });
 
     let settings = settings::load(app);
     let reviewed_since = (Utc::now() - dormant_after(&settings)).date_naive();
@@ -487,7 +520,8 @@ fn dormant_after(settings: &Settings) -> chrono::Duration {
 }
 
 async fn fetch(poller: &Poller, reviewed_since: NaiveDate) -> Result<Fetched, Problem> {
-    let token = tauri::async_runtime::spawn_blocking(auth::resolve_token)
+    let chosen = poller.auth_source();
+    let token = tauri::async_runtime::spawn_blocking(move || auth::resolve_token(chosen))
         .await
         .map_err(|e| Problem::Api {
             message: e.to_string(),
@@ -495,6 +529,7 @@ async fn fetch(poller: &Poller, reviewed_since: NaiveDate) -> Result<Fetched, Pr
         .map_err(|e| match e {
             AuthError::GhNotInstalled => Problem::GhNotInstalled,
             AuthError::GhNotLoggedIn => Problem::GhNotLoggedIn,
+            AuthError::NoSavedToken => Problem::NoSavedToken,
         })?;
 
     let fetched = github::fetch_open_pull_requests(&poller.http, &token.value, reviewed_since)

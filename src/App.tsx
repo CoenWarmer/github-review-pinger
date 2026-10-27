@@ -174,7 +174,6 @@ function App() {
 
   const prs = snapshot.pullRequests;
   const reviews = snapshot.reviewRequests;
-  const source = snapshot.tokenSource === "pat" ? "saved token" : "GitHub CLI";
   const counts: Partial<Record<Tab, number>> = {
     mine: prs.filter(
       (pr) => pr.actions.length > 0 && ["approved", "needsAction"].includes(pr.group),
@@ -218,8 +217,9 @@ function App() {
         <ScrollArea className="min-h-0 flex-1">
           {tab === "settings" ? (
             <SettingsPanel
-              account={snapshot.viewer && `${snapshot.viewer} via ${source}`}
-              hasSavedToken={snapshot.tokenSource === "pat"}
+              account={snapshot.viewer}
+              authSource={snapshot.authChoice ?? (snapshot.hasSavedToken ? "pat" : "gh")}
+              hasSavedToken={snapshot.hasSavedToken}
               channels={snapshot.teamChannels}
             />
           ) : tab === "mine" ? (
