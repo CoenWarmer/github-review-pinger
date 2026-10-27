@@ -214,8 +214,8 @@ The footer shows when data was refreshed and a Refresh button.
 
 The third tab holds, top to bottom:
 
+- A **Startup** section with Launch at login (on by default in release builds).
 - Who is signed in and how ("Signed in as CoenWarmer via GitHub CLI").
-- Launch at login (on by default in release builds).
 - The token form.
 - **Slack channels**: every team with a configured channel, as the team name
   and its link, labeled "settings.json" or "saved". Saved channels (pasted

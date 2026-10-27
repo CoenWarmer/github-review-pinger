@@ -40,24 +40,35 @@ export function SettingsPanel({
 
   return (
     <div className="flex flex-col gap-3 p-3">
+      <section>
+        <Heading>Startup</Heading>
+        <div className="flex items-center gap-2">
+          <Checkbox
+            id="autostart"
+            checked={autostart ?? false}
+            disabled={autostart === null}
+            onCheckedChange={(checked) => toggleAutostart(checked === true)}
+          />
+          <Label htmlFor="autostart" className="font-normal">
+            Launch at login
+          </Label>
+        </div>
+        {error && <p className="m-0 text-destructive">{error}</p>}
+      </section>
       {account && <p className="m-0">Signed in as {account}</p>}
-      <div className="flex items-center gap-2">
-        <Checkbox
-          id="autostart"
-          checked={autostart ?? false}
-          disabled={autostart === null}
-          onCheckedChange={(checked) => toggleAutostart(checked === true)}
-        />
-        <Label htmlFor="autostart" className="font-normal">
-          Launch at login
-        </Label>
-      </div>
-      {error && <p className="m-0 text-destructive">{error}</p>}
       <Separator />
       <TokenForm hasSavedToken={hasSavedToken} />
       <Separator />
       <SlackChannels channels={channels} />
     </div>
+  );
+}
+
+function Heading({ children }: { children: string }) {
+  return (
+    <h3 className="mt-0 mb-1 text-[11px] font-semibold tracking-wide text-muted-foreground uppercase">
+      {children}
+    </h3>
   );
 }
 
@@ -67,9 +78,7 @@ function SlackChannels({ channels }: { channels: Record<string, TeamChannel> }) 
 
   return (
     <section>
-      <h3 className="mt-0 mb-1 text-[11px] font-semibold tracking-wide text-muted-foreground uppercase">
-        Slack channels
-      </h3>
+      <Heading>Slack channels</Heading>
       {teams.length === 0 ? (
         <p className="m-0 text-xs text-muted-foreground">
           No team has a Slack channel yet. Click a team chip on a pull request to add one.
