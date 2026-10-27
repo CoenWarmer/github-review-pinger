@@ -8,6 +8,7 @@ mod poller;
 mod prs;
 mod reviews;
 mod settings;
+mod slack;
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -76,6 +77,16 @@ fn get_snapshot(poller: State<Arc<Poller>>) -> Snapshot {
 #[tauri::command]
 fn visit(poller: State<Arc<Poller>>, id: String) {
     poller.visit(&id);
+}
+
+#[tauri::command]
+fn set_team_channel(
+    app: AppHandle,
+    poller: State<Arc<Poller>>,
+    team: String,
+    link: String,
+) -> Result<(), String> {
+    poller.set_team_channel(&app, &team, link.trim())
 }
 
 #[tauri::command]
@@ -153,6 +164,7 @@ pub fn run() {
             get_snapshot,
             refresh,
             visit,
+            set_team_channel,
             save_token,
             clear_token,
             snooze,

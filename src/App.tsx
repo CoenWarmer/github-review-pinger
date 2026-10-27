@@ -6,6 +6,7 @@ import { SettingsPanel } from "./components/SettingsPanel";
 import { Setup, problemMessage } from "./components/Setup";
 import { elapsed } from "./format";
 import { useNow, useSnapshot } from "./hooks";
+import { SlackContext } from "./slack";
 import { SORT_OPTIONS, sortRows, useSectionSort, type SortKey } from "./sort";
 import type { Group, ReviewGroup, Snapshot } from "./types";
 import "./App.css";
@@ -89,7 +90,14 @@ function SortMenu({ value, onChange }: { value: SortKey; onChange: (key: SortKey
   );
 }
 
-function Section<T extends { id: string; repo: string; openSince: string; lastActivity: string }>({
+function Section<
+  T extends {
+    id: string;
+    repo: string;
+    openSince: string;
+    lastActivity: string;
+  },
+>({
   id,
   title,
   rows,
@@ -214,54 +222,62 @@ function App() {
   const prs = snapshot.pullRequests;
   const reviews = snapshot.reviewRequests;
   const counts: Record<Tab, number> = {
-    mine: prs.filter((pr) => pr.actions.length > 0 && ["approved", "needsAction"].includes(pr.group))
-      .length,
+    mine: prs.filter(
+      (pr) => pr.actions.length > 0 && ["approved", "needsAction"].includes(pr.group),
+    ).length,
     reviews: reviews.filter((pr) => pr.group === "needsReview").length,
   };
   return (
-    <main className="popover">
-      {snapshot.status.kind === "error" && (
-        <p className="banner">{problemMessage(snapshot.status.problem)}</p>
-      )}
-      {snapshot.ssoPartial && (
-        <p className="banner">
-          Some organizations are hidden because this token isn't authorized for their SSO.
-        </p>
-      )}
-      <Tabs tab={tab} onChange={setTab} counts={counts} />
-      <div className="sections">
-        {tab === "mine" ? (
-          prs.length === 0 ? (
-            <p className="empty">No open pull requests.</p>
+    <SlackContext.Provider
+      value={{
+        channels: snapshot.teamChannels,
+        opensIn: snapshot.slackOpensIn,
+      }}
+    >
+      <main className="popover">
+        {snapshot.status.kind === "error" && (
+          <p className="banner">{problemMessage(snapshot.status.problem)}</p>
+        )}
+        {snapshot.ssoPartial && (
+          <p className="banner">
+            Some organizations are hidden because this token isn't authorized for their SSO.
+          </p>
+        )}
+        <Tabs tab={tab} onChange={setTab} counts={counts} />
+        <div className="sections">
+          {tab === "mine" ? (
+            prs.length === 0 ? (
+              <p className="empty">No open pull requests.</p>
+            ) : (
+              SECTIONS.map(({ group, title }) => (
+                <Section
+                  key={group}
+                  id={`mine:${group}`}
+                  title={title}
+                  rows={prs.filter((pr) => pr.group === group)}
+                  collapsible={group === "snoozed" || group === "dormant" || group === "draft"}
+                  render={(pr) => <PrRow key={pr.id} pr={pr} now={now} />}
+                />
+              ))
+            )
+          ) : reviews.length === 0 ? (
+            <p className="empty">No pull requests are waiting on your review.</p>
           ) : (
-            SECTIONS.map(({ group, title }) => (
+            REVIEW_SECTIONS.map(({ group, title }) => (
               <Section
                 key={group}
-                id={`mine:${group}`}
+                id={`reviews:${group}`}
                 title={title}
-                rows={prs.filter((pr) => pr.group === group)}
-                collapsible={group === "snoozed" || group === "dormant" || group === "draft"}
-                render={(pr) => <PrRow key={pr.id} pr={pr} now={now} />}
+                rows={reviews.filter((pr) => pr.group === group)}
+                collapsible={group === "snoozed" || group === "draft"}
+                render={(pr) => <ReviewRow key={pr.id} pr={pr} now={now} />}
               />
             ))
-          )
-        ) : reviews.length === 0 ? (
-          <p className="empty">No pull requests are waiting on your review.</p>
-        ) : (
-          REVIEW_SECTIONS.map(({ group, title }) => (
-            <Section
-              key={group}
-              id={`reviews:${group}`}
-              title={title}
-              rows={reviews.filter((pr) => pr.group === group)}
-              collapsible={group === "snoozed" || group === "draft"}
-              render={(pr) => <ReviewRow key={pr.id} pr={pr} now={now} />}
-            />
-          ))
-        )}
-      </div>
-      <Footer snapshot={snapshot} now={now} />
-    </main>
+          )}
+        </div>
+        <Footer snapshot={snapshot} now={now} />
+      </main>
+    </SlackContext.Provider>
   );
 }
 

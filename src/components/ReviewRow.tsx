@@ -1,8 +1,11 @@
+import { useState } from "react";
 import { dayAndTime, elapsed } from "../format";
+import { TeamChannelForm } from "../slack";
 import type { ReviewRequest } from "../types";
 import { REVIEWER_GLYPHS, REVIEWER_LABELS, ReviewerChip, SnoozeControl, visitPr } from "./PrRow";
 
 export function ReviewRow({ pr, now }: { pr: ReviewRequest; now: number }) {
+  const [askingTeam, setAskingTeam] = useState<string | null>(null);
   const waiting = pr.waitingSince && `waiting ${elapsed(pr.waitingSince, now)}`;
   const reviewed = pr.reviewedAt && `reviewed ${elapsed(pr.reviewedAt, now)} ago`;
 
@@ -29,11 +32,17 @@ export function ReviewRow({ pr, now }: { pr: ReviewRequest; now: number }) {
               </span>
             )}
             {pr.reviewers.map((reviewer) => (
-              <ReviewerChip key={reviewer.login} reviewer={reviewer} />
+              <ReviewerChip
+                key={reviewer.login}
+                reviewer={reviewer}
+                prUrl={pr.url}
+                onAsk={setAskingTeam}
+              />
             ))}
           </span>
         )}
       </button>
+      {askingTeam && <TeamChannelForm team={askingTeam} onDone={() => setAskingTeam(null)} />}
       {pr.group !== "draft" && (
         <span className="pr-side">
           <SnoozeControl pr={pr} />

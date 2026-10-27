@@ -2,6 +2,7 @@ import { useState, type CSSProperties } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { checksProgress, dayAndTime, elapsed, queueProgress, remaining } from "../format";
+import { TeamChannelForm, TeamChip } from "../slack";
 import type { Action, PullRequest, Reviewer, ReviewerState } from "../types";
 
 /** Opens the PR on GitHub, and has it refreshed first the next time the popover shows. */
@@ -38,10 +39,32 @@ const SNOOZE_OPTIONS = [
   { days: 7, label: "1w" },
 ];
 
-export function ReviewerChip({ reviewer }: { reviewer: Reviewer }) {
+export function ReviewerChip({
+  reviewer,
+  prUrl,
+  onAsk,
+}: {
+  reviewer: Reviewer;
+  prUrl: string;
+  /** Asks for a team's Slack channel, which a team chip links to. */
+  onAsk: (team: string) => void;
+}) {
   const label = `${reviewer.login} ${REVIEWER_LABELS[reviewer.state]}${
     reviewer.rerequested ? ", re-requested" : ""
   }`;
+  if (reviewer.team) {
+    return (
+      <TeamChip
+        team={reviewer.team}
+        login={reviewer.rerequested ? `${reviewer.login} ↻` : reviewer.login}
+        glyph={REVIEWER_GLYPHS[reviewer.state]}
+        className={`chip chip-${reviewer.state}`}
+        title={label}
+        prUrl={prUrl}
+        onAsk={onAsk}
+      />
+    );
+  }
   return (
     <span className={`chip chip-${reviewer.state}`} title={label}>
       <span aria-hidden="true">{REVIEWER_GLYPHS[reviewer.state]}</span>
@@ -89,6 +112,7 @@ export function SnoozeControl({ pr }: { pr: Pick<PullRequest, "id" | "snoozedUnt
 }
 
 export function PrRow({ pr, now }: { pr: PullRequest; now: number }) {
+  const [askingTeam, setAskingTeam] = useState<string | null>(null);
   const showActions =
     pr.group === "approved" || pr.group === "needsAction" || pr.group === "waiting";
   // Neutral context for why an approved PR isn't "ready to merge" yet.
@@ -97,36 +121,40 @@ export function PrRow({ pr, now }: { pr: PullRequest; now: number }) {
   const queueFill = pr.queued ? queueProgress(pr.mergeEnqueuedAt, pr.mergeEta, now) : null;
   const fill = (fraction: number | null) =>
     fraction !== null ? ({ "--progress": `${fraction * 100}%` } as CSSProperties) : undefined;
-  const notes: { label: string; className: string; style?: CSSProperties; title?: string }[] =
-    showActions
-      ? [
-          pr.checks === "pending" && {
-            label: runningFor ? `Checks running · ${runningFor}` : "Checks running",
-            className: `badge-checksRunning${progress !== null ? " badge-progress" : ""}`,
-            style: fill(progress),
-            title:
-              pr.checksEstimateSecs && pr.checksStarted
-                ? `Running for ${runningFor}, usually about ${Math.round(pr.checksEstimateSecs / 60)}m${
-                    progress === 1 ? " (taking longer than usual)" : ""
-                  }`
-                : undefined,
-          },
-          pr.autoMerge && { label: "Auto-merge", className: "badge-autoMerge" },
-          pr.queued && {
-            label: [
-              pr.mergeQueuePosition ? `Queued #${pr.mergeQueuePosition}` : "Queued",
-              pr.mergeEta && remaining(pr.mergeEta, now),
-            ]
-              .filter(Boolean)
-              .join(" · "),
-            className: `badge-queued${queueFill !== null ? " badge-progress" : ""}`,
-            style: fill(queueFill),
-            title: pr.mergeEnqueuedAt
-              ? `In the merge queue for ${elapsed(pr.mergeEnqueuedAt, now)}`
+  const notes: {
+    label: string;
+    className: string;
+    style?: CSSProperties;
+    title?: string;
+  }[] = showActions
+    ? [
+        pr.checks === "pending" && {
+          label: runningFor ? `Checks running · ${runningFor}` : "Checks running",
+          className: `badge-checksRunning${progress !== null ? " badge-progress" : ""}`,
+          style: fill(progress),
+          title:
+            pr.checksEstimateSecs && pr.checksStarted
+              ? `Running for ${runningFor}, usually about ${Math.round(pr.checksEstimateSecs / 60)}m${
+                  progress === 1 ? " (taking longer than usual)" : ""
+                }`
               : undefined,
-          },
-        ].filter((note) => note !== false)
-      : [];
+        },
+        pr.autoMerge && { label: "Auto-merge", className: "badge-autoMerge" },
+        pr.queued && {
+          label: [
+            pr.mergeQueuePosition ? `Queued #${pr.mergeQueuePosition}` : "Queued",
+            pr.mergeEta && remaining(pr.mergeEta, now),
+          ]
+            .filter(Boolean)
+            .join(" · "),
+          className: `badge-queued${queueFill !== null ? " badge-progress" : ""}`,
+          style: fill(queueFill),
+          title: pr.mergeEnqueuedAt
+            ? `In the merge queue for ${elapsed(pr.mergeEnqueuedAt, now)}`
+            : undefined,
+        },
+      ].filter((note) => note !== false)
+    : [];
 
   return (
     <li className="pr">
@@ -138,7 +166,9 @@ export function PrRow({ pr, now }: { pr: PullRequest; now: number }) {
           {pr.group === "dormant" && ` · idle ${elapsed(pr.lastActivity, now)}`}
           {pr.snoozedUntil && ` · until ${dayAndTime(pr.snoozedUntil)}`}
         </span>
-        {((showActions && pr.actions.length > 0) || notes.length > 0 || pr.reviewers.length > 0) && (
+        {((showActions && pr.actions.length > 0) ||
+          notes.length > 0 ||
+          pr.reviewers.length > 0) && (
           <span className="pr-badges">
             {showActions &&
               pr.actions.map((action) => (
@@ -152,11 +182,17 @@ export function PrRow({ pr, now }: { pr: PullRequest; now: number }) {
               </span>
             ))}
             {pr.reviewers.map((reviewer) => (
-              <ReviewerChip key={reviewer.login} reviewer={reviewer} />
+              <ReviewerChip
+                key={reviewer.login}
+                reviewer={reviewer}
+                prUrl={pr.url}
+                onAsk={setAskingTeam}
+              />
             ))}
           </span>
         )}
       </button>
+      {askingTeam && <TeamChannelForm team={askingTeam} onDone={() => setAskingTeam(null)} />}
       {pr.group !== "draft" && (
         <span className="pr-side">
           <SnoozeControl pr={pr} />

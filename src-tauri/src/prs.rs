@@ -72,6 +72,9 @@ pub struct Reviewer {
     pub state: ReviewerState,
     /// Already reviewed, and the author has asked for another review since.
     pub rerequested: bool,
+    /// For team requests, the lowercase `org/slug` that Slack channels are
+    /// keyed by.
+    pub team: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -400,18 +403,26 @@ pub(crate) fn reviewers(pr: &PullRequest, people: &People) -> Vec<Reviewer> {
                 kind: ReviewerKind::User,
                 state,
                 rerequested: false,
+                team: None,
             });
     }
 
     // Requested bots (e.g. Copilot) are shown; bots that merely commented are not.
     let requests = pr.review_requests.iter().flat_map(|n| n.iter());
     for requested in requests.filter_map(|r| r.requested_reviewer.as_ref()) {
-        let (login, kind) = match requested {
+        let (login, kind, team) = match requested {
             RequestedReviewer::User { login } | RequestedReviewer::Mannequin { login } => {
-                (login.clone(), ReviewerKind::User)
+                (login.clone(), ReviewerKind::User, None)
             }
-            RequestedReviewer::Bot { login } => (login.clone(), ReviewerKind::Bot),
-            RequestedReviewer::Team { slug } => (format!("@{slug}"), ReviewerKind::Team),
+            RequestedReviewer::Bot { login } => (login.clone(), ReviewerKind::Bot, None),
+            RequestedReviewer::Team {
+                slug,
+                combined_slug,
+            } => (
+                format!("@{slug}"),
+                ReviewerKind::Team,
+                Some(combined_slug.as_ref().unwrap_or(slug).to_lowercase()),
+            ),
             RequestedReviewer::Other => continue,
         };
         if people.is_ignored(&login) {
@@ -425,6 +436,7 @@ pub(crate) fn reviewers(pr: &PullRequest, people: &People) -> Vec<Reviewer> {
                 kind,
                 state: ReviewerState::Pending,
                 rerequested: false,
+                team,
             });
     }
 
@@ -1034,5 +1046,27 @@ mod tests {
                 "draft"
             ]
         );
+    }
+
+    #[test]
+    fn team_reviewers_carry_a_lowercase_org_qualified_key() {
+        let pr = derive_one(json!({
+            "reviewRequests": { "nodes": [
+                { "requestedReviewer": {
+                    "__typename": "Team", "slug": "Ops", "combinedSlug": "Elastic/Ops",
+                } },
+                { "requestedReviewer": { "__typename": "Team", "slug": "ui" } },
+                { "requestedReviewer": { "__typename": "User", "login": "ana" } },
+            ] },
+        }));
+        let teams: Vec<(&str, Option<&str>)> = pr
+            .reviewers
+            .iter()
+            .map(|r| (r.login.as_str(), r.team.as_deref()))
+            .collect();
+        assert!(teams.contains(&("@Ops", Some("elastic/ops"))));
+        // Without an organization the slug stands in.
+        assert!(teams.contains(&("@ui", Some("ui"))));
+        assert!(teams.contains(&("ana", None)));
     }
 }

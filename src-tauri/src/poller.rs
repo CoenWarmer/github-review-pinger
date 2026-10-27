@@ -2,7 +2,7 @@
 //! popover as a `snapshot` event, keeps the tray count in sync, and sends
 //! notifications for what changed between polls.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -22,7 +22,8 @@ use crate::memory::Memory;
 use crate::notify;
 use crate::prs::{self, PrView};
 use crate::reviews::{self, ReviewView};
-use crate::settings::{self, Settings};
+use crate::settings::{self, Settings, SlackOpensIn};
+use crate::slack;
 
 const POLL_INTERVAL: Duration = Duration::from_secs(120);
 const STALE_AFTER: chrono::Duration = chrono::Duration::seconds(30);
@@ -44,6 +45,10 @@ pub struct Snapshot {
     pub sso_partial: bool,
     pub pull_requests: Vec<PrView>,
     pub review_requests: Vec<ReviewView>,
+    /// Slack channel links by lowercase `org/team-slug`, from settings and
+    /// those saved in the popover.
+    pub team_channels: HashMap<String, String>,
+    pub slack_opens_in: SlackOpensIn,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -110,6 +115,28 @@ impl Poller {
             self.save(&memory);
         }
         self.rederive(app);
+    }
+
+    /// Saves the Slack channel for a team. Fails when the link isn't a
+    /// Slack link.
+    pub fn set_team_channel(&self, app: &AppHandle, team: &str, link: &str) -> Result<(), String> {
+        if !slack::is_valid_link(link) {
+            return Err("That doesn't look like a Slack channel link.".to_string());
+        }
+        let channels = {
+            let mut memory = self.memory.lock().unwrap();
+            memory
+                .team_channels
+                .insert(team.to_lowercase(), link.to_string());
+            self.save(&memory);
+            self.channels(&settings::load(app), &memory)
+        };
+        self.update(app, |s| s.team_channels = channels);
+        Ok(())
+    }
+
+    fn channels(&self, settings: &Settings, memory: &Memory) -> HashMap<String, String> {
+        slack::merged_channels(&memory.team_channels, &settings.team_channels)
     }
 
     /// Remembers that the user opened this PR on GitHub, so it's refreshed
@@ -212,6 +239,8 @@ pub fn start(app: &AppHandle) -> Arc<Poller> {
             sso_partial: false,
             pull_requests: Vec::new(),
             review_requests: Vec::new(),
+            team_channels: HashMap::new(),
+            slack_opens_in: SlackOpensIn::default(),
         }),
         latest: Mutex::new(None),
         memory: Mutex::new(memory),
@@ -377,6 +406,7 @@ async fn poll_once(app: &AppHandle, poller: &Poller) -> Result<(), Problem> {
 
     let now = Utc::now();
     let (views, review_views) = poller.derive(app, &fetched, now);
+    let channels = poller.channels(&settings, &poller.memory.lock().unwrap());
     let notifications = {
         let mut memory = poller.memory.lock().unwrap();
         let first_ever = memory.last_poll_at.is_none();
@@ -426,6 +456,8 @@ async fn poll_once(app: &AppHandle, poller: &Poller) -> Result<(), Problem> {
         s.sso_partial = fetched.sso_partial;
         s.pull_requests = views;
         s.review_requests = review_views;
+        s.team_channels = channels;
+        s.slack_opens_in = settings.slack_opens_in;
     });
     *poller.latest.lock().unwrap() = Some(fetched);
     Ok(())

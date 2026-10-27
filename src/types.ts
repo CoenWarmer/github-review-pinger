@@ -20,6 +20,8 @@ export interface Reviewer {
   kind: "user" | "team" | "bot";
   state: ReviewerState;
   rerequested: boolean;
+  /** For team requests, the lowercase `org/slug` Slack channels are keyed by. */
+  team: string | null;
 }
 
 export interface PullRequest {
@@ -87,4 +89,7 @@ export interface Snapshot {
   ssoPartial: boolean;
   pullRequests: PullRequest[];
   reviewRequests: ReviewRequest[];
+  /** Slack channel links by lowercase `org/team-slug`. */
+  teamChannels: Record<string, string>;
+  slackOpensIn: "app" | "browser";
 }

@@ -64,6 +64,7 @@ fragment PullRequestFields on PullRequest {
         }
         ... on Team {
           slug
+          combinedSlug
         }
       }
     }
@@ -128,6 +129,8 @@ fragment PullRequestFields on PullRequest {
           }
           ... on Team {
             slug
+            combinedSlug
+          combinedSlug
           }
         }
       }

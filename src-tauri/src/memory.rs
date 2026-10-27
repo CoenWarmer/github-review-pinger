@@ -22,6 +22,10 @@ pub struct Memory {
     /// oldest first.
     #[serde(default)]
     pub check_durations: HashMap<String, Vec<u64>>,
+    /// Slack channel links pasted into the popover, by lowercase
+    /// `org/team-slug`.
+    #[serde(default)]
+    pub team_channels: HashMap<String, String>,
 }
 
 /// How many durations are kept per repo.

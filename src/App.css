@@ -346,6 +346,51 @@ button {
   color: var(--muted);
 }
 
+.chip-link {
+  cursor: pointer;
+}
+
+.chip-link:hover,
+.chip-link:focus-visible {
+  border-color: var(--accent);
+  outline: none;
+}
+
+/* No Slack channel yet: hint that the chip can be linked. */
+.chip-unlinked {
+  border-style: dashed;
+}
+
+.team-form {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 0 12px 8px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.team-form input {
+  width: 100%;
+  margin-top: 2px;
+  padding: 4px 6px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--fg);
+  font: inherit;
+  user-select: text;
+}
+
+.team-form .form-error {
+  margin: 0;
+}
+
+.team-form-actions {
+  display: flex;
+  gap: 10px;
+}
+
 .chip-approved {
   color: var(--success);
 }

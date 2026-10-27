@@ -203,6 +203,9 @@ pub enum RequestedReviewer {
     },
     Team {
         slug: String,
+        /// `org/slug`; slugs alone are only unique within an organization.
+        #[serde(default, rename = "combinedSlug")]
+        combined_slug: Option<String>,
     },
     #[serde(other)]
     Other,
