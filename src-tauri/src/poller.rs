@@ -11,10 +11,10 @@ use std::time::Duration;
 use chrono::{DateTime, Local, NaiveDate, Utc};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager};
-use tauri_plugin_notification::NotificationExt;
 use tokio::sync::Notify;
 
 use crate::auth::{self, AuthError, TokenSource};
+use crate::card;
 use crate::checks;
 use crate::github::types::{PullRequest, RequestedReviewer};
 use crate::github::{self, FetchError};
@@ -44,6 +44,8 @@ pub struct Snapshot {
     pub auth_choice: Option<TokenSource>,
     /// Whether a token is saved in the keychain, used or not.
     pub has_saved_token: bool,
+    /// Notification cards are muted.
+    pub notifications_muted: bool,
     /// Wall-clock time, so staleness survives the machine sleeping.
     pub fetched_at: Option<DateTime<Utc>>,
     pub sso_partial: bool,
@@ -166,6 +168,20 @@ impl Poller {
         self.refresh();
     }
 
+    /// Mutes or unmutes the notification cards. Muting drops those showing
+    /// and queued.
+    pub fn set_notifications_muted(&self, app: &AppHandle, muted: bool) {
+        {
+            let mut memory = self.memory.lock().unwrap();
+            memory.notifications_muted = muted;
+            self.save(&memory);
+        }
+        if muted {
+            card::clear(app);
+        }
+        self.update(app, |s| s.notifications_muted = muted);
+    }
+
     fn auth_source(&self) -> Option<TokenSource> {
         self.memory.lock().unwrap().auth_source
     }
@@ -268,6 +284,7 @@ pub fn start(app: &AppHandle) -> Arc<Poller> {
             token_source: None,
             auth_choice: None,
             has_saved_token: false,
+            notifications_muted: memory.notifications_muted,
             fetched_at: None,
             sso_partial: false,
             pull_requests: Vec::new(),
@@ -479,16 +496,13 @@ async fn poll_once(app: &AppHandle, poller: &Poller) -> Result<(), Problem> {
             notify::compose(&events, cold_start)
         }
     };
-    for notification in notifications {
-        let shown = app
-            .notification()
-            .builder()
-            .title(&notification.title)
-            .body(&notification.body)
-            .show();
-        if let Err(e) = shown {
-            log::warn!("Could not show notification: {e}");
-        }
+    // The list already shows what changed while it's open, and muting drops
+    // the cards, but both still count the events as seen.
+    let popover_open = app
+        .get_webview_window("main")
+        .is_some_and(|window| window.is_visible().unwrap_or(false));
+    if !popover_open && !poller.memory.lock().unwrap().notifications_muted {
+        card::enqueue(app, notifications);
     }
 
     poller.update(app, |s| {

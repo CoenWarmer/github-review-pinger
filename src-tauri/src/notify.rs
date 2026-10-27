@@ -4,6 +4,7 @@
 use std::collections::HashSet;
 
 use chrono::{DateTime, Duration, TimeZone, Utc};
+use serde::Serialize;
 
 use crate::calendar;
 use crate::memory::{Memory, PrMemory};
@@ -37,6 +38,8 @@ pub enum Event {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PrRef {
+    pub id: String,
+    pub url: String,
     pub repo: String,
     pub number: u64,
     pub title: String,
@@ -45,6 +48,8 @@ pub struct PrRef {
 impl PrRef {
     fn of(view: &PrView) -> Self {
         Self {
+            id: view.id.clone(),
+            url: view.url.clone(),
             repo: view.repo.clone(),
             number: view.number,
             title: view.title.clone(),
@@ -53,21 +58,43 @@ impl PrRef {
 
     fn of_review(view: &ReviewView) -> Self {
         Self {
+            id: view.id.clone(),
+            url: view.url.clone(),
             repo: view.repo.clone(),
             number: view.number,
             title: view.title.clone(),
         }
     }
 
-    fn label(&self) -> String {
-        format!("{}#{}: {}", self.repo, self.number, self.title)
+    fn reference(&self) -> String {
+        format!("{}#{}", self.repo, self.number)
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// How urgent a card looks.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Accent {
+    Danger,
+    Info,
+    Warning,
+    Success,
+}
+
+/// What a notification card shows.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Notification {
+    pub accent: Accent,
+    pub label: String,
+    /// The PR title, or the summary text of a summary card.
     pub title: String,
-    pub body: String,
+    /// `repo#number`.
+    pub meta: Option<String>,
+    pub detail: Option<String>,
+    /// The PR this is about, so clicking it can open the PR.
+    pub pr_id: Option<String>,
+    pub url: Option<String>,
 }
 
 /// Records `views` and `reviews` in `memory` and returns what changed since
@@ -163,55 +190,77 @@ pub fn compose(events: &[Event], cold_start: bool) -> Vec<Notification> {
         return Vec::new();
     }
     if cold_start || events.len() > MAX_INDIVIDUAL {
-        let title = if cold_start {
+        let label = if cold_start {
             "While you were away"
         } else {
             "Pull request updates"
         };
         return vec![Notification {
-            title: title.to_string(),
-            body: summary(events),
+            accent: Accent::Info,
+            label: label.to_string(),
+            title: summary(events),
+            meta: None,
+            detail: None,
+            pr_id: None,
+            url: None,
         }];
     }
     events.iter().map(single).collect()
 }
 
+fn card(accent: Accent, label: &str, pr: &PrRef, detail: impl Into<String>) -> Notification {
+    Notification {
+        accent,
+        label: label.to_string(),
+        title: pr.title.clone(),
+        meta: Some(pr.reference()),
+        detail: Some(detail.into()),
+        pr_id: Some(pr.id.clone()),
+        url: Some(pr.url.clone()),
+    }
+}
+
 fn single(event: &Event) -> Notification {
     match event {
         Event::Response { pr, response } => {
-            let verb = match response.kind {
-                ResponseKind::Approved => "approved",
-                ResponseKind::ChangesRequested => "requested changes",
-                ResponseKind::Commented => "commented",
+            let (accent, label, verb) = match response.kind {
+                ResponseKind::Approved => (Accent::Success, "Approved", "approved"),
+                ResponseKind::ChangesRequested => {
+                    (Accent::Danger, "Changes requested", "requested changes")
+                }
+                ResponseKind::Commented => (Accent::Info, "New feedback", "commented"),
             };
-            Notification {
-                title: format!("{} {verb}", response.login),
-                body: pr.label(),
-            }
+            card(accent, label, pr, format!("{} {verb}", response.login))
         }
-        Event::Stale { pr } => Notification {
-            title: "Still waiting on review".to_string(),
-            body: pr.label(),
-        },
+        Event::Stale { pr } => card(
+            Accent::Warning,
+            "Waiting on review",
+            pr,
+            "Still waiting on review",
+        ),
         Event::ReviewRequested {
             pr,
             author,
             rerequested,
-        } => Notification {
-            title: format!(
-                "{author} {} your review",
-                if *rerequested {
-                    "re-requested"
-                } else {
-                    "requested"
-                }
-            ),
-            body: pr.label(),
-        },
-        Event::ReviewStale { pr } => Notification {
-            title: "Still waiting on your review".to_string(),
-            body: pr.label(),
-        },
+        } => {
+            let (label, verb) = if *rerequested {
+                ("Re-requested", "re-requested")
+            } else {
+                ("Review requested", "requested")
+            };
+            card(
+                Accent::Info,
+                label,
+                pr,
+                format!("{author} {verb} your review"),
+            )
+        }
+        Event::ReviewStale { pr } => card(
+            Accent::Warning,
+            "Waiting on your review",
+            pr,
+            "Still waiting on your review",
+        ),
     }
 }
 
@@ -452,6 +501,8 @@ mod tests {
     fn approval(login: &str) -> Event {
         Event::Response {
             pr: PrRef {
+                id: "a".into(),
+                url: "https://github.com/o/r/pull/7".into(),
                 repo: "o/r".into(),
                 number: 7,
                 title: "Fix it".into(),
@@ -466,8 +517,13 @@ mod tests {
         assert_eq!(
             notes,
             vec![Notification {
-                title: "ana approved".into(),
-                body: "o/r#7: Fix it".into(),
+                accent: Accent::Success,
+                label: "Approved".into(),
+                title: "Fix it".into(),
+                meta: Some("o/r#7".into()),
+                detail: Some("ana approved".into()),
+                pr_id: Some("a".into()),
+                url: Some("https://github.com/o/r/pull/7".into()),
             }]
         );
     }
@@ -476,6 +532,8 @@ mod tests {
     fn many_events_or_a_cold_start_are_summarized() {
         let stale = Event::Stale {
             pr: PrRef {
+                id: "b".into(),
+                url: String::new(),
                 repo: "o/r".into(),
                 number: 8,
                 title: "Other".into(),
@@ -485,13 +543,18 @@ mod tests {
         assert_eq!(
             notes,
             vec![Notification {
-                title: "While you were away".into(),
-                body: "2 approvals and 1 PR still waiting on review".into(),
+                accent: Accent::Info,
+                label: "While you were away".into(),
+                title: "2 approvals and 1 PR still waiting on review".into(),
+                meta: None,
+                detail: None,
+                pr_id: None,
+                url: None,
             }]
         );
 
         let many: Vec<Event> = (0..4).map(|_| approval("ana")).collect();
-        assert_eq!(compose(&many, false)[0].title, "Pull request updates");
+        assert_eq!(compose(&many, false)[0].label, "Pull request updates");
     }
 
     #[test]
@@ -529,8 +592,13 @@ mod tests {
         assert_eq!(
             single(&events[0]),
             Notification {
-                title: "ana re-requested your review".into(),
-                body: "o/r#5: Add it".into(),
+                accent: Accent::Info,
+                label: "Re-requested".into(),
+                title: "Add it".into(),
+                meta: Some("o/r#5".into()),
+                detail: Some("ana re-requested your review".into()),
+                pr_id: Some("r".into()),
+                url: Some(String::new()),
             }
         );
     }
@@ -612,6 +680,8 @@ mod tests {
     #[test]
     fn review_events_are_summarized() {
         let pr = PrRef {
+            id: "r".into(),
+            url: String::new(),
             repo: "o/r".into(),
             number: 5,
             title: "Add it".into(),
@@ -631,7 +701,7 @@ mod tests {
             approval("cy"),
         ];
         assert_eq!(
-            compose(&events, false)[0].body,
+            compose(&events, false)[0].title,
             "1 approval, 2 review requests and 1 PR still waiting on your review"
         );
     }

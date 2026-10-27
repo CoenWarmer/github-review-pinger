@@ -22,7 +22,6 @@ import { useNow, useSnapshot } from "./hooks";
 import { SlackContext } from "./slack";
 import { SORT_OPTIONS, sortRows, useSectionSort, type SortKey } from "./sort";
 import type { Group, ReviewGroup, Snapshot } from "./types";
-import "./index.css";
 
 const SECTIONS: { group: Group; title: string }[] = [
   { group: "approved", title: "Approved" },
@@ -227,6 +226,7 @@ function App() {
               account={snapshot.viewer}
               authSource={snapshot.authChoice ?? (snapshot.hasSavedToken ? "pat" : "gh")}
               hasSavedToken={snapshot.hasSavedToken}
+              notificationsMuted={snapshot.notificationsMuted}
               channels={snapshot.teamChannels}
             />
           ) : tab === "mine" ? (

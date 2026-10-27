@@ -77,6 +77,20 @@ export type Problem =
 
 export type Status = { kind: "loading" } | { kind: "ok" } | { kind: "error"; problem: Problem };
 
+/** A notification card on screen. */
+export interface CardNotification {
+  /** Numbers the card, so dismissing one can't dismiss its successor. */
+  seq: number;
+  accent: "danger" | "info" | "warning" | "success";
+  label: string;
+  /** The PR title, or the summary text of a summary card. */
+  title: string;
+  meta: string | null;
+  detail: string | null;
+  prId: string | null;
+  url: string | null;
+}
+
 export interface TeamChannel {
   link: string;
   /** Pasted into the popover, or configured in settings.json. */
@@ -92,6 +106,8 @@ export interface Snapshot {
   authChoice: TokenSource | null;
   /** A token is in the keychain, used or not. */
   hasSavedToken: boolean;
+  /** Notification cards are muted. */
+  notificationsMuted: boolean;
   fetchedAt: string | null;
   ssoPartial: boolean;
   pullRequests: PullRequest[];

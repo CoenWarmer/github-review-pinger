@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
+import { Switch } from "@/components/ui/switch";
 import { TeamChannelForm } from "../slack";
 import type { TeamChannel, TokenSource } from "../types";
 import { TokenForm } from "./Setup";
@@ -17,6 +18,7 @@ export function SettingsPanel({
   account,
   authSource,
   hasSavedToken,
+  notificationsMuted,
   channels,
 }: {
   /** Who is signed in. */
@@ -24,6 +26,8 @@ export function SettingsPanel({
   /** Which token the app uses. */
   authSource: TokenSource;
   hasSavedToken: boolean;
+  /** Notification cards are muted. */
+  notificationsMuted: boolean;
   /** Slack channels by team. */
   channels: Record<string, TeamChannel>;
 }) {
@@ -62,6 +66,30 @@ export function SettingsPanel({
           </Label>
         </div>
         {error && <p className="m-0 text-destructive">{error}</p>}
+      </Section>
+      <Section>
+        <Heading>Notifications</Heading>
+        <div className="flex items-center gap-2">
+          <Switch
+            id="mute"
+            checked={notificationsMuted}
+            onCheckedChange={(muted) =>
+              invoke("set_notifications_muted", { muted })
+            }
+          />
+          <Label htmlFor="mute" className="font-normal">
+            Mute notifications
+          </Label>
+        </div>
+        <Button
+          type="button"
+          variant="outline"
+          size="xs"
+          className="mt-3"
+          onClick={() => invoke("send_test_notification")}
+        >
+          Send test notification
+        </Button>
       </Section>
       <Section>
         <Heading>Authentication</Heading>
@@ -128,7 +156,7 @@ function SlackChannels({
           to add one.
         </p>
       ) : (
-        <ul className="m-0 list-none p-0">
+        <ul className="m-0 list-none p-0 pb-6">
           {teams.map((team) => {
             const { link, source } = channels[team];
             const saved = source === "saved";

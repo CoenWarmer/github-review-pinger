@@ -1,5 +1,6 @@
 mod auth;
 mod calendar;
+mod card;
 mod checks;
 mod github;
 mod memory;
@@ -72,6 +73,42 @@ fn toggle_popover(app: &AppHandle) {
 #[tauri::command]
 fn get_snapshot(poller: State<Arc<Poller>>) -> Snapshot {
     poller.snapshot()
+}
+
+#[tauri::command]
+fn card_current(app: AppHandle) -> Option<card::Shown> {
+    card::current(&app)
+}
+
+#[tauri::command]
+fn card_resize(app: AppHandle, height: f64) {
+    card::resize(&app, height);
+}
+
+#[tauri::command]
+fn card_hovered(app: AppHandle) -> bool {
+    card::hovered(&app)
+}
+
+#[tauri::command]
+fn card_done(app: AppHandle, seq: u64) {
+    card::done(&app, seq);
+}
+
+/// A summary card has no PR to open, so clicking it shows the list.
+#[tauri::command]
+fn card_show_popover(app: AppHandle) {
+    show_popover(&app);
+}
+
+#[tauri::command]
+fn send_test_notification(app: AppHandle) {
+    card::send_test(&app);
+}
+
+#[tauri::command]
+fn set_notifications_muted(app: AppHandle, poller: State<Arc<Poller>>, muted: bool) {
+    poller.set_notifications_muted(&app, muted);
 }
 
 #[tauri::command]
@@ -169,7 +206,6 @@ pub fn run() {
                 .build(),
         )
         .plugin(tauri_plugin_opener::init())
-        .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_autostart::init(
             MacosLauncher::LaunchAgent,
             None,
@@ -179,6 +215,13 @@ pub fn run() {
             get_snapshot,
             refresh,
             visit,
+            card_current,
+            card_resize,
+            card_done,
+            card_hovered,
+            card_show_popover,
+            send_test_notification,
+            set_notifications_muted,
             set_team_channel,
             remove_team_channel,
             save_token,
@@ -230,6 +273,7 @@ pub fn run() {
                 })
                 .build(app)?;
 
+            app.manage(card::Cards::default());
             let poller = poller::start(app.handle());
             // Launch at login defaults to on, but a dev build shouldn't
             // register itself as a login item.

@@ -31,6 +31,9 @@ pub struct Memory {
     /// Which token to use, once the user has picked.
     #[serde(default)]
     pub auth_source: Option<TokenSource>,
+    /// Notification cards are muted.
+    #[serde(default)]
+    pub notifications_muted: bool,
 }
 
 /// How many durations are kept per repo.
