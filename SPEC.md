@@ -2,7 +2,7 @@
 
 A cross-platform tray app that shows, at a glance, the open pull requests you
 authored on github.com, their per-reviewer review state, and how long they
-have been open and waiting.
+have been open and waiting, plus the pull requests waiting on your review.
 
 ## Stack and platforms
 
@@ -32,16 +32,25 @@ Each refresh takes three steps, because a single search query with every
 field takes ~11 s per 25 PRs and regularly hits GitHub's ~10 s GraphQL
 timeout:
 
-1. `search(type: ISSUE, query: "is:pr is:open author:@me archived:false")`
-   for ids only, 100 per page (~3 s).
-2. `nodes(ids:)` for the details in batches of 10, up to 8 concurrently
-   (~2 s each): `isDraft`, `createdAt`, `reviewDecision`, `mergeable`,
-   `autoMergeRequest`, head commit `committedDate` and `statusCheckRollup`,
-   `reviewRequests`, latest reviews, and timeline items (ready-for-review,
-   review-requested, reviews, comments).
-3. `mergeStateStatus` only for PRs that could be ready to merge (approved,
-   green, mergeable, no auto-merge), since GitHub computes it on demand and
-   it doubles a PR's cost.
+1. Three `search(type: ISSUE, ...)` queries run concurrently, for ids only,
+   100 per page (~3 s). All have `is:pr is:open archived:false`:
+   - `author:@me`: your own PRs.
+   - `review-requested:@me -author:@me`: PRs waiting on your review. GitHub
+     matches requests made to you directly or to a team you belong to.
+   - `reviewed-by:@me -author:@me updated:>=<date>`: PRs you've already
+     reviewed, limited to those updated within `dormantAfterDays`, since the
+     open PRs you ever reviewed would otherwise pile up.
+2. `nodes(ids:)` for the details of the union of those ids, in batches of 10,
+   up to 8 concurrently (~2 s each): `author`, `isDraft`, `createdAt`,
+   `reviewDecision`, `mergeable`, `autoMergeRequest`, head commit
+   `committedDate` and `statusCheckRollup`, `reviewRequests`, latest reviews
+   (with `submittedAt`), and timeline items (ready-for-review,
+   review-requested with the requested reviewer, reviews, comments). Each PR
+   is then filed under "yours" or "review", and "review" PRs remember
+   whether they came back from the `review-requested` search.
+3. `mergeStateStatus` only for your own PRs that could be ready to merge
+   (approved, green, mergeable, no auto-merge), since GitHub computes it on
+   demand and it doubles a PR's cost.
 
 A refresh takes ~5–8 s for ~70 PRs (previously ~38 s). 5xx responses are
 retried twice per request.
@@ -67,12 +76,46 @@ retried twice per request.
 | **Dormant** | A non-draft PR whose last activity is older than `dormantAfterDays` (default 30). Listed in its own collapsed section, never counted or nudged. Any push or human comment revives it. |
 | **Needs action** | Any of the five states above, excluding drafts, dormant, and snoozed PRs. Counted in the tray whether the PR sits in Approved or Needs your action. |
 
+### Review requests
+
+PRs by others that involve you, derived separately from the rules above. They
+come from the `review-requested` and `reviewed-by` searches and exclude PRs
+you authored.
+
+| Concept | Rule |
+| --- | --- |
+| **Requested** | The PR came back from the `review-requested:@me` search: you or one of your teams is a pending reviewer. |
+| **Waiting since** | When it became your turn: the latest review-request event naming you, if you're a pending reviewer yourself, otherwise the latest one naming a team. Never earlier than the open clock, and the open clock when no event is visible. |
+| **Re-requested** | Requested, and you've already submitted a review. |
+| **Reviewed** | Your latest submitted review (approval, change request, or comment). Dismissed and pending reviews don't count. |
+
+PRs that are neither requested nor reviewed by you are dropped. Groups, in
+order:
+
+1. **Needs your review**: requested, not a draft, not snoozed. Longest
+   waiting first.
+2. **Waiting on author**: reviewed by you but no longer requested, whatever
+   your verdict, until the PR merges or closes. Most recently active first.
+   A new request moves it back to Needs your review.
+3. **Snoozed**: collapsed, most recently active first.
+4. **Drafts**: collapsed and not counted.
+
+Only **Needs your review** is counted. Other reviewers' chips use the same
+rules as your own PRs, leaving out you and the author.
+
 ## Tray icon
 
-Shows the number of PRs needing action (title text on macOS, overlay badge
-elsewhere). Zero means nothing to do.
+Shows two numbers, PRs needing your action and reviews needing you, as title
+text, for example `3 · 2` (macOS and Linux; Windows only has the tooltip,
+which spells both out). Both are always shown, so position is the cue; when
+both are zero there is no title at all.
 
 ## Popover
+
+Two tabs, **My PRs** and **Review Requests**, each with a count badge: the
+numbers in the tray. The tab choice is not remembered between openings.
+
+### My PRs
 
 Grouped, top to bottom. Within every section the stalest PRs are at the
 bottom:
@@ -102,6 +145,14 @@ reveals Snooze (1 day, 3 days, 1 week), which moves it to Snoozed: out of the
 count and never nudged, though new reviews still notify. Snoozed rows offer
 Unsnooze.
 
+### Review Requests
+
+The groups above, as sections. Each row shows repo, title, author, and
+`waiting 2d` (the waiting-since clock) for requested PRs or `reviewed 3d ago`
+for the rest, a `↻ re-requested` badge, your own verdict chip, and the other
+reviewers' chips. Rows can be snoozed like your own: out of the count and
+never nudged, though a new request still notifies.
+
 The footer shows when data was refreshed, a Refresh button, and Settings:
 launch at login (on by default in release builds) and the token form.
 
@@ -114,9 +165,13 @@ Support/dev.coenwarmer.reviewpinger/` on macOS), re-read on every poll:
 {
   "ignoredLogins": ["kibanamachine", "elasticmachine"],
   "dormantAfterDays": 30,
-  "nudgeAfterHours": 24
+  "nudgeAfterHours": 24,
+  "reviewNudgeAfterHours": 24
 }
 ```
+
+`reviewNudgeAfterHours` is the same threshold as `nudgeAfterHours`, for PRs
+waiting on you.
 
 ## Notifications
 
@@ -128,13 +183,23 @@ Support/dev.coenwarmer.reviewpinger/` on macOS), re-read on every poll:
   `nudgeAfterHours` (default 24) of weekday time in the local time zone.
   Weekdays count in full, so 24 hours is one working day; a Friday-afternoon
   PR is nudged Monday afternoon. A new response starts a new quiet period.
+- One notification when someone requests your review, or re-requests it
+  after you've reviewed ("ana requested your review"). Applies to snoozed
+  PRs too, not drafts.
+- Review nudge: once per waiting period for PRs in Needs your review, after
+  `reviewNudgeAfterHours` (default 24) of weekday time since waiting-since,
+  counted like the staleness nudge. A re-request starts a new waiting period.
+  Reviews you merely participate in don't notify about other people's
+  responses.
 - More than 3 events in one poll are folded into a single summary
-  ("2 approvals and 1 PR still waiting on review").
+  ("2 approvals and 1 PR still waiting on review"); review requests count as
+  "review requests" and review nudges as "PRs still waiting on your review".
 - The first poll after launch, or after a gap of more than 15 minutes (sleep,
   offline), sends one "While you were away" summary instead of replaying.
 - The very first poll after install is silent: everything is marked seen and
-  overdue PRs as nudged; the list itself shows what's pending.
-- Seen responses, nudged quiet periods, and snoozes persist in `state.json`
+  overdue PRs (including ones waiting on you) as nudged; the list itself shows what's pending.
+- Seen responses, notified review requests, nudged quiet and waiting
+  periods, and snoozes persist in `state.json`
   in the app data directory, written atomically. Closed PRs are pruned.
 
 ## Distribution
