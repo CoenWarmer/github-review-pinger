@@ -7,7 +7,7 @@
     "dev": "pnpm --filter @review-pinger/wasm build:wasm && vite",
     "build": "pnpm --filter @review-pinger/wasm build:wasm && tsc && vite build",
     "preview": "vite preview",
-    "test": "node --test src/*.test.ts",
+    "test": "pnpm --filter @review-pinger/wasm build:wasm && node --test src/*.test.ts",
     "live": "node scripts/live.ts"
   },
   "dependencies": {
