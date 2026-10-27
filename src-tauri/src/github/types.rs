@@ -47,6 +47,8 @@ pub struct PullRequest {
     pub latest_reviews: Option<Nodes<Review>>,
     #[serde(default)]
     pub latest_opinionated_reviews: Option<Nodes<Review>>,
+    #[serde(default)]
+    pub reviews: Nodes<Review>,
     pub timeline_items: Nodes<TimelineItem>,
 }
 
@@ -151,6 +153,9 @@ pub enum RequestedReviewer {
 #[derive(Debug, Deserialize)]
 pub struct Review {
     pub state: ReviewState,
+    /// `None` for pending reviews, and not requested for `latestReviews`.
+    #[serde(default, rename = "submittedAt")]
+    pub submitted_at: Option<DateTime<Utc>>,
     pub author: Option<Actor>,
 }
 
@@ -181,11 +186,6 @@ pub enum TimelineItem {
     },
     ReviewRequestedEvent {
         created_at: DateTime<Utc>,
-    },
-    PullRequestReview {
-        state: ReviewState,
-        submitted_at: Option<DateTime<Utc>>,
-        author: Option<Actor>,
     },
     IssueComment {
         created_at: DateTime<Utc>,
