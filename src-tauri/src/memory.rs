@@ -18,7 +18,14 @@ pub struct Memory {
     pub pull_requests: HashMap<String, PrMemory>,
     #[serde(default)]
     pub autostart_initialized: bool,
+    /// How long recent successful check runs took, in seconds, by repo,
+    /// oldest first.
+    #[serde(default)]
+    pub check_durations: HashMap<String, Vec<u64>>,
 }
+
+/// How many durations are kept per repo.
+const MAX_DURATIONS: usize = 10;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -34,6 +41,20 @@ pub struct PrMemory {
     /// falls back to `seen_until`.
     #[serde(default)]
     pub requested_seen_until: Option<DateTime<Utc>>,
+    /// The checks of the head commit being timed.
+    #[serde(default)]
+    pub checks_run: Option<ChecksRun>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChecksRun {
+    /// The head commit the checks run on.
+    pub oid: String,
+    pub started_at: DateTime<Utc>,
+    /// Done, so a still-pending status afterwards is a re-run.
+    #[serde(default)]
+    pub finished: bool,
 }
 
 impl PrMemory {
@@ -43,6 +64,7 @@ impl PrMemory {
             nudged_for: None,
             snoozed_until: None,
             requested_seen_until: None,
+            checks_run: None,
         }
     }
 }
@@ -73,6 +95,14 @@ impl Memory {
             .iter()
             .filter_map(|(id, pr)| pr.snoozed_until.map(|until| (id.clone(), until)))
             .collect()
+    }
+
+    pub fn record_check_duration(&mut self, repo: &str, secs: u64) {
+        let durations = self.check_durations.entry(repo.to_string()).or_default();
+        durations.push(secs);
+        if durations.len() > MAX_DURATIONS {
+            durations.remove(0);
+        }
     }
 
     pub fn set_snooze(&mut self, id: &str, until: Option<DateTime<Utc>>, now: DateTime<Utc>) {

@@ -514,13 +514,14 @@ mod tests {
                 })
                 .collect();
             println!(
-                "{:?} {:?} {}#{} open={} quiet={} [{}]",
+                "{:?} {:?} {}#{} open={} quiet={} checks_started={:?} [{}]",
                 pr.group,
                 pr.actions,
                 pr.repo,
                 pr.number,
                 pr.open_since.format("%m-%d"),
                 pr.quiet_since.format("%m-%d"),
+                pr.checks_started,
                 reviewers.join(", ")
             );
         }

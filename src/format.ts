@@ -13,3 +13,14 @@ export function dayAndTime(iso: string): string {
 export function clockTime(iso: string): string {
   return new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 }
+
+/** How far along running checks are, from 0 to 1, or null when there's no estimate. */
+export function checksProgress(
+  started: string | null,
+  estimateSecs: number | null,
+  now: number,
+): number | null {
+  if (!started || !estimateSecs) return null;
+  const elapsedSecs = Math.max(0, (now - Date.parse(started)) / 1000);
+  return Math.min(1, elapsedSecs / estimateSecs);
+}

@@ -15,6 +15,7 @@ use tauri_plugin_notification::NotificationExt;
 use tokio::sync::Notify;
 
 use crate::auth::{self, AuthError, TokenSource};
+use crate::checks;
 use crate::github::types::{PullRequest, RequestedReviewer};
 use crate::github::{self, FetchError};
 use crate::memory::Memory;
@@ -149,14 +150,24 @@ impl Poller {
         now: DateTime<Utc>,
     ) -> (Vec<PrView>, Vec<ReviewView>) {
         let settings = settings::load(app);
-        let snoozed = self.memory.lock().unwrap().snoozes();
+        let (snoozed, estimates) = {
+            let memory = self.memory.lock().unwrap();
+            (
+                memory.snoozes(),
+                checks::estimates(&memory, &settings.check_durations),
+            )
+        };
         let rules = prs::Rules {
             ignored_logins: &settings.ignored_logins,
             dormant_after: dormant_after(&settings),
             snoozed: &snoozed,
         };
+        let mut views = prs::derive(&fetched.pull_requests, &fetched.viewer, &rules, now);
+        for view in &mut views {
+            view.checks_estimate_secs = estimates.get(&view.repo).copied();
+        }
         (
-            prs::derive(&fetched.pull_requests, &fetched.viewer, &rules, now),
+            views,
             reviews::derive(&fetched.review_pull_requests, &fetched.viewer, &rules, now),
         )
     }
@@ -385,6 +396,7 @@ async fn poll_once(app: &AppHandle, poller: &Poller) -> Result<(), Problem> {
             review_nudge_after,
             &Local,
         );
+        checks::track(&fetched.pull_requests, &mut memory);
         poller.save(&memory);
         // Right after install everything is new; the list itself says what's pending.
         if first_ever {

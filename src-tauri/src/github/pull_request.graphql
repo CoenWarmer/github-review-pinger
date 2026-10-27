@@ -21,9 +21,25 @@ fragment PullRequestFields on PullRequest {
   commits(last: 1) {
     nodes {
       commit {
+        oid
         committedDate
         statusCheckRollup {
           state
+          # Timestamps only, to time how long checks take.
+          contexts(first: 50) {
+            nodes {
+              __typename
+              ... on CheckRun {
+                status
+                startedAt
+                completedAt
+              }
+              ... on StatusContext {
+                state
+                createdAt
+              }
+            }
+          }
         }
       }
     }

@@ -1,5 +1,6 @@
 mod auth;
 mod calendar;
+mod checks;
 mod github;
 mod memory;
 mod notify;

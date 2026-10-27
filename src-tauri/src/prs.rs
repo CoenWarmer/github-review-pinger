@@ -92,6 +92,10 @@ pub struct PrView {
     /// Has the approvals it needs; any further wait is on checks or merging.
     pub approved: bool,
     pub checks: Checks,
+    /// When the running checks started; only while they're running.
+    pub checks_started: Option<DateTime<Utc>>,
+    /// How long checks usually take in this repo, if known.
+    pub checks_estimate_secs: Option<u64>,
     pub auto_merge: bool,
     pub reviewers: Vec<Reviewer>,
     /// Reviews and comments from other humans, oldest first, for notifications.
@@ -229,6 +233,10 @@ fn view(pr: &PullRequest, people: &People, rules: &Rules, now: DateTime<Utc>) ->
         snoozed_until,
         approved,
         checks,
+        checks_started: (checks == Checks::Pending)
+            .then(|| crate::checks::timing(pr).0)
+            .flatten(),
+        checks_estimate_secs: None,
         auto_merge: pr.auto_merge_request.is_some(),
         reviewers,
         responses,
@@ -409,7 +417,7 @@ pub(crate) fn reviewers(pr: &PullRequest, people: &People) -> Vec<Reviewer> {
     reviewers
 }
 
-fn checks(pr: &PullRequest) -> Checks {
+pub(crate) fn checks(pr: &PullRequest) -> Checks {
     let rollup = pr
         .commits
         .iter()

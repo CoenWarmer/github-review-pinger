@@ -1,7 +1,7 @@
-import { useState } from "react";
+import { useState, type CSSProperties } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { dayAndTime, elapsed } from "../format";
+import { checksProgress, dayAndTime, elapsed } from "../format";
 import type { Action, PullRequest, Reviewer, ReviewerState } from "../types";
 
 /** Opens the PR on GitHub, and has it refreshed first the next time the popover shows. */
@@ -92,12 +92,25 @@ export function PrRow({ pr, now }: { pr: PullRequest; now: number }) {
   const showActions =
     pr.group === "approved" || pr.group === "needsAction" || pr.group === "waiting";
   // Neutral context for why an approved PR isn't "ready to merge" yet.
-  const notes = showActions
-    ? [
-        pr.checks === "pending" && { label: "Checks running", className: "badge-checksRunning" },
-        pr.autoMerge && { label: "Auto-merge", className: "badge-autoMerge" },
-      ].filter((note) => note !== false)
-    : [];
+  const progress = checksProgress(pr.checksStarted, pr.checksEstimateSecs, now);
+  const runningFor = pr.checksStarted && elapsed(pr.checksStarted, now);
+  const notes: { label: string; className: string; style?: CSSProperties; title?: string }[] =
+    showActions
+      ? [
+          pr.checks === "pending" && {
+            label: runningFor ? `Checks running · ${runningFor}` : "Checks running",
+            className: `badge-checksRunning${progress !== null ? " badge-progress" : ""}`,
+            style: progress !== null ? ({ "--progress": `${progress * 100}%` } as CSSProperties) : undefined,
+            title:
+              pr.checksEstimateSecs && pr.checksStarted
+                ? `Running for ${runningFor}, usually about ${Math.round(pr.checksEstimateSecs / 60)}m${
+                    progress === 1 ? " (taking longer than usual)" : ""
+                  }`
+                : undefined,
+          },
+          pr.autoMerge && { label: "Auto-merge", className: "badge-autoMerge" },
+        ].filter((note) => note !== false)
+      : [];
 
   return (
     <li className="pr">
@@ -117,8 +130,8 @@ export function PrRow({ pr, now }: { pr: PullRequest; now: number }) {
                   {ACTION_LABELS[action]}
                 </span>
               ))}
-            {notes.map(({ label, className }) => (
-              <span key={label} className={`badge ${className}`}>
+            {notes.map(({ label, className, style, title }) => (
+              <span key={className} className={`badge ${className}`} style={style} title={title}>
                 {label}
               </span>
             ))}

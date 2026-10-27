@@ -36,6 +36,10 @@ export interface PullRequest {
   snoozedUntil: string | null;
   approved: boolean;
   checks: "passing" | "pending" | "failing" | "none";
+  /** When the running checks started; only while they're running. */
+  checksStarted: string | null;
+  /** How long checks usually take in this repo, if known. */
+  checksEstimateSecs: number | null;
   autoMerge: boolean;
   reviewers: Reviewer[];
 }

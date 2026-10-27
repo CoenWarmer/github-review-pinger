@@ -304,6 +304,15 @@ button {
   background: var(--warning-bg);
 }
 
+/* Fills left to right as the checks near their usual duration. */
+.badge-progress {
+  background: linear-gradient(
+    to right,
+    color-mix(in srgb, var(--warning) 32%, var(--warning-bg)) var(--progress),
+    var(--warning-bg) var(--progress)
+  );
+}
+
 .badge-autoMerge {
   color: var(--success);
   background: var(--success-bg);

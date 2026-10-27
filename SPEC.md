@@ -43,7 +43,8 @@ timeout:
 2. `nodes(ids:)` for the details of the union of those ids, in batches of 10,
    up to 8 concurrently (~2 s each): `author`, `isDraft`, `createdAt`,
    `reviewDecision`, `mergeable`, `autoMergeRequest`, head commit
-   `committedDate` and `statusCheckRollup`, `reviewRequests`, latest reviews
+   `oid`, `committedDate` and `statusCheckRollup` (with timestamps of its
+   first 50 contexts), `reviewRequests`, latest reviews
    (with `submittedAt`), and timeline items (ready-for-review,
    review-requested with the requested reviewer, reviews, comments). Each PR
    is then filed under "yours" or "review", and "review" PRs remember
@@ -77,7 +78,7 @@ retried twice per request.
 | **Quiet** clock | Since the last review or comment by someone other than the author, but never earlier than the open clock. Bots (`__typename: Bot`, `[bot]` logins, plus `ignoredLogins` in settings) never reset it. |
 | **Changes requested** | A reviewer's latest opinionated review is `CHANGES_REQUESTED` and the author hasn't re-requested their review since (re-requesting hands the ball back). Falls back to `reviewDecision` when no such review is visible. |
 | **Approved** | `reviewDecision == APPROVED`, or `reviewDecision == null` (no required reviews) with ≥1 approval. |
-| **Ready to merge** | Approved, no outstanding changes requested, checks passed (or none run), `mergeStateStatus` is `CLEAN` or `HAS_HOOKS` (branch protection satisfied), and auto-merge is off. Approved PRs with running checks or auto-merge enabled wait instead, labeled "Checks running" / "Auto-merge". |
+| **Ready to merge** | Approved, no outstanding changes requested, checks passed (or none run), `mergeStateStatus` is `CLEAN` or `HAS_HOOKS` (branch protection satisfied), and auto-merge is off. Approved PRs with running checks or auto-merge enabled wait instead, labeled "Checks running · 12m" / "Auto-merge". The checks badge shows the time since the checks started and, once an estimate is known (see Check duration), fills left to right like a progress bar, full when it overruns; its tooltip gives the usual duration. |
 | **CI failing** | Head commit `statusCheckRollup.state` is `FAILURE` or `ERROR`. |
 | **New feedback** | Another human's comment (a comment review, inline or not, or a plain PR comment) is newer than the author's last push, own comment or reply, or review request. Approvals and change requests don't trigger it, and it's suppressed while changes are requested. |
 | **Conflicts** | `mergeable == CONFLICTING`. |
@@ -111,6 +112,27 @@ order:
 
 Only **Needs your review** is counted. Other reviewers' chips use the same
 rules as your own PRs, leaving out you and the author.
+
+### Check duration
+
+GitHub says when checks started, not how long they will take, so the app
+learns it. Each poll follows the head commit's checks of your own PRs:
+
+- **Start:** the earliest check run `startedAt`, or the `createdAt` of a
+  pending commit status. External CI such as Buildkite reports commit
+  statuses, whose `createdAt` is when the status last changed: the start
+  while pending, the finish once settled.
+- **Run:** first seen pending, the run is remembered with its commit and
+  start. A new push, or pending again after finishing (a retry), starts a
+  new run.
+- **Sample:** when a remembered run settles as passing, its duration (the
+  latest finish minus the remembered start) is recorded for the repo. Failed
+  runs, runs first seen already done, and durations under 30 s or over 6 h
+  are not, since they would skew the estimate. The last 10 per repo are kept
+  in `state.json`.
+- **Estimate:** the median of a repo's samples once it has 3, otherwise
+  `checkDurations` from settings (minutes, by `owner/repo`), otherwise the
+  median of whatever samples exist, otherwise none.
 
 ## Tray icon
 
@@ -180,9 +202,13 @@ Support/dev.coenwarmer.reviewpinger/` on macOS), re-read on every poll:
   "ignoredLogins": ["kibanamachine", "elasticmachine"],
   "dormantAfterDays": 30,
   "nudgeAfterHours": 24,
-  "reviewNudgeAfterHours": 24
+  "reviewNudgeAfterHours": 24,
+  "checkDurations": { "elastic/kibana": 45 }
 }
 ```
+
+`checkDurations` seeds the check duration estimate, in minutes, until enough
+runs have been timed.
 
 `reviewNudgeAfterHours` is the same threshold as `nudgeAfterHours`, for PRs
 waiting on you.

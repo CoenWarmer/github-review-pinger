@@ -282,6 +282,8 @@ mod tests {
             snoozed_until: None,
             approved: false,
             checks: Checks::Passing,
+            checks_started: None,
+            checks_estimate_secs: None,
             auto_merge: false,
             reviewers: Vec::new(),
             responses,

@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::fs;
 
 use serde::Deserialize;
@@ -19,6 +20,9 @@ pub struct Settings {
     pub nudge_after_hours: u32,
     /// Nudge about a PR waiting on your review after this much weekday time.
     pub review_nudge_after_hours: u32,
+    /// How many minutes checks usually take, by `owner/repo`, until enough
+    /// runs have been timed to learn it.
+    pub check_durations: HashMap<String, u32>,
 }
 
 impl Default for Settings {
@@ -28,6 +32,7 @@ impl Default for Settings {
             dormant_after_days: 30,
             nudge_after_hours: 24,
             review_nudge_after_hours: 24,
+            check_durations: HashMap::new(),
         }
     }
 }
