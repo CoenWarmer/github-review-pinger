@@ -171,6 +171,22 @@ until a member reviews, after which that member's chip replaces it. Bots and
 ignored logins only get a chip when explicitly requested (e.g. Copilot);
 re-requested reviewers are marked ↻.
 
+A team chip (`@team`) links to the team's Slack channel, on both tabs, so you
+can ask the team for a review. Clicking it copies the PR's link to the
+clipboard and opens the channel, in the Slack app or the browser per
+`slackOpensIn`; the chip shows "✓ copied" briefly. A team without a channel
+asks for one inline on first click: paste a Slack channel link and it's saved
+to `state.json` and used from then on. Shift-clicking a team chip asks again,
+to change a saved channel. Channels in `settings.json` take precedence over
+saved ones. Teams are keyed by `org/team-slug`, lowercased, since slugs are
+only unique within an organization. Accepted links are Slack channel links on
+`slack.com` (`https://app.slack.com/client/T…/C…` or
+`https://<workspace>.slack.com/archives/C…`) and `slack://` links; anything
+else is rejected, so nothing arbitrary gets opened. For the app, the client
+form becomes `slack://channel?team=T…&id=C…`; an `archives` link is opened as is and
+Slack offers to switch to the app. Slack can't pre-fill a message, which is why
+the link goes on the clipboard.
+
 Clicking a row opens the PR in the default browser. Hovering a non-draft row
 reveals Snooze (1 day, 3 days, 1 week), which moves it to Snoozed: out of the
 count and never nudged, though new reviews still notify. Snoozed rows offer
@@ -203,9 +219,16 @@ Support/dev.coenwarmer.reviewpinger/` on macOS), re-read on every poll:
   "dormantAfterDays": 30,
   "nudgeAfterHours": 24,
   "reviewNudgeAfterHours": 24,
-  "checkDurations": { "elastic/kibana": 45 }
+  "checkDurations": { "elastic/kibana": 45 },
+  "teamChannels": {
+    "elastic/kibana-operations": "https://app.slack.com/client/T0123/C0456"
+  },
+  "slackOpensIn": "app"
 }
 ```
+
+`teamChannels` maps `org/team-slug` to a Slack channel link, and
+`slackOpensIn` is `"app"` (default) or `"browser"`.
 
 `checkDurations` seeds the check duration estimate, in minutes, until enough
 runs have been timed.
