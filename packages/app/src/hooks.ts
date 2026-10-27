@@ -1,23 +1,23 @@
 import { useEffect, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
+import { usePlatform } from "./platform";
 import type { Snapshot } from "./types";
 
 export function useSnapshot(): Snapshot | null {
+  const platform = usePlatform();
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null);
 
   useEffect(() => {
     let cancelled = false;
-    const unlisten = listen<Snapshot>("snapshot", (event) => setSnapshot(event.payload));
-    // An event that arrived while this was in flight is newer, so it wins.
-    invoke<Snapshot>("get_snapshot").then((initial) => {
+    const stop = platform.onSnapshot(setSnapshot);
+    // An update that arrived while this was in flight is newer, so it wins.
+    platform.getSnapshot().then((initial) => {
       if (!cancelled) setSnapshot((current) => current ?? initial);
     });
     return () => {
       cancelled = true;
-      unlisten.then((stop) => stop());
+      stop();
     };
-  }, []);
+  }, [platform]);
 
   return snapshot;
 }

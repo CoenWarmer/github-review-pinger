@@ -168,6 +168,9 @@ importers:
 
   apps/desktop:
     dependencies:
+      '@review-pinger/app':
+        specifier: workspace:*
+        version: link:../../packages/app
       '@tailwindcss/vite':
         specifier: ^4.3.3
         version: 4.3.3(vite@8.3.5(@types/node@26.6.5)(jiti@2.7.0))
@@ -177,6 +180,43 @@ importers:
       '@tauri-apps/plugin-opener':
         specifier: ^2
         version: 2.7.2
+      lucide-react:
+        specifier: ^1.61.0
+        version: 1.61.0(@types/react@19.3.0)(react@19.3.1)
+      react:
+        specifier: ^19.1.0
+        version: 19.3.1
+      react-dom:
+        specifier: ^19.1.0
+        version: 19.3.1(react@19.3.1)
+      tailwindcss:
+        specifier: ^4.3.3
+        version: 4.3.3
+    devDependencies:
+      '@tauri-apps/cli':
+        specifier: ^2
+        version: 2.12.4
+      '@types/node':
+        specifier: ^26.6.5
+        version: 26.6.5
+      '@types/react':
+        specifier: ^19.1.8
+        version: 19.3.0
+      '@types/react-dom':
+        specifier: ^19.1.6
+        version: 19.3.0(@types/react@19.3.0)
+      '@vitejs/plugin-react':
+        specifier: ^6.0.2
+        version: 6.1.2(vite@8.3.5(@types/node@26.6.5)(jiti@2.7.0))
+      typescript:
+        specifier: ~6.0.3
+        version: 6.0.3
+      vite:
+        specifier: ^8.0.16
+        version: 8.3.5(@types/node@26.6.5)(jiti@2.7.0)
+
+  packages/app:
+    dependencies:
       class-variance-authority:
         specifier: ^0.7.1
         version: 0.7.1
@@ -205,27 +245,15 @@ importers:
         specifier: ^1.4.0
         version: 1.4.0
     devDependencies:
-      '@tauri-apps/cli':
-        specifier: ^2
-        version: 2.12.4
-      '@types/node':
-        specifier: ^26.6.5
-        version: 26.6.5
       '@types/react':
         specifier: ^19.1.8
         version: 19.3.0
       '@types/react-dom':
         specifier: ^19.1.6
         version: 19.3.0(@types/react@19.3.0)
-      '@vitejs/plugin-react':
-        specifier: ^6.0.2
-        version: 6.1.2(vite@8.3.5(@types/node@26.6.5)(jiti@2.7.0))
       typescript:
         specifier: ~6.0.3
         version: 6.0.3
-      vite:
-        specifier: ^8.0.16
-        version: 8.3.5(@types/node@26.6.5)(jiti@2.7.0)
 
 packages:
 

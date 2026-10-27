@@ -7,7 +7,7 @@ have been open and waiting, plus the pull requests waiting on your review.
 ## Stack and platforms
 
 - Tauri v2, React + TypeScript popover UI, built with Tailwind v4 and shadcn/ui
-  (components in `apps/desktop/src/components/ui`, default neutral theme in
+  (components in `packages/app/src/components/ui`, default neutral theme in
   light mode and a dark blue one in dark mode, following the system setting).
 - macOS and Windows: tray-only (no Dock icon / taskbar entry). Left-clicking
   the tray icon toggles a popover anchored to the icon; it hides on blur.

@@ -5,7 +5,7 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
-import type { CardNotification } from "../types";
+import type { CardNotification } from "@review-pinger/app";
 
 /** How long a card stays, unless the pointer is on it. */
 const DISMISS_MS = 5000;

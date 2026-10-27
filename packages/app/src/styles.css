@@ -1,6 +1,9 @@
 @import "tailwindcss";
 @import "tw-animate-css";
 
+/* Apps that bundle this package don't contain its files, so say where the classes are. */
+@source ".";
+
 @custom-variant dark (@media (prefers-color-scheme: dark));
 
 :root {

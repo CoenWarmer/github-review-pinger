@@ -1,6 +1,5 @@
 import { createContext, useContext, useState, type FormEvent, type KeyboardEvent } from "react";
-import { invoke } from "@tauri-apps/api/core";
-import { openUrl } from "@tauri-apps/plugin-opener";
+import { usePlatform, type Platform } from "./platform";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -25,9 +24,14 @@ export function channelUrl(link: string, opensIn: SlackSettings["opensIn"]): str
 }
 
 /** Copies the PR's link, so it can be pasted into the channel, and opens the channel. */
-export function openTeamChannel(link: string, prUrl: string, opensIn: SlackSettings["opensIn"]) {
+export function openTeamChannel(
+  platform: Platform,
+  link: string,
+  prUrl: string,
+  opensIn: SlackSettings["opensIn"],
+) {
   navigator.clipboard.writeText(prUrl).catch(() => {});
-  openUrl(channelUrl(link, opensIn));
+  platform.openUrl(channelUrl(link, opensIn));
 }
 
 /**
@@ -54,6 +58,7 @@ export function TeamChip({
   prUrl: string;
   onAsk: (team: string) => void;
 }) {
+  const platform = usePlatform();
   const { channels, opensIn } = useContext(SlackContext);
   const [copied, setCopied] = useState(false);
   const link = channels[team]?.link;
@@ -63,7 +68,7 @@ export function TeamChip({
       onAsk(team);
       return;
     }
-    openTeamChannel(link, prUrl, opensIn);
+    openTeamChannel(platform, link, prUrl, opensIn);
     setCopied(true);
     setTimeout(() => setCopied(false), 1500);
   }
@@ -108,13 +113,14 @@ export function TeamChannelForm({
   initial?: string;
   onDone: () => void;
 }) {
+  const platform = usePlatform();
   const [link, setLink] = useState(initial);
   const [error, setError] = useState<string | null>(null);
 
   async function save(e: FormEvent) {
     e.preventDefault();
     try {
-      await invoke("set_team_channel", { team, link });
+      await platform.setTeamChannel(team, link);
       onDone();
     } catch (err) {
       setError(String(err));

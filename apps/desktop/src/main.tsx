@@ -1,8 +1,9 @@
 import React from "react";
-import "./index.css";
 import ReactDOM from "react-dom/client";
-import App from "./App";
+import { App } from "@review-pinger/app";
+import "@review-pinger/app/styles.css";
 import { NotificationCard } from "./components/NotificationCard";
+import { tauriPlatform } from "./tauriPlatform";
 
 // The notification card is its own window, served from the same page.
 const isCard = location.search === "?card";
@@ -13,5 +14,7 @@ if (!isCard && navigator.userAgent.includes("Linux")) {
 }
 
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
-  <React.StrictMode>{isCard ? <NotificationCard /> : <App />}</React.StrictMode>,
+  <React.StrictMode>
+    {isCard ? <NotificationCard /> : <App platform={tauriPlatform} />}
+  </React.StrictMode>,
 );

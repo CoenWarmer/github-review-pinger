@@ -1,5 +1,4 @@
 import { useState, type ReactNode } from "react";
-import { invoke } from "@tauri-apps/api/core";
 import { ArrowDownWideNarrow, ChevronDown, ChevronRight, RefreshCw, Settings } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
@@ -20,6 +19,7 @@ import { SettingsPanel } from "./components/SettingsPanel";
 import { Setup, problemMessage } from "./components/Setup";
 import { elapsed } from "./format";
 import { useNow, useSnapshot } from "./hooks";
+import { PlatformProvider, usePlatform, type Platform } from "./platform";
 import { SlackContext } from "./slack";
 import { SORT_OPTIONS, sortRows, useSectionSort, type SortKey } from "./sort";
 import type { Group, ReviewGroup, Snapshot } from "./types";
@@ -138,6 +138,7 @@ function Section<
 }
 
 function Footer({ snapshot, now }: { snapshot: Snapshot; now: number }) {
+  const platform = usePlatform();
   return (
     <footer className="flex items-center justify-between gap-2 border-t px-3 py-1 text-xs text-muted-background">
       <span>
@@ -152,7 +153,7 @@ function Footer({ snapshot, now }: { snapshot: Snapshot; now: number }) {
         aria-label="Refresh"
         title="Refresh"
         disabled={snapshot.refreshing}
-        onClick={() => invoke("refresh")}
+        onClick={() => platform.refresh()}
       >
         <RefreshCw className={cn(snapshot.refreshing && "animate-spin")} />
       </Button>
@@ -160,7 +161,7 @@ function Footer({ snapshot, now }: { snapshot: Snapshot; now: number }) {
   );
 }
 
-function App() {
+function AppContent() {
   const snapshot = useSnapshot();
   const now = useNow();
   const [tab, setTab] = useState<Tab>("mine");
@@ -270,4 +271,11 @@ function App() {
   );
 }
 
-export default App;
+/** The whole popover UI, for a host that supplies what it can do. */
+export function App({ platform }: { platform: Platform }) {
+  return (
+    <PlatformProvider platform={platform}>
+      <AppContent />
+    </PlatformProvider>
+  );
+}
