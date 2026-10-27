@@ -76,6 +76,13 @@ retried twice per request.
   stay with the full poll. For a review-request PR, whether it's still
   requested is inferred: you're listed directly, or a team is and it was
   requested through it before.
+- Teams and people (for the reviewer hover cards) come from a separate
+  lookup, cached in memory for an hour and refreshed by the poll: the members
+  of every team that appears as a reviewer, and the teams of every user who
+  appears as a reviewer, in batched queries. Both need the `read:org` scope.
+  Without it the lookup fails once per hour, quietly, and the cards show what
+  they can; Settings says how to add the scope. Recent commits (author and
+  date, last 20) are fetched with each PR to see who pushed.
 - Poll every 2 minutes; also refresh when the popover opens and data is older
   than 30 s (wall-clock, so time asleep counts). Wait out rate limits until
   the reset time; back off exponentially (up to 10 min) on network and API
@@ -225,6 +232,30 @@ reduced motion.
 
 The footer shows when data was refreshed and a refresh icon button, which spins while refreshing.
 
+### Reviewer hover cards
+
+Hovering a reviewer chip on either tab (or focusing it with the keyboard)
+shows a card after about 300 ms. It closes when the pointer leaves, can't be
+entered, and doesn't change what clicking does (a team chip still opens its
+Slack channel, Shift-click still changes it).
+
+- **User chip**:
+  - **Teams**: the teams the user belongs to in the repo's organization, up
+    to 5 with "+N more". Without `read:org`, or when unknown, the line is left
+    out.
+  - **Review**: when their review on this PR was submitted: "Approved 2h
+    ago", "Requested changes 3h ago", "Commented 1h ago". A requested reviewer
+    who hasn't reviewed shows "Hasn't reviewed yet".
+- **Team chip**:
+  - **Requested**: how long since the team was requested on this PR, or since
+    it was requested again: "Requested 3h ago". Left out when the request is
+    older than the PR timeline the app reads (the last 50 items).
+  - **Last activity**: the latest review, review comment, PR comment, or push
+    by any member of the team on this PR, with who and what: "Last activity
+    40m ago by ana (commented)", or "No response yet". Without `read:org`
+    the line says membership is unavailable.
+- Bots don't get cards.
+
 ### Settings
 
 The third tab holds, top to bottom:
@@ -236,6 +267,9 @@ The third tab holds, top to bottom:
   selector, who is signed in ("Signed in as CoenWarmer"), and the token form
   when the token is selected. With the CLI selected, a saved token is noted
   as kept but unused.
+  When the team lookup was denied, a hint says to add the `read:org` scope
+  (`gh auth refresh -s read:org`, or add it to the token) to see team details
+  on the reviewer hover cards. It goes away once a lookup succeeds.
 - **Slack channels**: every team with a configured channel, as the team name
   and its link, labeled "settings.json" or "saved". Saved channels (pasted
   into a team chip) can be clicked to change their link in place, and have a
