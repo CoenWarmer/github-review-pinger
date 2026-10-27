@@ -527,16 +527,37 @@ button {
 .slack-channels li {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
-  grid-template-areas:
-    "team action"
-    "link link";
+  align-items: center;
   gap: 0 8px;
   padding: 6px 0;
   border-bottom: 1px solid var(--border);
 }
 
+.slack-entry {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+}
+
+button.slack-entry {
+  cursor: pointer;
+}
+
+button.slack-entry:hover .slack-team {
+  text-decoration: underline;
+}
+
+.slack-channels li .team-form {
+  grid-column: 1 / -1;
+}
+
 .slack-team {
-  grid-area: team;
   font-weight: 500;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -544,16 +565,11 @@ button {
 }
 
 .slack-link {
-  grid-area: link;
   overflow: hidden;
   color: var(--muted);
   font-size: 12px;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.slack-channels li > :last-child {
-  grid-area: action;
 }
 
 .slack-source {

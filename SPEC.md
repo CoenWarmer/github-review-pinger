@@ -217,8 +217,8 @@ The third tab holds, top to bottom:
 - The token form.
 - **Slack channels**: every team with a configured channel, as the team name
   and its link, labeled "settings.json" or "saved". Saved channels (pasted
-  into a team chip) have a Remove button, after which the chip asks for a
-  channel again. Channels from `settings.json` are read-only here, and one
+  into a team chip) can be clicked to change their link in place, and have a
+  Remove button, after which the chip asks for a channel again. Channels from `settings.json` are read-only here, and one
   there overrides a saved one for the same team, so only it is listed. Teams
   are added by clicking their chip.
 

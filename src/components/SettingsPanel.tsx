@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import type { TeamChannel } from "../types";
+import { TeamChannelForm } from "../slack";
 import { TokenForm } from "./Setup";
 
 export function SettingsPanel({
@@ -54,6 +55,7 @@ export function SettingsPanel({
 
 function SlackChannels({ channels }: { channels: Record<string, TeamChannel> }) {
   const teams = Object.keys(channels).sort();
+  const [editing, setEditing] = useState<string | null>(null);
 
   return (
     <section className="slack-channels">
@@ -68,19 +70,41 @@ function SlackChannels({ channels }: { channels: Record<string, TeamChannel> }) 
             const { link, source } = channels[team];
             return (
               <li key={team}>
-                <span className="slack-team">{team}</span>
-                <span className="slack-link" title={link}>
-                  {link}
-                </span>
+                {source === "saved" && editing === team ? (
+                  <TeamChannelForm team={team} initial={link} onDone={() => setEditing(null)} />
+                ) : (
+                  <>
+                    {source === "saved" ? (
+                      <button
+                        type="button"
+                        className="slack-entry"
+                        title="Change the channel link"
+                        onClick={() => setEditing(team)}
+                      >
+                        <span className="slack-team">{team}</span>
+                        <span className="slack-link">{link}</span>
+                      </button>
+                    ) : (
+                      <span className="slack-entry">
+                        <span className="slack-team">{team}</span>
+                        <span className="slack-link" title={link}>
+                          {link}
+                        </span>
+                      </span>
+                    )}
+                  </>
+                )}
                 {source === "saved" ? (
-                  <button
-                    type="button"
-                    className="link"
-                    aria-label={`Remove the Slack channel for ${team}`}
-                    onClick={() => invoke("remove_team_channel", { team })}
-                  >
-                    Remove
-                  </button>
+                  editing === team ? null : (
+                    <button
+                      type="button"
+                      className="link"
+                      aria-label={`Remove the Slack channel for ${team}`}
+                      onClick={() => invoke("remove_team_channel", { team })}
+                    >
+                      Remove
+                    </button>
+                  )
                 ) : (
                   <span className="slack-source" title="Edit teamChannels in settings.json">
                     settings.json

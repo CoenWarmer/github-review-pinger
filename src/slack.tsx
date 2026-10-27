@@ -92,9 +92,17 @@ export function TeamChip({
   );
 }
 
-/** Asks for the Slack channel link of a team and saves it. */
-export function TeamChannelForm({ team, onDone }: { team: string; onDone: () => void }) {
-  const [link, setLink] = useState("");
+/** Asks for the Slack channel link of a team and saves it. `initial` prefills a link being changed. */
+export function TeamChannelForm({
+  team,
+  initial = "",
+  onDone,
+}: {
+  team: string;
+  initial?: string;
+  onDone: () => void;
+}) {
+  const [link, setLink] = useState(initial);
   const [error, setError] = useState<string | null>(null);
 
   async function save(e: FormEvent) {
