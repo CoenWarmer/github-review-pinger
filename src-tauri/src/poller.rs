@@ -529,22 +529,20 @@ async fn poll_once(app: &AppHandle, poller: &Poller) -> Result<(), Problem> {
         s.slack_opens_in = settings.slack_opens_in;
     });
     *poller.latest.lock().unwrap() = Some(fetched);
-    refresh_directory(app, poller, &settings).await;
+    refresh_directory(app, poller).await;
     Ok(())
 }
 
 /// Looks up whatever the hover cards still need to know about teams and
 /// users, and redraws the lists when something arrived. Failures are only
 /// logged: the cards then show what they can, and the next poll tries again.
-async fn refresh_directory(app: &AppHandle, poller: &Poller, settings: &Settings) {
+async fn refresh_directory(app: &AppHandle, poller: &Poller) {
     let needs = match poller.latest.lock().unwrap().as_ref() {
         Some(fetched) => prs::directory_needs(
             fetched
                 .pull_requests
                 .iter()
                 .chain(&fetched.review_pull_requests),
-            &fetched.viewer,
-            &settings.ignored_logins,
         ),
         None => return,
     };

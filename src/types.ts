@@ -22,8 +22,8 @@ export interface Reviewer {
   at: string | null;
   /** When they were last asked to review this PR. */
   requestedAt: string | null;
-  /** For users: their teams in the repo's organization, null when not looked up. */
-  teams: string[] | null;
+  /** For users: the teams requested on this PR that they belong to. */
+  teams: string[];
   /** For teams: whether the members are known, so `activity` means something. */
   membersKnown: boolean;
   /** For teams: the latest thing a member did on this PR. */

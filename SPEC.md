@@ -76,10 +76,10 @@ retried twice per request.
   stay with the full poll. For a review-request PR, whether it's still
   requested is inferred: you're listed directly, or a team is and it was
   requested through it before.
-- Teams and people (for the reviewer hover cards) come from a separate
+- Team members (for the reviewer hover cards) come from a separate
   lookup, cached in memory for an hour and refreshed by the poll: the members
-  of every team that appears as a reviewer, and the teams of every user who
-  appears as a reviewer, in batched queries. Both need the `read:org` scope.
+  of every team requested on a PR, now or earlier, in batched queries. It
+  needs the `read:org` scope.
   Without it the lookup fails once per hour, quietly, and the cards show what
   they can; Settings says how to add the scope. Recent commits (author and
   date, last 20) are fetched with each PR to see who pushed.
@@ -240,9 +240,13 @@ entered, and doesn't change what clicking does (a team chip still opens its
 Slack channel, Shift-click still changes it).
 
 - **User chip**:
-  - **Teams**: the teams the user belongs to in the repo's organization, up
-    to 5 with "+N more". Without `read:org`, or when unknown, the line is left
-    out.
+  - **Teams**: only the teams that matter for this PR, as "ana for
+    workchat-eng": the teams requested on the PR, now or earlier, that the
+    user belongs to. Code owners are requested automatically, and a team's
+    request goes away once one of its members reviews, so the request history
+    says which teams own what the PR changes. Up to 5, then "+N more". Left
+    out when the user is in none of them, when the members aren't known (no
+    `read:org`), or when the request is older than the last 50 timeline items.
   - **Review**: when their review on this PR was submitted: "Approved 2h
     ago", "Requested changes 3h ago", "Commented 1h ago". A requested reviewer
     who hasn't reviewed shows "Hasn't reviewed yet".

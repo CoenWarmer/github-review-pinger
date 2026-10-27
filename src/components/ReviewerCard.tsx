@@ -4,7 +4,7 @@ import { ago } from "../format";
 import { SlackContext } from "../slack";
 import type { Activity, Reviewer } from "../types";
 
-/** Teams listed before "+N more". */
+/** Teams listed before "+N more". Few PRs have more owning teams than this. */
 const MAX_TEAMS = 5;
 
 const REVIEW_LABELS: Record<Exclude<Reviewer["state"], "pending">, string> = {
@@ -65,17 +65,17 @@ function UserDetails({ reviewer, now }: { reviewer: Reviewer; now: number }) {
 
   return (
     <>
-      <p className="m-0 text-sm font-medium">{reviewer.login}</p>
+      <p className="m-0 text-sm font-medium">
+        {reviewer.login}
+        {teams.length > 0 && (
+          <span className="font-normal text-muted-foreground">
+            {" "}
+            for {teams.slice(0, MAX_TEAMS).join(", ")}
+            {teams.length > MAX_TEAMS && ` +${teams.length - MAX_TEAMS} more`}
+          </span>
+        )}
+      </p>
       <Line>{review}</Line>
-      {teams && (
-        <Line>
-          {teams.length === 0
-            ? "Not in any team"
-            : `Teams: ${teams.slice(0, MAX_TEAMS).join(", ")}${
-                teams.length > MAX_TEAMS ? ` +${teams.length - MAX_TEAMS} more` : ""
-              }`}
-        </Line>
-      )}
     </>
   );
 }

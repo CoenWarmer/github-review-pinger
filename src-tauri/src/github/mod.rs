@@ -160,57 +160,35 @@ pub async fn add_merge_states(
 /// other conditions of the rule in `prs::actions`.
 /// Aliases per directory query, which keeps each query light.
 const DIRECTORY_BATCH: usize = 15;
-const DIRECTORY_CONCURRENT: usize = 4;
+const DIRECTORY_CONCURRENT: usize = 2;
 /// Members are read 100 at a time, so this reads teams of up to 500.
 const MAX_MEMBER_PAGES: usize = 5;
 
-/// What one directory query asks for: team members by alias and user teams
-/// by alias, each with the cache key it answers.
+/// What one directory query asks for: team members by alias, each with the
+/// cache key it answers.
 struct DirectoryQuery {
     text: String,
     teams: Vec<(String, String)>,
-    users: Vec<(String, String)>,
 }
 
 fn directory_queries(needs: &Needs) -> Vec<DirectoryQuery> {
-    enum Ask<'a> {
-        Team(&'a (String, String)),
-        User(&'a (String, String)),
-    }
-    let asks: Vec<Ask> = needs
-        .teams
-        .iter()
-        .map(Ask::Team)
-        .chain(needs.users.iter().map(Ask::User))
-        .collect();
+    let teams: Vec<&(String, String)> = needs.teams.iter().collect();
     // JSON strings are valid GraphQL string literals.
     let quote = |s: &str| serde_json::to_string(s).expect("a string serializes");
-    asks.chunks(DIRECTORY_BATCH)
+    teams
+        .chunks(DIRECTORY_BATCH)
         .map(|chunk| {
             let mut query = DirectoryQuery {
                 text: String::new(),
                 teams: Vec::new(),
-                users: Vec::new(),
             };
-            for (i, ask) in chunk.iter().enumerate() {
-                match ask {
-                    Ask::Team((org, slug)) => {
-                        query.text += &format!(
-                            "t{i}: organization(login: {}) {{ team(slug: {}) {{ members(first: 100) {{ nodes {{ login }} pageInfo {{ hasNextPage endCursor }} }} }} }}\n",
-                            quote(org),
-                            quote(slug)
-                        );
-                        query.teams.push((format!("t{i}"), Directory::key(org, slug)));
-                    }
-                    Ask::User((org, login)) => {
-                        query.text += &format!(
-                            "u{i}: organization(login: {}) {{ teams(first: 100, userLogins: [{}]) {{ nodes {{ slug }} }} }}\n",
-                            quote(org),
-                            quote(login)
-                        );
-                        query.users.push((format!("u{i}"), Directory::key(org, login)));
-                    }
-                }
+            for (i, (org, slug)) in chunk.iter().map(|team| (&team.0, &team.1)).enumerate() {
+                query.text += &format!(
+                    "t{i}: organization(login: {}) {{ team(slug: {}) {{ members(first: 100) {{ nodes {{ login }} pageInfo {{ hasNextPage endCursor }} }} }} }}\n",
+                    quote(org),
+                    quote(slug)
+                );
+                query.teams.push((format!("t{i}"), Directory::key(org, slug)));
             }
             query.text = format!("query {{\n{}}}", query.text);
             query
@@ -236,8 +214,8 @@ fn members_page(members: &Value) -> (Vec<String>, Option<String>) {
     (logins, next)
 }
 
-/// Looks up the members of teams and the teams of users. Needs `read:org`;
-/// without it the answer is `denied`.
+/// Looks up the members of teams. Needs `read:org`; without it the answer is
+/// `denied`.
 pub async fn fetch_directory(
     http: &reqwest::Client,
     token: &str,
@@ -259,16 +237,6 @@ pub async fn fetch_directory(
                 denied: true,
                 ..Found::default()
             });
-        }
-        for (alias, key) in query.users {
-            let teams = &response.data[alias.as_str()]["teams"]["nodes"];
-            if let Some(nodes) = teams.as_array() {
-                let slugs = nodes
-                    .iter()
-                    .filter_map(|node| node["slug"].as_str().map(str::to_string))
-                    .collect();
-                found.users.insert(key, slugs);
-            }
         }
         for (alias, key) in query.teams {
             let members = &response.data[alias.as_str()]["team"]["members"];
@@ -624,7 +592,7 @@ mod tests {
         )));
     }
 
-    /// Looks up the teams and users of the logged-in user's real pull requests.
+    /// Looks up the teams requested on the logged-in user's real pull requests.
     /// Run with `cargo test -- --ignored --nocapture live_directory`.
     #[test]
     #[ignore = "calls the GitHub API with your gh token"]
@@ -640,29 +608,19 @@ mod tests {
                 .pull_requests
                 .iter()
                 .chain(&fetched.review_pull_requests),
-            &fetched.viewer,
-            &[],
         );
-        println!(
-            "{} teams and {} users to look up",
-            needs.teams.len(),
-            needs.users.len()
-        );
+        println!("{} teams to look up", needs.teams.len());
         let started = std::time::Instant::now();
         let found = tauri::async_runtime::block_on(fetch_directory(&http, &token.value, &needs))
             .expect("lookup succeeds");
         println!(
-            "denied={} teams={} users={} in {:?}",
+            "denied={} teams={} in {:?}",
             found.denied,
             found.teams.len(),
-            found.users.len(),
             started.elapsed()
         );
         for (team, members) in found.teams.iter().take(5) {
             println!("  {team}: {} members", members.len());
-        }
-        for (user, teams) in found.users.iter().take(3) {
-            println!("  {user}: {} teams", teams.len());
         }
         assert!(!found.denied);
     }

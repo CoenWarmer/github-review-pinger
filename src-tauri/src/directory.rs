@@ -28,41 +28,36 @@ pub struct Activity {
     pub at: DateTime<Utc>,
 }
 
-/// What still has to be looked up, lowercase: teams as `(org, slug)`, users as
-/// `(org, login)`.
+/// The teams still to look up, lowercase `(org, slug)`.
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct Needs {
     pub teams: BTreeSet<(String, String)>,
-    pub users: BTreeSet<(String, String)>,
 }
 
 impl Needs {
     pub fn is_empty(&self) -> bool {
-        self.teams.is_empty() && self.users.is_empty()
+        self.teams.is_empty()
     }
 }
 
-/// The result of a lookup, keyed like [`Directory`]: teams by `org/slug`
-/// with their members' logins, users by `org/login` with their team slugs.
+/// The result of a lookup: lowercase member logins by team (`org/slug`).
 #[derive(Debug, Default)]
 pub struct Found {
     pub teams: HashMap<String, HashSet<String>>,
-    pub users: HashMap<String, Vec<String>>,
     /// GitHub refused for lack of the `read:org` scope.
     pub denied: bool,
 }
 
-/// A lookup result. `None` when GitHub had nothing to say (an organization or
+/// A team's members. `None` when GitHub had nothing to say (an organization or
 /// team the token can't see), kept so it isn't asked again until it goes stale.
-struct Entry<T> {
-    value: Option<T>,
+struct Entry {
+    members: Option<HashSet<String>>,
     at: DateTime<Utc>,
 }
 
 #[derive(Default)]
 pub struct Directory {
-    teams: HashMap<String, Entry<HashSet<String>>>,
-    users: HashMap<String, Entry<Vec<String>>>,
+    teams: HashMap<String, Entry>,
     /// When the last lookup was refused for lack of the scope, until one works.
     denied_at: Option<DateTime<Utc>>,
 }
@@ -72,19 +67,14 @@ fn is_fresh(at: DateTime<Utc>, now: DateTime<Utc>) -> bool {
 }
 
 impl Directory {
-    /// Lowercase `org/name`, how teams and users are keyed.
-    pub fn key(org: &str, name: &str) -> String {
-        format!("{}/{}", org.to_lowercase(), name.to_lowercase())
+    /// Lowercase `org/slug`, how teams are keyed.
+    pub fn key(org: &str, slug: &str) -> String {
+        format!("{}/{}", org.to_lowercase(), slug.to_lowercase())
     }
 
     /// The lowercase logins in a team (`org/slug`), if looked up.
     pub fn team_members(&self, team: &str) -> Option<&HashSet<String>> {
-        self.teams.get(team)?.value.as_ref()
-    }
-
-    /// The slugs of the teams a user belongs to in an organization.
-    pub fn user_teams(&self, org: &str, login: &str) -> Option<&[String]> {
-        self.users.get(&Self::key(org, login))?.value.as_deref()
+        self.teams.get(team)?.members.as_ref()
     }
 
     /// Whether the last lookup was refused for lack of the scope.
@@ -98,21 +88,15 @@ impl Directory {
         if self.denied_at.is_some_and(|at| is_fresh(at, now)) {
             return Needs::default();
         }
-        let stale = |at: Option<DateTime<Utc>>| !at.is_some_and(|at| is_fresh(at, now));
         Needs {
             teams: needs
                 .teams
                 .iter()
                 .filter(|(org, slug)| {
-                    stale(self.teams.get(&Self::key(org, slug)).map(|entry| entry.at))
-                })
-                .cloned()
-                .collect(),
-            users: needs
-                .users
-                .iter()
-                .filter(|(org, login)| {
-                    stale(self.users.get(&Self::key(org, login)).map(|entry| entry.at))
+                    !self
+                        .teams
+                        .get(&Self::key(org, slug))
+                        .is_some_and(|entry| is_fresh(entry.at, now))
                 })
                 .cloned()
                 .collect(),
@@ -127,21 +111,12 @@ impl Directory {
             self.denied_at = Some(now);
             return changed;
         }
-        let changed =
-            !found.teams.is_empty() || !found.users.is_empty() || self.denied_at.is_some();
+        let changed = !found.teams.is_empty() || self.denied_at.is_some();
         self.denied_at = None;
         for (org, slug) in &asked.teams {
             let key = Self::key(org, slug);
-            let value = found.teams.remove(&key);
-            self.teams.insert(key, Entry { value, at: now });
-        }
-        for (org, login) in &asked.users {
-            let key = Self::key(org, login);
-            let value = found.users.remove(&key).map(|mut slugs| {
-                slugs.sort();
-                slugs
-            });
-            self.users.insert(key, Entry { value, at: now });
+            let members = found.teams.remove(&key);
+            self.teams.insert(key, Entry { members, at: now });
         }
         changed
     }
@@ -155,43 +130,52 @@ mod tests {
         s.parse().unwrap()
     }
 
-    fn needs(teams: &[(&str, &str)], users: &[(&str, &str)]) -> Needs {
-        let pair = |&(a, b): &(&str, &str)| (a.to_string(), b.to_string());
+    fn needs(teams: &[(&str, &str)]) -> Needs {
         Needs {
-            teams: teams.iter().map(pair).collect(),
-            users: users.iter().map(pair).collect(),
+            teams: teams
+                .iter()
+                .map(|&(org, slug)| (org.to_string(), slug.to_string()))
+                .collect(),
+        }
+    }
+
+    fn found(teams: &[(&str, &[&str])]) -> Found {
+        Found {
+            teams: teams
+                .iter()
+                .map(|(team, members)| {
+                    (
+                        team.to_string(),
+                        members.iter().map(|m| m.to_string()).collect(),
+                    )
+                })
+                .collect(),
+            denied: false,
         }
     }
 
     #[test]
     fn everything_is_missing_at_first_and_nothing_once_cached() {
         let mut directory = Directory::default();
-        let wanted = needs(&[("o", "core")], &[("o", "ana")]);
+        let wanted = needs(&[("o", "core")]);
         let now = at("2026-10-01T09:00:00Z");
         assert_eq!(directory.missing(&wanted, now), wanted);
 
-        let mut found = Found::default();
-        found
-            .teams
-            .insert("o/core".into(), ["ana".to_string()].into());
-        found
-            .users
-            .insert("o/ana".into(), vec!["web".into(), "core".into()]);
-        assert!(directory.merge(&wanted, found, now));
+        assert!(directory.merge(&wanted, found(&[("o/core", &["ana"])]), now));
 
         assert!(directory.missing(&wanted, now).is_empty());
         assert!(directory.team_members("o/core").unwrap().contains("ana"));
-        // Teams come back sorted.
-        assert_eq!(directory.user_teams("O", "ANA").unwrap(), ["core", "web"]);
     }
 
     #[test]
     fn lookups_go_stale_after_an_hour() {
         let mut directory = Directory::default();
-        let mut found = Found::default();
-        found.teams.insert("o/core".into(), HashSet::new());
-        let wanted = needs(&[("o", "core")], &[]);
-        directory.merge(&wanted, found, at("2026-10-01T09:00:00Z"));
+        let wanted = needs(&[("o", "core")]);
+        directory.merge(
+            &wanted,
+            found(&[("o/core", &[])]),
+            at("2026-10-01T09:00:00Z"),
+        );
 
         assert!(
             directory
@@ -207,7 +191,7 @@ mod tests {
     #[test]
     fn a_refusal_stops_asking_for_an_hour_until_a_lookup_works() {
         let mut directory = Directory::default();
-        let wanted = needs(&[("o", "core")], &[]);
+        let wanted = needs(&[("o", "core")]);
         let denied = Found {
             denied: true,
             ..Found::default()
@@ -224,20 +208,21 @@ mod tests {
             wanted
         );
 
-        let mut found = Found::default();
-        found.teams.insert("o/core".into(), HashSet::new());
-        directory.merge(&wanted, found, at("2026-10-01T10:30:00Z"));
+        directory.merge(
+            &wanted,
+            found(&[("o/core", &[])]),
+            at("2026-10-01T10:30:00Z"),
+        );
         assert!(!directory.is_denied());
     }
 
     #[test]
     fn what_github_cannot_see_is_not_asked_again_for_an_hour() {
         let mut directory = Directory::default();
-        let wanted = needs(&[("hidden", "core")], &[("hidden", "ana")]);
+        let wanted = needs(&[("hidden", "core")]);
         directory.merge(&wanted, Found::default(), at("2026-10-01T09:00:00Z"));
 
         assert!(directory.team_members("hidden/core").is_none());
-        assert!(directory.user_teams("hidden", "ana").is_none());
         assert!(
             directory
                 .missing(&wanted, at("2026-10-01T09:30:00Z"))
