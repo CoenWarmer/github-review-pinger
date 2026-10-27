@@ -2,10 +2,12 @@
 //! open and quiet clocks, what needs the author's action, which PRs have gone
 //! dormant, and per-reviewer state.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use chrono::{DateTime, Utc};
 use serde::Serialize;
+
+use crate::directory::{Activity, ActivityKind, Directory, Needs};
 
 use crate::github::types::{
     Actor, CheckState, MergeStateStatus, Mergeable, PullRequest, RequestedReviewer, ReviewDecision,
@@ -75,6 +77,17 @@ pub struct Reviewer {
     /// For team requests, the lowercase `org/slug` that Slack channels are
     /// keyed by.
     pub team: Option<String>,
+    /// When the review that sets `state` was submitted.
+    pub at: Option<DateTime<Utc>>,
+    /// When they were last asked to review this PR.
+    pub requested_at: Option<DateTime<Utc>>,
+    /// For users: the slugs of their teams in the repo's organization, when
+    /// looked up.
+    pub teams: Option<Vec<String>>,
+    /// For teams: whether the members are known, so `activity` is meaningful.
+    pub members_known: bool,
+    /// For teams: the latest thing a member did on this PR.
+    pub activity: Option<Activity>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -137,6 +150,7 @@ pub struct Response {
 }
 
 pub struct Rules<'a> {
+    pub directory: &'a Directory,
     pub ignored_logins: &'a [String],
     pub dormant_after: chrono::Duration,
     /// Snooze end times by pull request id.
@@ -147,6 +161,7 @@ pub fn derive(prs: &[PullRequest], viewer: &str, rules: &Rules, now: DateTime<Ut
     let people = People {
         viewer,
         ignored_logins: rules.ignored_logins,
+        directory: rules.directory,
     };
     let mut views: Vec<PrView> = prs.iter().map(|pr| view(pr, &people, rules, now)).collect();
     // Within every section the stalest PRs sink to the bottom.
@@ -171,6 +186,7 @@ pub fn derive(prs: &[PullRequest], viewer: &str, rules: &Rules, now: DateTime<Ut
 pub(crate) struct People<'a> {
     pub viewer: &'a str,
     pub ignored_logins: &'a [String],
+    pub directory: &'a Directory,
 }
 
 impl People<'_> {
@@ -328,7 +344,7 @@ fn has_new_feedback(pr: &PullRequest, people: &People, responses: &[Response]) -
 /// Every submitted review and conversation comment, as (author, review state
 /// or `None` for a comment, time). Reviews come from `reviews`, not the
 /// timeline, which omits reviews that only reply in existing threads.
-fn interactions(
+pub(crate) fn interactions(
     pr: &PullRequest,
 ) -> impl Iterator<Item = (&Actor, Option<ReviewState>, DateTime<Utc>)> {
     let reviews = pr.reviews.iter().filter_map(|review| {
@@ -404,6 +420,11 @@ pub(crate) fn reviewers(pr: &PullRequest, people: &People) -> Vec<Reviewer> {
                 state,
                 rerequested: false,
                 team: None,
+                at: review.submitted_at,
+                requested_at: None,
+                teams: None,
+                members_known: false,
+                activity: None,
             });
     }
 
@@ -437,12 +458,142 @@ pub(crate) fn reviewers(pr: &PullRequest, people: &People) -> Vec<Reviewer> {
                 state: ReviewerState::Pending,
                 rerequested: false,
                 team,
+                at: None,
+                requested_at: None,
+                teams: None,
+                members_known: false,
+                activity: None,
             });
     }
 
+    let requested = request_times(pr);
+    let org = pr
+        .repository
+        .name_with_owner
+        .split('/')
+        .next()
+        .unwrap_or("");
     let mut reviewers: Vec<Reviewer> = by_login.into_values().collect();
+    for reviewer in &mut reviewers {
+        reviewer.requested_at = requested.get(&reviewer.login.to_lowercase()).copied();
+        match (reviewer.kind, &reviewer.team) {
+            (ReviewerKind::User, _) => {
+                reviewer.teams = people
+                    .directory
+                    .user_teams(org, &reviewer.login)
+                    .map(<[String]>::to_vec);
+            }
+            (ReviewerKind::Team, Some(team)) => {
+                if let Some(members) = people.directory.team_members(team) {
+                    reviewer.members_known = true;
+                    reviewer.activity = team_activity(pr, people, members);
+                }
+            }
+            _ => {}
+        }
+    }
     reviewers.sort_by_key(|r| r.state);
     reviewers
+}
+
+/// The teams and users appearing as reviewers on `prs`, which the hover cards
+/// need looked up. Bots, the viewer and ignored accounts have no cards.
+pub fn directory_needs<'a>(
+    prs: impl IntoIterator<Item = &'a PullRequest>,
+    viewer: &str,
+    ignored_logins: &[String],
+) -> Needs {
+    let directory = Directory::default();
+    let people = People {
+        viewer,
+        ignored_logins,
+        directory: &directory,
+    };
+    let mut needs = Needs::default();
+    for pr in prs {
+        let org = pr
+            .repository
+            .name_with_owner
+            .split('/')
+            .next()
+            .unwrap_or("");
+        for reviewer in reviewers(pr, &people) {
+            match (reviewer.kind, reviewer.team) {
+                (ReviewerKind::User, _) => {
+                    needs
+                        .users
+                        .insert((org.to_lowercase(), reviewer.login.to_lowercase()));
+                }
+                (ReviewerKind::Team, Some(team)) => {
+                    if let Some((org, slug)) = team.split_once('/') {
+                        needs.teams.insert((org.to_string(), slug.to_string()));
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    needs
+}
+
+/// When each user or team (`@slug`, lowercase) was last asked to review.
+fn request_times(pr: &PullRequest) -> HashMap<String, DateTime<Utc>> {
+    let mut times = HashMap::new();
+    for item in pr.timeline_items.iter() {
+        let TimelineItem::ReviewRequestedEvent {
+            created_at,
+            requested_reviewer: Some(requested),
+        } = item
+        else {
+            continue;
+        };
+        let login = match requested {
+            RequestedReviewer::User { login }
+            | RequestedReviewer::Bot { login }
+            | RequestedReviewer::Mannequin { login } => login.to_lowercase(),
+            RequestedReviewer::Team { slug, .. } => format!("@{}", slug.to_lowercase()),
+            RequestedReviewer::Other => continue,
+        };
+        let time = times.entry(login).or_insert(*created_at);
+        *time = (*time).max(*created_at);
+    }
+    times
+}
+
+/// The latest review, comment, or push on `pr` by one of `members` (lowercase
+/// logins), leaving out the author and bots.
+fn team_activity(pr: &PullRequest, people: &People, members: &HashSet<String>) -> Option<Activity> {
+    let responses = interactions(pr).filter_map(|(author, state, at)| {
+        let kind = match state {
+            None | Some(ReviewState::Commented) => ActivityKind::Commented,
+            Some(ReviewState::Approved) => ActivityKind::Approved,
+            Some(ReviewState::ChangesRequested) => ActivityKind::ChangesRequested,
+            Some(_) => return None,
+        };
+        (members.contains(&author.login.to_lowercase()) && people.is_other_human(author)).then(
+            || Activity {
+                login: author.login.clone(),
+                kind,
+                at,
+            },
+        )
+    });
+    let pushes = pr
+        .recent_commits
+        .iter()
+        .flat_map(|commits| commits.iter())
+        .filter_map(|node| {
+            let login = &node.commit.author.as_ref()?.user.as_ref()?.login;
+            (members.contains(&login.to_lowercase())
+                && !people.is_viewer(login)
+                && !people.is_ignored(login))
+            .then(|| Activity {
+                login: login.clone(),
+                kind: ActivityKind::Pushed,
+                at: node.commit.committed_date,
+            })
+        });
+    responses.chain(pushes).max_by_key(|activity| activity.at)
 }
 
 pub(crate) fn checks(pr: &PullRequest) -> Checks {
@@ -573,7 +724,17 @@ mod tests {
         ignored: &[String],
         snoozed: &HashMap<String, DateTime<Utc>>,
     ) -> Vec<PrView> {
+        derive_known(prs, ignored, snoozed, &Directory::default())
+    }
+
+    fn derive_known(
+        prs: Vec<PullRequest>,
+        ignored: &[String],
+        snoozed: &HashMap<String, DateTime<Utc>>,
+        directory: &Directory,
+    ) -> Vec<PrView> {
         let rules = Rules {
+            directory,
             ignored_logins: ignored,
             dormant_after: chrono::Duration::days(30),
             snoozed,
@@ -612,6 +773,131 @@ mod tests {
 
     fn at(s: &str) -> DateTime<Utc> {
         s.parse().unwrap()
+    }
+
+    fn directory(teams: &[(&str, &[&str])], users: &[(&str, &[&str])]) -> Directory {
+        let mut found = crate::directory::Found::default();
+        for (team, members) in teams {
+            found.teams.insert(
+                team.to_string(),
+                members.iter().map(|m| m.to_string()).collect(),
+            );
+        }
+        for (user, slugs) in users {
+            found.users.insert(
+                user.to_string(),
+                slugs.iter().map(|s| s.to_string()).collect(),
+            );
+        }
+        let mut directory = Directory::default();
+        let asked = Needs {
+            teams: teams
+                .iter()
+                .filter_map(|(t, _)| t.split_once('/'))
+                .map(|(o, s)| (o.to_string(), s.to_string()))
+                .collect(),
+            users: users
+                .iter()
+                .filter_map(|(u, _)| u.split_once('/'))
+                .map(|(o, l)| (o.to_string(), l.to_string()))
+                .collect(),
+        };
+        directory.merge(&asked, found, at(NOW));
+        directory
+    }
+
+    #[test]
+    fn user_chips_carry_their_review_time_request_time_and_teams() {
+        let pr = with(json!({
+            "latestOpinionatedReviews": { "nodes": [
+                submitted(user("approver"), "APPROVED", "2026-10-03T09:00:00Z"),
+            ] },
+            "reviewRequests": { "nodes": [
+                { "requestedReviewer": user("waiter") },
+            ] },
+            "timelineItems": { "nodes": [
+                { "__typename": "ReviewRequestedEvent", "createdAt": "2026-10-01T09:00:00Z",
+                  "requestedReviewer": user("waiter") },
+                { "__typename": "ReviewRequestedEvent", "createdAt": "2026-10-02T09:00:00Z",
+                  "requestedReviewer": user("Waiter") },
+            ] },
+        }));
+        let known = directory(&[], &[("o/approver", &["web", "core"])]);
+        let view = derive_known(vec![pr], &[], &HashMap::new(), &known).remove(0);
+        let chip = |login: &str| view.reviewers.iter().find(|r| r.login == login).unwrap();
+
+        assert_eq!(chip("approver").at, Some(at("2026-10-03T09:00:00Z")));
+        assert_eq!(
+            chip("approver").teams.as_deref(),
+            Some(&["core".to_string(), "web".to_string()][..])
+        );
+        // The latest request counts, whatever the case of the login.
+        assert_eq!(
+            chip("waiter").requested_at,
+            Some(at("2026-10-02T09:00:00Z"))
+        );
+        assert_eq!(chip("waiter").at, None);
+        // Not looked up.
+        assert_eq!(chip("waiter").teams, None);
+    }
+
+    #[test]
+    fn team_chips_report_the_latest_activity_by_a_member() {
+        let team = json!({ "__typename": "Team", "slug": "core", "combinedSlug": "o/core" });
+        let pr = json!({
+            "reviewRequests": { "nodes": [{ "requestedReviewer": team }] },
+            "timelineItems": { "nodes": [
+                { "__typename": "ReviewRequestedEvent", "createdAt": "2026-10-01T09:00:00Z",
+                  "requestedReviewer": team },
+                comment(user("Ana"), "2026-10-02T09:00:00Z"),
+            ] },
+            "reviews": { "nodes": [
+                submitted(user("bo"), "COMMENTED", "2026-10-03T09:00:00Z"),
+                // Not in the team.
+                submitted(user("cy"), "APPROVED", "2026-10-09T09:00:00Z"),
+            ] },
+            "recentCommits": { "nodes": [
+                { "commit": { "committedDate": "2026-10-04T09:00:00Z",
+                              "author": { "user": { "login": "ana" } } } },
+                // The author's own push isn't the team responding.
+                { "commit": { "committedDate": "2026-10-08T09:00:00Z",
+                              "author": { "user": { "login": ME } } } },
+                { "commit": { "committedDate": "2026-10-07T09:00:00Z", "author": null } },
+            ] },
+        });
+        let known = directory(&[("o/core", &["ana", "bo", ME])], &[]);
+        let view = derive_known(vec![with(pr.clone())], &[], &HashMap::new(), &known).remove(0);
+        let chip = &view.reviewers[0];
+
+        assert_eq!(chip.requested_at, Some(at("2026-10-01T09:00:00Z")));
+        assert!(chip.members_known);
+        assert_eq!(
+            chip.activity,
+            Some(Activity {
+                login: "ana".into(),
+                kind: ActivityKind::Pushed,
+                at: at("2026-10-04T09:00:00Z"),
+            })
+        );
+
+        // Without the members there is nothing to say about activity.
+        let unknown = derive_snoozed(vec![with(pr)], &[], &HashMap::new()).remove(0);
+        assert!(!unknown.reviewers[0].members_known);
+        assert_eq!(unknown.reviewers[0].activity, None);
+    }
+
+    #[test]
+    fn a_team_without_member_activity_has_none() {
+        let team = json!({ "__typename": "Team", "slug": "core", "combinedSlug": "o/core" });
+        let pr = with(json!({
+            "reviewRequests": { "nodes": [{ "requestedReviewer": team }] },
+            "reviews": { "nodes": [submitted(user("cy"), "APPROVED", "2026-10-09T09:00:00Z")] },
+        }));
+        let known = directory(&[("o/core", &["ana"])], &[]);
+        let view = derive_known(vec![pr], &[], &HashMap::new(), &known).remove(0);
+        let chip = view.reviewers.iter().find(|r| r.login == "@core").unwrap();
+        assert!(chip.members_known);
+        assert_eq!(chip.activity, None);
     }
 
     #[test]

@@ -49,6 +49,19 @@ fragment PullRequestFields on PullRequest {
       }
     }
   }
+  # Who pushed lately, to tell whether a requested team has been active.
+  recentCommits: commits(last: 20) {
+    nodes {
+      commit {
+        committedDate
+        author {
+          user {
+            login
+          }
+        }
+      }
+    }
+  }
   reviewRequests(first: 25) {
     nodes {
       requestedReviewer {

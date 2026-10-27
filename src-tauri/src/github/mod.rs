@@ -10,6 +10,7 @@ use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 
+use crate::directory::{Directory, Found, Needs};
 use types::{CheckState, MergeStateStatus, Mergeable, PullRequest, ReviewDecision, ReviewState};
 
 const ENDPOINT: &str = "https://api.github.com/graphql";
@@ -157,6 +158,147 @@ pub async fn add_merge_states(
 /// Approved, mergeable, green, and not already auto-merging: the only PRs
 /// whose ready-to-merge verdict depends on `mergeStateStatus`. Mirrors the
 /// other conditions of the rule in `prs::actions`.
+/// Aliases per directory query, which keeps each query light.
+const DIRECTORY_BATCH: usize = 15;
+const DIRECTORY_CONCURRENT: usize = 4;
+/// Members are read 100 at a time, so this reads teams of up to 500.
+const MAX_MEMBER_PAGES: usize = 5;
+
+/// What one directory query asks for: team members by alias and user teams
+/// by alias, each with the cache key it answers.
+struct DirectoryQuery {
+    text: String,
+    teams: Vec<(String, String)>,
+    users: Vec<(String, String)>,
+}
+
+fn directory_queries(needs: &Needs) -> Vec<DirectoryQuery> {
+    enum Ask<'a> {
+        Team(&'a (String, String)),
+        User(&'a (String, String)),
+    }
+    let asks: Vec<Ask> = needs
+        .teams
+        .iter()
+        .map(Ask::Team)
+        .chain(needs.users.iter().map(Ask::User))
+        .collect();
+    // JSON strings are valid GraphQL string literals.
+    let quote = |s: &str| serde_json::to_string(s).expect("a string serializes");
+    asks.chunks(DIRECTORY_BATCH)
+        .map(|chunk| {
+            let mut query = DirectoryQuery {
+                text: String::new(),
+                teams: Vec::new(),
+                users: Vec::new(),
+            };
+            for (i, ask) in chunk.iter().enumerate() {
+                match ask {
+                    Ask::Team((org, slug)) => {
+                        query.text += &format!(
+                            "t{i}: organization(login: {}) {{ team(slug: {}) {{ members(first: 100) {{ nodes {{ login }} pageInfo {{ hasNextPage endCursor }} }} }} }}\n",
+                            quote(org),
+                            quote(slug)
+                        );
+                        query.teams.push((format!("t{i}"), Directory::key(org, slug)));
+                    }
+                    Ask::User((org, login)) => {
+                        query.text += &format!(
+                            "u{i}: organization(login: {}) {{ teams(first: 100, userLogins: [{}]) {{ nodes {{ slug }} }} }}\n",
+                            quote(org),
+                            quote(login)
+                        );
+                        query.users.push((format!("u{i}"), Directory::key(org, login)));
+                    }
+                }
+            }
+            query.text = format!("query {{\n{}}}", query.text);
+            query
+        })
+        .collect()
+}
+
+/// The logins on a page of team members, and the cursor of the next page.
+fn members_page(members: &Value) -> (Vec<String>, Option<String>) {
+    let logins = members["nodes"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|node| node["login"].as_str())
+        .map(str::to_lowercase)
+        .collect();
+    let info = &members["pageInfo"];
+    let next = info["hasNextPage"]
+        .as_bool()
+        .unwrap_or(false)
+        .then(|| info["endCursor"].as_str().map(str::to_string))
+        .flatten();
+    (logins, next)
+}
+
+/// Looks up the members of teams and the teams of users. Needs `read:org`;
+/// without it the answer is `denied`.
+pub async fn fetch_directory(
+    http: &reqwest::Client,
+    token: &str,
+    needs: &Needs,
+) -> Result<Found, FetchError> {
+    let responses: Vec<(DirectoryQuery, Response<Value>)> = stream::iter(directory_queries(needs))
+        .map(|query| async move {
+            let response = request::<Value>(http, token, &query.text, json!({})).await?;
+            Ok::<_, FetchError>((query, response))
+        })
+        .buffer_unordered(DIRECTORY_CONCURRENT)
+        .try_collect()
+        .await?;
+
+    let mut found = Found::default();
+    for (query, response) in responses {
+        if response.scope_missing {
+            return Ok(Found {
+                denied: true,
+                ..Found::default()
+            });
+        }
+        for (alias, key) in query.users {
+            let teams = &response.data[alias.as_str()]["teams"]["nodes"];
+            if let Some(nodes) = teams.as_array() {
+                let slugs = nodes
+                    .iter()
+                    .filter_map(|node| node["slug"].as_str().map(str::to_string))
+                    .collect();
+                found.users.insert(key, slugs);
+            }
+        }
+        for (alias, key) in query.teams {
+            let members = &response.data[alias.as_str()]["team"]["members"];
+            if !members.is_object() {
+                continue;
+            }
+            let (mut logins, mut next) = members_page(members);
+            if let Some((org, slug)) = key.split_once('/') {
+                for _ in 1..MAX_MEMBER_PAGES {
+                    let Some(cursor) = next.take() else { break };
+                    let page = request::<Value>(
+                        http,
+                        token,
+                        MEMBERS_QUERY,
+                        json!({ "org": org, "slug": slug, "after": cursor }),
+                    )
+                    .await?;
+                    let (more, after) = members_page(&page.data["organization"]["team"]["members"]);
+                    logins.extend(more);
+                    next = after;
+                }
+            }
+            found.teams.insert(key, logins.into_iter().collect());
+        }
+    }
+    Ok(found)
+}
+
+const MEMBERS_QUERY: &str = "query($org: String!, $slug: String!, $after: String) { organization(login: $org) { team(slug: $slug) { members(first: 100, after: $after) { nodes { login } pageInfo { hasNextPage endCursor } } } } }";
+
 fn could_be_ready(pr: &PullRequest) -> bool {
     let approved = match pr.review_decision {
         Some(ReviewDecision::Approved) => true,
@@ -296,6 +438,8 @@ struct PageInfo {
 struct Response<D> {
     data: D,
     sso_partial: bool,
+    /// An error says the token lacks a scope, such as `read:org`.
+    scope_missing: bool,
 }
 
 #[derive(Deserialize)]
@@ -379,12 +523,19 @@ async fn request<D: DeserializeOwned>(
             .collect::<Vec<_>>()
             .join("; ")
     };
+    let scope_missing = parsed.errors.iter().any(|e| {
+        e.kind.as_deref() == Some("INSUFFICIENT_SCOPES") || e.message.contains("read:org")
+    });
     match parsed.data {
         Some(data) => {
             if !parsed.errors.is_empty() {
                 log::warn!("GitHub returned partial data: {}", messages());
             }
-            Ok(Response { data, sso_partial })
+            Ok(Response {
+                data,
+                sso_partial,
+                scope_missing,
+            })
         }
         None => Err(FetchError::Api(messages())),
     }
@@ -473,6 +624,49 @@ mod tests {
         )));
     }
 
+    /// Looks up the teams and users of the logged-in user's real pull requests.
+    /// Run with `cargo test -- --ignored --nocapture live_directory`.
+    #[test]
+    #[ignore = "calls the GitHub API with your gh token"]
+    fn live_directory() {
+        let token = auth::resolve_token(None).expect("gh is logged in");
+        let http = http_client();
+        let since = (Utc::now() - chrono::Duration::days(30)).date_naive();
+        let fetched =
+            tauri::async_runtime::block_on(fetch_open_pull_requests(&http, &token.value, since))
+                .expect("fetch succeeds");
+        let needs = prs::directory_needs(
+            fetched
+                .pull_requests
+                .iter()
+                .chain(&fetched.review_pull_requests),
+            &fetched.viewer,
+            &[],
+        );
+        println!(
+            "{} teams and {} users to look up",
+            needs.teams.len(),
+            needs.users.len()
+        );
+        let started = std::time::Instant::now();
+        let found = tauri::async_runtime::block_on(fetch_directory(&http, &token.value, &needs))
+            .expect("lookup succeeds");
+        println!(
+            "denied={} teams={} users={} in {:?}",
+            found.denied,
+            found.teams.len(),
+            found.users.len(),
+            started.elapsed()
+        );
+        for (team, members) in found.teams.iter().take(5) {
+            println!("  {team}: {} members", members.len());
+        }
+        for (user, teams) in found.users.iter().take(3) {
+            println!("  {user}: {} teams", teams.len());
+        }
+        assert!(!found.denied);
+    }
+
     /// Fetches the logged-in user's real pull requests. Run with
     /// `cargo test -- --ignored --nocapture live_fetch`.
     #[test]
@@ -500,6 +694,7 @@ mod tests {
         );
         let ignored = ["kibanamachine".to_string(), "elasticmachine".to_string()];
         let rules = prs::Rules {
+            directory: &Directory::default(),
             ignored_logins: &ignored,
             dormant_after: chrono::Duration::days(30),
             snoozed: &Default::default(),

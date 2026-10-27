@@ -90,6 +90,7 @@ fn view(pr: &PullRequest, viewer: &str, rules: &Rules, now: DateTime<Utc>) -> Op
     let people = People {
         viewer: author,
         ignored_logins: rules.ignored_logins,
+        directory: rules.directory,
     };
     let mut reviewers = prs::reviewers(pr, &people);
     reviewers.retain(|r| !r.login.eq_ignore_ascii_case(viewer));
@@ -197,6 +198,7 @@ fn waiting_since(pr: &PullRequest, viewer: &str, open_since: DateTime<Utc>) -> D
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::directory::Directory;
     use serde_json::{Value, json};
     use std::collections::HashMap;
 
@@ -242,6 +244,7 @@ mod tests {
         snoozed: &HashMap<String, DateTime<Utc>>,
     ) -> Option<ReviewView> {
         let rules = Rules {
+            directory: &Directory::default(),
             ignored_logins: &[],
             dormant_after: chrono::Duration::days(30),
             snoozed,
@@ -411,6 +414,7 @@ mod tests {
     #[test]
     fn longest_waiting_comes_first() {
         let rules = Rules {
+            directory: &Directory::default(),
             ignored_logins: &[],
             dormant_after: chrono::Duration::days(30),
             snoozed: &HashMap::new(),

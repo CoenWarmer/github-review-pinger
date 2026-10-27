@@ -2,6 +2,7 @@ mod auth;
 mod calendar;
 mod card;
 mod checks;
+mod directory;
 mod github;
 mod memory;
 mod notify;
