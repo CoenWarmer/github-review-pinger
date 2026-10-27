@@ -225,8 +225,8 @@ and Repository. The choice is per section and remembered across restarts in
 the webview's local storage; the icon is highlighted when it isn't Default.
 
 While the first load is in progress the popover shows slowly morphing
-concentric rings (11 rings whose radii wobble with drifting noise, after the
-Concentric Noise Rings pattern on bookofshapes.com by Nikolaj Sokolowski)
+concentric rings (11 rings, some fainter than others, whose radii wobble with
+drifting noise, after the Concentric Noise Rings pattern on bookofshapes.com by Nikolaj Sokolowski)
 above "Loading pull requests…". It holds still when the system asks for
 reduced motion.
 

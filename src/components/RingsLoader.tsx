@@ -17,6 +17,8 @@ const RING_SPREAD = 3;
 /** Noise space travelled per second. */
 const DRIFT = 0.45;
 const STROKE = 1.1;
+/** Opacity of each ring from the inside out, so some stand out and some recede. */
+const OPACITIES = [1, 0.35, 0.7, 0.3, 0.9, 0.45, 0.25, 0.8, 0.4, 1, 0.55];
 
 const VIEW = MAX_RADIUS + AMPLITUDE + STROKE + 1;
 
@@ -123,6 +125,7 @@ export function RingsLoader({ size = 208 }: { size?: number }) {
           fill="none"
           stroke="currentColor"
           strokeWidth={STROKE}
+          strokeOpacity={OPACITIES[ring % OPACITIES.length]}
         />
       ))}
     </svg>
