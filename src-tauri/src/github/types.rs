@@ -116,6 +116,7 @@ pub struct MergeQueueEntry {
     pub position: Option<u32>,
     /// GitHub's estimate, in seconds from the time of the query.
     pub estimated_time_to_merge: Option<i64>,
+    pub enqueued_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Deserialize)]

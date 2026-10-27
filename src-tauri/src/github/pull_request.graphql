@@ -18,6 +18,7 @@ fragment PullRequestFields on PullRequest {
   mergeQueueEntry {
     position
     estimatedTimeToMerge
+    enqueuedAt
   }
   repository {
     nameWithOwner

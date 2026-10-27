@@ -44,6 +44,8 @@ export interface PullRequest {
   queued: boolean;
   mergeQueuePosition: number | null;
   mergeEta: string | null;
+  /** When it entered the merge queue. */
+  mergeEnqueuedAt: string | null;
   reviewers: Reviewer[];
 }
 

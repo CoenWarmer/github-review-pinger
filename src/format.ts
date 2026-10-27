@@ -34,3 +34,18 @@ export function checksProgress(
   const elapsedSecs = Math.max(0, (now - Date.parse(started)) / 1000);
   return Math.min(1, elapsedSecs / estimateSecs);
 }
+
+/**
+ * How far through the merge queue a PR is, from 0 to 1: time since it entered
+ * over that plus GitHub's estimate of what's left. Null without both times.
+ */
+export function queueProgress(
+  enqueuedAt: string | null,
+  eta: string | null,
+  now: number,
+): number | null {
+  if (!enqueuedAt || !eta) return null;
+  const total = Date.parse(eta) - Date.parse(enqueuedAt);
+  if (total <= 0) return 1;
+  return Math.min(1, Math.max(0, (now - Date.parse(enqueuedAt)) / total));
+}

@@ -287,6 +287,7 @@ mod tests {
             auto_merge: false,
             merge_queue_position: None,
             merge_eta: None,
+            merge_enqueued_at: None,
             queued: false,
             reviewers: Vec::new(),
             responses,

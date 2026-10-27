@@ -102,6 +102,8 @@ pub struct PrView {
     /// When GitHub expects the queue to merge it, so the UI can count down
     /// between polls.
     pub merge_eta: Option<DateTime<Utc>>,
+    /// When it entered the merge queue.
+    pub merge_enqueued_at: Option<DateTime<Utc>>,
     pub queued: bool,
     pub reviewers: Vec<Reviewer>,
     /// Reviews and comments from other humans, oldest first, for notifications.
@@ -250,6 +252,7 @@ fn view(pr: &PullRequest, people: &People, rules: &Rules, now: DateTime<Utc>) ->
             .as_ref()
             .and_then(|e| e.estimated_time_to_merge)
             .map(|seconds| now + chrono::Duration::seconds(seconds)),
+        merge_enqueued_at: pr.merge_queue_entry.as_ref().and_then(|e| e.enqueued_at),
         queued: pr.merge_queue_entry.is_some(),
         reviewers,
         responses,
@@ -840,13 +843,18 @@ mod tests {
     fn queued_prs_are_approved_but_not_ready_to_merge() {
         let pr = derive_one(json!({
             "reviewDecision": "APPROVED",
-            "mergeQueueEntry": { "position": 5, "estimatedTimeToMerge": 1800 },
+            "mergeQueueEntry": {
+                "position": 5,
+                "estimatedTimeToMerge": 1800,
+                "enqueuedAt": "2026-10-10T08:50:00Z",
+            },
         }));
         assert_eq!(pr.group, Group::Approved);
         assert!(pr.actions.is_empty());
         assert!(pr.queued);
         assert_eq!(pr.merge_queue_position, Some(5));
         assert_eq!(pr.merge_eta, Some(at("2026-10-10T09:30:00Z")));
+        assert_eq!(pr.merge_enqueued_at, Some(at("2026-10-10T08:50:00Z")));
     }
 
     #[test]

@@ -1,7 +1,7 @@
 import { useState, type CSSProperties } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { checksProgress, dayAndTime, elapsed, remaining } from "../format";
+import { checksProgress, dayAndTime, elapsed, queueProgress, remaining } from "../format";
 import type { Action, PullRequest, Reviewer, ReviewerState } from "../types";
 
 /** Opens the PR on GitHub, and has it refreshed first the next time the popover shows. */
@@ -94,13 +94,16 @@ export function PrRow({ pr, now }: { pr: PullRequest; now: number }) {
   // Neutral context for why an approved PR isn't "ready to merge" yet.
   const progress = checksProgress(pr.checksStarted, pr.checksEstimateSecs, now);
   const runningFor = pr.checksStarted && elapsed(pr.checksStarted, now);
+  const queueFill = pr.queued ? queueProgress(pr.mergeEnqueuedAt, pr.mergeEta, now) : null;
+  const fill = (fraction: number | null) =>
+    fraction !== null ? ({ "--progress": `${fraction * 100}%` } as CSSProperties) : undefined;
   const notes: { label: string; className: string; style?: CSSProperties; title?: string }[] =
     showActions
       ? [
           pr.checks === "pending" && {
             label: runningFor ? `Checks running · ${runningFor}` : "Checks running",
             className: `badge-checksRunning${progress !== null ? " badge-progress" : ""}`,
-            style: progress !== null ? ({ "--progress": `${progress * 100}%` } as CSSProperties) : undefined,
+            style: fill(progress),
             title:
               pr.checksEstimateSecs && pr.checksStarted
                 ? `Running for ${runningFor}, usually about ${Math.round(pr.checksEstimateSecs / 60)}m${
@@ -116,7 +119,11 @@ export function PrRow({ pr, now }: { pr: PullRequest; now: number }) {
             ]
               .filter(Boolean)
               .join(" · "),
-            className: "badge-queued",
+            className: `badge-queued${queueFill !== null ? " badge-progress" : ""}`,
+            style: fill(queueFill),
+            title: pr.mergeEnqueuedAt
+              ? `In the merge queue for ${elapsed(pr.mergeEnqueuedAt, now)}`
+              : undefined,
           },
         ].filter((note) => note !== false)
       : [];
