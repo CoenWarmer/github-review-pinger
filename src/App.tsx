@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { PrRow } from "./components/PrRow";
 import { ReviewRow } from "./components/ReviewRow";
@@ -30,8 +30,22 @@ type Tab = "mine" | "reviews";
 
 function SortMenu({ value, onChange }: { value: SortKey; onChange: (key: SortKey) => void }) {
   const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLSpanElement>(null);
+
+  // WebKit doesn't focus buttons on click, so blur can't be relied on to
+  // notice a click elsewhere.
+  useEffect(() => {
+    if (!open) return;
+    const close = (e: MouseEvent) => {
+      if (!ref.current?.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener("mousedown", close);
+    return () => document.removeEventListener("mousedown", close);
+  }, [open]);
+
   return (
     <span
+      ref={ref}
       className="sort"
       onBlur={(e) => {
         if (!e.currentTarget.contains(e.relatedTarget)) setOpen(false);
