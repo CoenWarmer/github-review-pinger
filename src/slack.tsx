@@ -1,6 +1,10 @@
 import { createContext, useContext, useState, type FormEvent, type KeyboardEvent } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { openUrl } from "@tauri-apps/plugin-opener";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { cn } from "@/lib/utils";
 import type { Snapshot } from "./types";
 
 interface SlackSettings {
@@ -67,7 +71,12 @@ export function TeamChip({
     <span
       role="button"
       tabIndex={0}
-      className={`${className} chip-link${link ? "" : " chip-unlinked"}`}
+      className={cn(
+        className,
+        "cursor-pointer outline-none hover:border-info focus-visible:border-info",
+        // No Slack channel yet: hint that the chip can be linked.
+        !link && "border-dashed",
+      )}
       title={
         link
           ? `${title}. Opens its Slack channel and copies the PR link (Shift-click to change the channel)`
@@ -116,24 +125,30 @@ export function TeamChannelForm({
   }
 
   return (
-    <form className="team-form" onSubmit={save} onKeyDown={(e) => e.key === "Escape" && onDone()}>
-      <label>
+    <form
+      className="flex flex-col gap-1.5 px-3 pb-2 text-xs"
+      onSubmit={save}
+      onKeyDown={(e) => e.key === "Escape" && onDone()}
+    >
+      <Label htmlFor={`slack-${team}`} className="text-xs font-normal text-muted-foreground">
         Slack channel link for {team}
-        <input
-          autoFocus
-          value={link}
-          placeholder="https://app.slack.com/client/T…/C…"
-          onChange={(e) => setLink(e.currentTarget.value)}
-        />
-      </label>
-      {error && <p className="form-error">{error}</p>}
-      <span className="team-form-actions">
-        <button type="submit" className="link" disabled={!link.trim()}>
+      </Label>
+      <Input
+        id={`slack-${team}`}
+        autoFocus
+        value={link}
+        placeholder="https://app.slack.com/client/T…/C…"
+        className="h-8 text-xs"
+        onChange={(e) => setLink(e.currentTarget.value)}
+      />
+      {error && <p className="m-0 text-destructive">{error}</p>}
+      <span className="flex gap-1">
+        <Button type="submit" size="xs" disabled={!link.trim()}>
           Save
-        </button>
-        <button type="button" className="link" onClick={onDone}>
+        </Button>
+        <Button type="button" size="xs" variant="ghost" onClick={onDone}>
           Cancel
-        </button>
+        </Button>
       </span>
     </form>
   );

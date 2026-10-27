@@ -1,7 +1,11 @@
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import type { TeamChannel } from "../types";
+import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Label } from "@/components/ui/label";
+import { Separator } from "@/components/ui/separator";
 import { TeamChannelForm } from "../slack";
+import type { TeamChannel } from "../types";
 import { TokenForm } from "./Setup";
 
 export function SettingsPanel({
@@ -35,19 +39,23 @@ export function SettingsPanel({
   }
 
   return (
-    <div className="settings">
-      {account && <p className="settings-account">Signed in as {account}</p>}
-      <label className="checkbox">
-        <input
-          type="checkbox"
+    <div className="flex flex-col gap-3 p-3">
+      {account && <p className="m-0">Signed in as {account}</p>}
+      <div className="flex items-center gap-2">
+        <Checkbox
+          id="autostart"
           checked={autostart ?? false}
           disabled={autostart === null}
-          onChange={(e) => toggleAutostart(e.currentTarget.checked)}
+          onCheckedChange={(checked) => toggleAutostart(checked === true)}
         />
-        Launch at login
-      </label>
-      {error && <p className="form-error">{error}</p>}
+        <Label htmlFor="autostart" className="font-normal">
+          Launch at login
+        </Label>
+      </div>
+      {error && <p className="m-0 text-destructive">{error}</p>}
+      <Separator />
       <TokenForm hasSavedToken={hasSavedToken} />
+      <Separator />
       <SlackChannels channels={channels} />
     </div>
   );
@@ -58,57 +66,69 @@ function SlackChannels({ channels }: { channels: Record<string, TeamChannel> }) 
   const [editing, setEditing] = useState<string | null>(null);
 
   return (
-    <section className="slack-channels">
-      <h3>Slack channels</h3>
+    <section>
+      <h3 className="mt-0 mb-1 text-[11px] font-semibold tracking-wide text-muted-foreground uppercase">
+        Slack channels
+      </h3>
       {teams.length === 0 ? (
-        <p className="hint">
+        <p className="m-0 text-xs text-muted-foreground">
           No team has a Slack channel yet. Click a team chip on a pull request to add one.
         </p>
       ) : (
-        <ul>
+        <ul className="m-0 list-none p-0">
           {teams.map((team) => {
             const { link, source } = channels[team];
+            const saved = source === "saved";
+            const entry = (
+              <>
+                <span className="truncate font-medium">{team}</span>
+                <span className="truncate text-xs text-muted-foreground" title={link}>
+                  {link}
+                </span>
+              </>
+            );
             return (
-              <li key={team}>
-                {source === "saved" && editing === team ? (
-                  <TeamChannelForm team={team} initial={link} onDone={() => setEditing(null)} />
+              <li
+                key={team}
+                className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-2 border-b py-1.5"
+              >
+                {saved && editing === team ? (
+                  <div className="col-span-2 -mx-3">
+                    <TeamChannelForm team={team} initial={link} onDone={() => setEditing(null)} />
+                  </div>
                 ) : (
                   <>
-                    {source === "saved" ? (
+                    {saved ? (
                       <button
                         type="button"
-                        className="slack-entry"
                         title="Change the channel link"
+                        className="flex min-w-0 cursor-pointer flex-col border-0 bg-transparent p-0 text-left hover:[&>span:first-child]:underline"
                         onClick={() => setEditing(team)}
                       >
-                        <span className="slack-team">{team}</span>
-                        <span className="slack-link">{link}</span>
+                        {entry}
                       </button>
                     ) : (
-                      <span className="slack-entry">
-                        <span className="slack-team">{team}</span>
-                        <span className="slack-link" title={link}>
-                          {link}
-                        </span>
+                      <span className="flex min-w-0 flex-col">{entry}</span>
+                    )}
+                    {saved ? (
+                      <Button
+                        type="button"
+                        variant="link"
+                        size="xs"
+                        aria-label={`Remove the Slack channel for ${team}`}
+                        onClick={() => invoke("remove_team_channel", { team })}
+                      >
+                        Remove
+                      </Button>
+                    ) : (
+                      <span
+                        className="text-xs text-muted-foreground"
+                        title="Edit teamChannels in settings.json"
+                      >
+                        settings.json
                       </span>
                     )}
                   </>
-                )}
-                {source === "saved" ? (
-                  editing === team ? null : (
-                    <button
-                      type="button"
-                      className="link"
-                      aria-label={`Remove the Slack channel for ${team}`}
-                      onClick={() => invoke("remove_team_channel", { team })}
-                    >
-                      Remove
-                    </button>
-                  )
-                ) : (
-                  <span className="slack-source" title="Edit teamChannels in settings.json">
-                    settings.json
-                  </span>
                 )}
               </li>
             );

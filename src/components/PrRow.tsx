@@ -1,4 +1,7 @@
 import { useState, type CSSProperties } from "react";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { chipClass, fillStyle } from "./Chips";
 import { invoke } from "@tauri-apps/api/core";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { checksProgress, dayAndTime, elapsed, queueProgress, remaining } from "../format";
@@ -17,6 +20,17 @@ const ACTION_LABELS: Record<Action, string> = {
   conflicts: "Conflicts",
   ciFailing: "CI failing",
   readyToMerge: "Ready to merge",
+};
+
+/** Matches the compact badges the rows have always used. */
+export const BADGE_SIZE = "gap-[3px] px-1.5 py-0 text-[11px] leading-[18px] font-semibold";
+
+const ACTION_VARIANTS: Record<Action, "danger" | "info" | "success"> = {
+  changesRequested: "danger",
+  newFeedback: "info",
+  conflicts: "danger",
+  ciFailing: "danger",
+  readyToMerge: "success",
 };
 
 export const REVIEWER_GLYPHS: Record<ReviewerState, string> = {
@@ -58,7 +72,7 @@ export function ReviewerChip({
         team={reviewer.team}
         login={reviewer.rerequested ? `${reviewer.login} ↻` : reviewer.login}
         glyph={REVIEWER_GLYPHS[reviewer.state]}
-        className={`chip chip-${reviewer.state}`}
+        className={chipClass(reviewer.state)}
         title={label}
         prUrl={prUrl}
         onAsk={onAsk}
@@ -66,7 +80,7 @@ export function ReviewerChip({
     );
   }
   return (
-    <span className={`chip chip-${reviewer.state}`} title={label}>
+    <span className={chipClass(reviewer.state)} title={label}>
       <span aria-hidden="true">{REVIEWER_GLYPHS[reviewer.state]}</span>
       {reviewer.login}
       {reviewer.rerequested && <span aria-hidden="true"> ↻</span>}
@@ -79,34 +93,46 @@ export function SnoozeControl({ pr }: { pr: Pick<PullRequest, "id" | "snoozedUnt
 
   if (pr.snoozedUntil) {
     return (
-      <button type="button" className="link" onClick={() => invoke("unsnooze", { id: pr.id })}>
+      <Button
+        type="button"
+        variant="link"
+        size="xs"
+        onClick={() => invoke("unsnooze", { id: pr.id })}
+      >
         Unsnooze
-      </button>
+      </Button>
     );
   }
   if (!choosing) {
     return (
-      <button type="button" className="link" onClick={() => setChoosing(true)}>
+      <Button type="button" variant="link" size="xs" onClick={() => setChoosing(true)}>
         Snooze
-      </button>
+      </Button>
     );
   }
   return (
-    <span className="snooze-options">
+    <span className="inline-flex">
       {SNOOZE_OPTIONS.map(({ days, label }) => (
-        <button
+        <Button
           key={days}
           type="button"
-          className="link"
+          variant="link"
+          size="xs"
           aria-label={`Snooze for ${days} ${days === 1 ? "day" : "days"}`}
           onClick={() => invoke("snooze", { id: pr.id, days })}
         >
           {label}
-        </button>
+        </Button>
       ))}
-      <button type="button" className="link" aria-label="Cancel" onClick={() => setChoosing(false)}>
+      <Button
+        type="button"
+        variant="link"
+        size="xs"
+        aria-label="Cancel"
+        onClick={() => setChoosing(false)}
+      >
         ✕
-      </button>
+      </Button>
     </span>
   );
 }
@@ -119,19 +145,19 @@ export function PrRow({ pr, now }: { pr: PullRequest; now: number }) {
   const progress = checksProgress(pr.checksStarted, pr.checksEstimateSecs, now);
   const runningFor = pr.checksStarted && elapsed(pr.checksStarted, now);
   const queueFill = pr.queued ? queueProgress(pr.mergeEnqueuedAt, pr.mergeEta, now) : null;
-  const fill = (fraction: number | null) =>
-    fraction !== null ? ({ "--progress": `${fraction * 100}%` } as CSSProperties) : undefined;
   const notes: {
+    key: string;
     label: string;
-    className: string;
+    variant: "warning" | "success";
     style?: CSSProperties;
     title?: string;
   }[] = showActions
     ? [
         pr.checks === "pending" && {
+          key: "checksRunning",
           label: runningFor ? `Checks running · ${runningFor}` : "Checks running",
-          className: `badge-checksRunning${progress !== null ? " badge-progress" : ""}`,
-          style: fill(progress),
+          variant: "warning" as const,
+          style: fillStyle(progress, "warning"),
           title:
             pr.checksEstimateSecs && pr.checksStarted
               ? `Running for ${runningFor}, usually about ${Math.round(pr.checksEstimateSecs / 60)}m${
@@ -139,16 +165,21 @@ export function PrRow({ pr, now }: { pr: PullRequest; now: number }) {
                 }`
               : undefined,
         },
-        pr.autoMerge && { label: "Auto-merge", className: "badge-autoMerge" },
+        pr.autoMerge && {
+          key: "autoMerge",
+          label: "Auto-merge",
+          variant: "success" as const,
+        },
         pr.queued && {
+          key: "queued",
           label: [
             pr.mergeQueuePosition ? `Queued #${pr.mergeQueuePosition}` : "Queued",
             pr.mergeEta && remaining(pr.mergeEta, now),
           ]
             .filter(Boolean)
             .join(" · "),
-          className: `badge-queued${queueFill !== null ? " badge-progress" : ""}`,
-          style: fill(queueFill),
+          variant: "warning" as const,
+          style: fillStyle(queueFill, "warning"),
           title: pr.mergeEnqueuedAt
             ? `In the merge queue for ${elapsed(pr.mergeEnqueuedAt, now)}`
             : undefined,
@@ -157,10 +188,14 @@ export function PrRow({ pr, now }: { pr: PullRequest; now: number }) {
     : [];
 
   return (
-    <li className="pr">
-      <button type="button" className="pr-main" onClick={() => visitPr(pr)}>
-        <span className="pr-title">{pr.title}</span>
-        <span className="pr-meta">
+    <li className="group relative border-b hover:bg-accent/50 focus-within:bg-accent/50">
+      <button
+        type="button"
+        className="flex w-full cursor-pointer flex-col gap-[3px] border-0 bg-transparent px-3 py-2 text-left outline-none"
+        onClick={() => visitPr(pr)}
+      >
+        <span className="truncate font-medium">{pr.title}</span>
+        <span className="text-xs text-muted-foreground tabular-nums">
           {pr.repo}#{pr.number} · open {elapsed(pr.openSince, now)} · quiet{" "}
           {elapsed(pr.quietSince, now)}
           {pr.group === "dormant" && ` · idle ${elapsed(pr.lastActivity, now)}`}
@@ -169,17 +204,17 @@ export function PrRow({ pr, now }: { pr: PullRequest; now: number }) {
         {((showActions && pr.actions.length > 0) ||
           notes.length > 0 ||
           pr.reviewers.length > 0) && (
-          <span className="pr-badges">
+          <span className="flex flex-wrap gap-1">
             {showActions &&
               pr.actions.map((action) => (
-                <span key={action} className={`badge badge-${action}`}>
+                <Badge key={action} variant={ACTION_VARIANTS[action]} className={BADGE_SIZE}>
                   {ACTION_LABELS[action]}
-                </span>
+                </Badge>
               ))}
-            {notes.map(({ label, className, style, title }) => (
-              <span key={className} className={`badge ${className}`} style={style} title={title}>
+            {notes.map(({ key, label, variant, style, title }) => (
+              <Badge key={key} variant={variant} className={BADGE_SIZE} style={style} title={title}>
                 {label}
-              </span>
+              </Badge>
             ))}
             {pr.reviewers.map((reviewer) => (
               <ReviewerChip
@@ -193,11 +228,16 @@ export function PrRow({ pr, now }: { pr: PullRequest; now: number }) {
         )}
       </button>
       {askingTeam && <TeamChannelForm team={askingTeam} onDone={() => setAskingTeam(null)} />}
-      {pr.group !== "draft" && (
-        <span className="pr-side">
-          <SnoozeControl pr={pr} />
-        </span>
-      )}
+      {pr.group !== "draft" && <RowActions pr={pr} />}
     </li>
+  );
+}
+
+/** Revealed on hover so rows stay uncluttered. */
+export function RowActions({ pr }: { pr: Pick<PullRequest, "id" | "snoozedUntil"> }) {
+  return (
+    <span className="invisible absolute top-1.5 right-2 rounded-md border bg-popover px-1 text-xs group-focus-within:visible group-hover:visible">
+      <SnoozeControl pr={pr} />
+    </span>
   );
 }

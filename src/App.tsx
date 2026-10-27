@@ -1,5 +1,18 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { ArrowDownWideNarrow, ChevronDown, ChevronRight } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { ScrollArea } from "@/components/ui/scroll-area";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { cn } from "@/lib/utils";
 import { PrRow } from "./components/PrRow";
 import { ReviewRow } from "./components/ReviewRow";
 import { SettingsPanel } from "./components/SettingsPanel";
@@ -9,7 +22,7 @@ import { useNow, useSnapshot } from "./hooks";
 import { SlackContext } from "./slack";
 import { SORT_OPTIONS, sortRows, useSectionSort, type SortKey } from "./sort";
 import type { Group, ReviewGroup, Snapshot } from "./types";
-import "./App.css";
+import "./index.css";
 
 const SECTIONS: { group: Group; title: string }[] = [
   { group: "approved", title: "Approved" },
@@ -29,64 +42,45 @@ const REVIEW_SECTIONS: { group: ReviewGroup; title: string }[] = [
 
 type Tab = "mine" | "reviews" | "settings";
 
+const TABS: { id: Tab; label: string }[] = [
+  { id: "mine", label: "My PRs" },
+  { id: "reviews", label: "Review Requests" },
+  { id: "settings", label: "Settings" },
+];
+
+function Empty({ children }: { children: ReactNode }) {
+  return <p className="m-0 px-3 py-6 text-center text-muted-foreground">{children}</p>;
+}
+
+function Banner({ children }: { children: ReactNode }) {
+  return <p className="m-0 border-b bg-warning/15 px-3 py-2">{children}</p>;
+}
+
 function SortMenu({ value, onChange }: { value: SortKey; onChange: (key: SortKey) => void }) {
-  const [open, setOpen] = useState(false);
-  const ref = useRef<HTMLSpanElement>(null);
-
-  // WebKit doesn't focus buttons on click, so blur can't be relied on to
-  // notice a click elsewhere.
-  useEffect(() => {
-    if (!open) return;
-    const close = (e: MouseEvent) => {
-      if (!ref.current?.contains(e.target as Node)) setOpen(false);
-    };
-    document.addEventListener("mousedown", close);
-    return () => document.removeEventListener("mousedown", close);
-  }, [open]);
-
   return (
-    <span
-      ref={ref}
-      className="sort"
-      onBlur={(e) => {
-        if (!e.currentTarget.contains(e.relatedTarget)) setOpen(false);
-      }}
-      onKeyDown={(e) => e.key === "Escape" && setOpen(false)}
-    >
-      <button
-        type="button"
-        className={`sort-button${value !== "default" ? " sort-active" : ""}`}
-        aria-label="Sort"
-        aria-haspopup="menu"
-        aria-expanded={open}
-        title="Sort"
-        onClick={() => setOpen(!open)}
-      >
-        <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
-          <path d="M3.5 2.5v9.3L1.9 10.2 1 11.1l3 3 3-3-.9-.9-1.6 1.6V2.5h-1zM10 3h5v1.3h-5V3zm0 4h4v1.3h-4V7zm0 4h3v1.3h-3V11z" />
-        </svg>
-      </button>
-      {open && (
-        <ul className="sort-menu" role="menu">
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon-xs"
+          aria-label="Sort"
+          title="Sort"
+          className={cn(value !== "default" ? "text-info" : "text-muted-foreground")}
+        >
+          <ArrowDownWideNarrow />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="min-w-[150px] text-xs">
+        <DropdownMenuRadioGroup value={value} onValueChange={(key) => onChange(key as SortKey)}>
           {SORT_OPTIONS.map(({ key, label }) => (
-            <li key={key} role="none">
-              <button
-                type="button"
-                role="menuitemradio"
-                aria-checked={value === key}
-                onClick={() => {
-                  onChange(key);
-                  setOpen(false);
-                }}
-              >
-                <span aria-hidden="true">{value === key ? "✓" : ""}</span>
-                {label}
-              </button>
-            </li>
+            <DropdownMenuRadioItem key={key} value={key} className="text-xs">
+              {label}
+            </DropdownMenuRadioItem>
           ))}
-        </ul>
-      )}
-    </span>
+        </DropdownMenuRadioGroup>
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }
 
@@ -111,87 +105,55 @@ function Section<
   collapsible: boolean;
   render: (row: T) => ReactNode;
 }) {
-  const [collapsed, setCollapsed] = useState(collapsible);
+  const [open, setOpen] = useState(!collapsible);
   const [sort, setSort] = useSectionSort(id);
   if (rows.length === 0) return null;
 
-  return (
-    <section className="section">
-      <h2>
-        {collapsible ? (
-          <button
-            type="button"
-            className="section-toggle"
-            aria-expanded={!collapsed}
-            onClick={() => setCollapsed(!collapsed)}
-          >
-            {collapsed ? "▸" : "▾"} {title} <span className="count">{rows.length}</span>
-          </button>
-        ) : (
-          <span>
-            {title} <span className="count">{rows.length}</span>
-          </span>
-        )}
-        <SortMenu value={sort} onChange={setSort} />
-      </h2>
-      {!collapsed && <ul className="pr-list">{sortRows(rows, sort).map(render)}</ul>}
-    </section>
+  const heading = (
+    <>
+      {title} <span className="font-normal">{rows.length}</span>
+    </>
   );
-}
 
-function Tabs({
-  tab,
-  onChange,
-  counts,
-}: {
-  tab: Tab;
-  onChange: (tab: Tab) => void;
-  counts: Partial<Record<Tab, number>>;
-}) {
-  const tabs: { id: Tab; label: string }[] = [
-    { id: "mine", label: "My PRs" },
-    { id: "reviews", label: "Review Requests" },
-    { id: "settings", label: "Settings" },
-  ];
   return (
-    <div className="tabs" role="tablist">
-      {tabs.map(({ id, label }) => (
-        <button
-          key={id}
-          type="button"
-          role="tab"
-          aria-selected={tab === id}
-          className="tab"
-          onClick={() => onChange(id)}
-        >
-          {label}
-          {!!counts[id] && <span className="tab-count">{counts[id]}</span>}
-        </button>
-      ))}
-    </div>
+    <Collapsible asChild open={open} onOpenChange={setOpen}>
+      <section>
+        <h2 className="sticky top-0 z-10 m-0 flex items-center justify-between border-b bg-background px-3 py-1 text-[11px] font-semibold tracking-wide text-muted-foreground uppercase">
+          {collapsible ? (
+            <CollapsibleTrigger className="flex cursor-pointer items-center gap-1 border-0 bg-transparent p-0 font-[inherit] tracking-[inherit] uppercase">
+              {open ? <ChevronDown className="size-3" /> : <ChevronRight className="size-3" />}
+              {heading}
+            </CollapsibleTrigger>
+          ) : (
+            <span>{heading}</span>
+          )}
+          <SortMenu value={sort} onChange={setSort} />
+        </h2>
+        <CollapsibleContent asChild>
+          <ul className="m-0 list-none p-0">{sortRows(rows, sort).map(render)}</ul>
+        </CollapsibleContent>
+      </section>
+    </Collapsible>
   );
 }
 
 function Footer({ snapshot, now }: { snapshot: Snapshot; now: number }) {
   return (
-    <footer className="footer">
-      <div className="footer-row">
-        <span>
-          {snapshot.refreshing
-            ? "Refreshing…"
-            : snapshot.fetchedAt && `Updated ${elapsed(snapshot.fetchedAt, now)} ago`}
-        </span>
-        <span className="footer-actions">
-          <button
-            type="button"
-            className="link"
-            disabled={snapshot.refreshing}
-            onClick={() => invoke("refresh")}
-          >
-            Refresh
-          </button>
-        </span>
-      </div>
+    <footer className="flex items-center justify-between gap-2 border-t px-3 py-1 text-xs text-muted-foreground">
+      <span>
+        {snapshot.refreshing
+          ? "Refreshing…"
+          : snapshot.fetchedAt && `Updated ${elapsed(snapshot.fetchedAt, now)} ago`}
+      </span>
+      <Button
+        type="button"
+        variant="link"
+        size="xs"
+        disabled={snapshot.refreshing}
+        onClick={() => invoke("refresh")}
+      >
+        Refresh
+      </Button>
     </footer>
   );
 }
@@ -202,7 +164,9 @@ function App() {
   const [tab, setTab] = useState<Tab>("mine");
 
   if (!snapshot || (snapshot.status.kind === "loading" && !snapshot.fetchedAt)) {
-    return <p className="empty">Loading pull requests…</p>;
+    return (
+      <p className="m-0 px-3 py-6 text-center text-muted-foreground">Loading pull requests…</p>
+    );
   }
   if (snapshot.status.kind === "error" && !snapshot.fetchedAt) {
     return <Setup problem={snapshot.status.problem} />;
@@ -224,17 +188,34 @@ function App() {
         opensIn: snapshot.slackOpensIn,
       }}
     >
-      <main className="popover">
+      <main className="flex h-full flex-col">
         {snapshot.status.kind === "error" && (
-          <p className="banner">{problemMessage(snapshot.status.problem)}</p>
+          <Banner>{problemMessage(snapshot.status.problem)}</Banner>
         )}
         {snapshot.ssoPartial && (
-          <p className="banner">
+          <Banner>
             Some organizations are hidden because this token isn't authorized for their SSO.
-          </p>
+          </Banner>
         )}
-        <Tabs tab={tab} onChange={setTab} counts={counts} />
-        <div className="sections">
+        <Tabs value={tab} onValueChange={(value) => setTab(value as Tab)} className="gap-0">
+          <TabsList variant="line" className="h-auto w-full rounded-none border-b p-0">
+            {TABS.map(({ id, label }) => (
+              <TabsTrigger
+                key={id}
+                value={id}
+                className="h-9 rounded-none after:bottom-0 after:h-0.5 after:bg-info"
+              >
+                {label}
+                {!!counts[id] && (
+                  <span className="rounded-full bg-muted px-1.5 text-[11px] leading-[18px] tabular-nums">
+                    {counts[id]}
+                  </span>
+                )}
+              </TabsTrigger>
+            ))}
+          </TabsList>
+        </Tabs>
+        <ScrollArea className="min-h-0 flex-1">
           {tab === "settings" ? (
             <SettingsPanel
               account={snapshot.viewer && `${snapshot.viewer} via ${source}`}
@@ -243,7 +224,7 @@ function App() {
             />
           ) : tab === "mine" ? (
             prs.length === 0 ? (
-              <p className="empty">No open pull requests.</p>
+              <Empty>No open pull requests.</Empty>
             ) : (
               SECTIONS.map(({ group, title }) => (
                 <Section
@@ -257,7 +238,7 @@ function App() {
               ))
             )
           ) : reviews.length === 0 ? (
-            <p className="empty">No pull requests are waiting on your review.</p>
+            <Empty>No pull requests are waiting on your review.</Empty>
           ) : (
             REVIEW_SECTIONS.map(({ group, title }) => (
               <Section
@@ -270,7 +251,7 @@ function App() {
               />
             ))
           )}
-        </div>
+        </ScrollArea>
         <Footer snapshot={snapshot} now={now} />
       </main>
     </SlackContext.Provider>
