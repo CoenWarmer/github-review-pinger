@@ -1,6 +1,7 @@
-import { useState, type CSSProperties } from "react";
+import { useState, type CSSProperties, type KeyboardEvent, type MouseEvent } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { cn } from "@/lib/utils";
 import { chipClass, fillStyle } from "./Chips";
 import { ReviewerCard } from "./ReviewerCard";
 import { invoke } from "@tauri-apps/api/core";
@@ -56,11 +57,13 @@ const SNOOZE_OPTIONS = [
 
 export function ReviewerChip({
   reviewer,
+  prId,
   prUrl,
   now,
   onAsk,
 }: {
   reviewer: Reviewer;
+  prId: string;
   prUrl: string;
   now: number;
   /** Asks for a team's Slack channel, which a team chip links to. */
@@ -69,6 +72,8 @@ export function ReviewerChip({
   const label = `${reviewer.login} ${REVIEWER_LABELS[reviewer.state]}${
     reviewer.rerequested ? ", re-requested" : ""
   }`;
+  // A user's chip opens their last comment, or review.
+  const responseUrl = reviewer.team ? null : reviewer.lastResponse?.url;
   const chip = reviewer.team ? (
     <TeamChip
       team={reviewer.team}
@@ -81,7 +86,29 @@ export function ReviewerChip({
     />
   ) : (
     // The hover card says more than a native tooltip would.
-    <span className={chipClass(reviewer.state)} aria-label={label}>
+    <span
+      className={cn(
+        chipClass(reviewer.state),
+        responseUrl && "cursor-pointer outline-none hover:border-info focus-visible:border-info",
+      )}
+      aria-label={label}
+      {...(responseUrl && {
+        role: "button",
+        tabIndex: 0,
+        // Inside the row's button, so it mustn't also open the PR.
+        onClick: (e: MouseEvent) => {
+          e.stopPropagation();
+          visitPr({ id: prId, url: responseUrl });
+        },
+        onKeyDown: (e: KeyboardEvent) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            e.stopPropagation();
+            visitPr({ id: prId, url: responseUrl });
+          }
+        },
+      })}
+    >
       <span aria-hidden="true">{REVIEWER_GLYPHS[reviewer.state]}</span>
       {reviewer.login}
       {reviewer.rerequested && <span aria-hidden="true"> ↻</span>}
@@ -226,6 +253,7 @@ export function PrRow({ pr, now }: { pr: PullRequest; now: number }) {
               <ReviewerChip
                 key={reviewer.login}
                 reviewer={reviewer}
+                prId={pr.id}
                 prUrl={pr.url}
                 now={now}
                 onAsk={setAskingTeam}

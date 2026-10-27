@@ -236,8 +236,8 @@ The footer shows when data was refreshed and a refresh icon button, which spins 
 
 Hovering a reviewer chip on either tab (or focusing it with the keyboard)
 shows a card after about 300 ms. It closes when the pointer leaves, can't be
-entered, and doesn't change what clicking does (a team chip still opens its
-Slack channel, Shift-click still changes it).
+entered. A team chip still opens its Slack channel on click (Shift-click
+changes it); a user chip opens their last response, below.
 
 - **User chip**:
   - **Teams**: only the teams that matter for this PR, as "ana for
@@ -254,6 +254,9 @@ Slack channel, Shift-click still changes it).
     long you've been waiting on them, and it's there even when GitHub no
     longer lists them under latest reviews because they were asked again.
     Shown for approvers only when they responded after approving.
+  - **Click**: a user chip with a response opens it on GitHub: the review's
+    last comment (`#discussion_r…`), a PR comment, or the review itself, and
+    marks the PR visited. A chip without a response isn't clickable.
   - **Not responded**: "Hasn't responded yet, requested 4h ago". After a
     response, a newer re-request adds "Re-requested 1h ago".
 - **Team chip**:

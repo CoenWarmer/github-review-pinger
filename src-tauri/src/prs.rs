@@ -351,18 +351,34 @@ fn has_new_feedback(pr: &PullRequest, people: &People, responses: &[Response]) -
 pub(crate) fn interactions(
     pr: &PullRequest,
 ) -> impl Iterator<Item = (&Actor, Option<ReviewState>, DateTime<Utc>)> {
+    linked_interactions(pr).map(|(author, state, at, _)| (author, state, at))
+}
+
+/// Like [`interactions`], with where to read each: a review's last comment
+/// (or the review itself) and a conversation comment's own link.
+fn linked_interactions(
+    pr: &PullRequest,
+) -> impl Iterator<Item = (&Actor, Option<ReviewState>, DateTime<Utc>, Option<&str>)> {
     let reviews = pr.reviews.iter().filter_map(|review| {
+        let comment = review
+            .comments
+            .iter()
+            .flat_map(|comments| comments.iter())
+            .last()
+            .map(|comment| comment.url.as_str());
         Some((
             review.author.as_ref()?,
             Some(review.state),
             review.submitted_at?,
+            comment.or(review.url.as_deref()),
         ))
     });
     let comments = pr.timeline_items.iter().filter_map(|item| match item {
         TimelineItem::IssueComment {
             created_at,
+            url,
             author: Some(author),
-        } => Some((author, None, *created_at)),
+        } => Some((author, None, *created_at, url.as_deref())),
         _ => None,
     });
     reviews.chain(comments)
@@ -588,8 +604,8 @@ fn latest_response_by(
     people: &People,
     matches: impl Fn(&str) -> bool,
 ) -> Option<Activity> {
-    interactions(pr)
-        .filter_map(|(author, state, at)| {
+    linked_interactions(pr)
+        .filter_map(|(author, state, at, url)| {
             let kind = match state {
                 None | Some(ReviewState::Commented) => ActivityKind::Commented,
                 Some(ReviewState::Approved) => ActivityKind::Approved,
@@ -600,6 +616,7 @@ fn latest_response_by(
                 login: author.login.clone(),
                 kind,
                 at,
+                url: url.map(str::to_string),
             })
         })
         .max_by_key(|activity| activity.at)
@@ -622,6 +639,7 @@ fn team_activity(pr: &PullRequest, people: &People, members: &HashSet<String>) -
                 login: login.clone(),
                 kind: ActivityKind::Pushed,
                 at: node.commit.committed_date,
+                url: None,
             })
         })
         .max_by_key(|activity| activity.at);
@@ -884,7 +902,8 @@ mod tests {
             "timelineItems": { "nodes": [
                 { "__typename": "ReviewRequestedEvent", "createdAt": "2026-10-27T11:52:30Z",
                   "requestedReviewer": user("jcger") },
-                comment(user("JCGER"), "2026-10-27T13:00:00Z"),
+                { "__typename": "IssueComment", "createdAt": "2026-10-27T13:00:00Z",
+                  "url": "https://github.com/o/r/pull/1#issuecomment-9", "author": user("JCGER") },
             ] },
             "reviews": { "nodes": [
                 submitted(user("jcger"), "COMMENTED", "2026-10-27T08:34:28Z"),
@@ -905,8 +924,53 @@ mod tests {
                 login: "JCGER".into(),
                 kind: ActivityKind::Commented,
                 at: at("2026-10-27T13:00:00Z"),
+                url: Some("https://github.com/o/r/pull/1#issuecomment-9".into()),
             })
         );
+    }
+
+    #[test]
+    fn a_last_response_links_to_the_reviews_last_comment_or_else_the_review() {
+        let review = |at: &str, review_url: &str, comment_url: Option<&str>| {
+            let mut review = submitted(user("jcger"), "COMMENTED", at);
+            review["url"] = json!(review_url);
+            review["comments"] = match comment_url {
+                Some(url) => json!({ "nodes": [{ "url": url }] }),
+                None => json!({ "nodes": [] }),
+            };
+            review
+        };
+        let last_response = |reviews: Vec<Value>| {
+            let pr = with(json!({
+                "reviewRequests": { "nodes": [{ "requestedReviewer": user("jcger") }] },
+                "reviews": { "nodes": reviews },
+            }));
+            derive_all(vec![pr], &[]).remove(0).reviewers[0]
+                .last_response
+                .clone()
+                .unwrap()
+        };
+
+        let with_comment = last_response(vec![
+            review(
+                "2026-10-27T08:00:00Z",
+                "https://x/review-1",
+                Some("https://x/discussion_r1"),
+            ),
+            review(
+                "2026-10-27T12:00:00Z",
+                "https://x/review-2",
+                Some("https://x/discussion_r2"),
+            ),
+        ]);
+        assert_eq!(with_comment.url.as_deref(), Some("https://x/discussion_r2"));
+
+        let without_comment = last_response(vec![review(
+            "2026-10-27T12:00:00Z",
+            "https://x/review-2",
+            None,
+        )]);
+        assert_eq!(without_comment.url.as_deref(), Some("https://x/review-2"));
     }
 
     #[test]
@@ -945,6 +1009,7 @@ mod tests {
                 login: "ana".into(),
                 kind: ActivityKind::Pushed,
                 at: at("2026-10-04T09:00:00Z"),
+                url: None,
             })
         );
 

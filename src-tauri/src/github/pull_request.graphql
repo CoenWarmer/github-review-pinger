@@ -108,6 +108,13 @@ fragment PullRequestFields on PullRequest {
     nodes {
       state
       submittedAt
+      url
+      # Where the review's last comment lives, to link to it.
+      comments(last: 1) {
+        nodes {
+          url
+        }
+      }
       author {
         __typename
         login
@@ -149,6 +156,7 @@ fragment PullRequestFields on PullRequest {
       }
       ... on IssueComment {
         createdAt
+        url
         author {
           __typename
           login

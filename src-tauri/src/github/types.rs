@@ -244,6 +244,17 @@ pub struct Review {
     #[serde(default, rename = "submittedAt")]
     pub submitted_at: Option<DateTime<Utc>>,
     pub author: Option<Actor>,
+    /// Only requested for `reviews`.
+    #[serde(default)]
+    pub url: Option<String>,
+    /// The review's last comment, only requested for `reviews`.
+    #[serde(default)]
+    pub comments: Option<Nodes<ReviewComment>>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ReviewComment {
+    pub url: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
@@ -278,6 +289,8 @@ pub enum TimelineItem {
     },
     IssueComment {
         created_at: DateTime<Utc>,
+        #[serde(default)]
+        url: Option<String>,
         author: Option<Actor>,
     },
     #[serde(other)]

@@ -83,6 +83,7 @@ function UserDetails({ reviewer, now }: { reviewer: Reviewer; now: number }) {
         <Line>Hasn't responded yet{requestedAt && `, requested ${ago(requestedAt, now)}`}</Line>
       )}
       {reRequested && <Line>Re-requested {ago(requestedAt, now)}</Line>}
+      {lastResponse?.url && <Line>Click to open it on GitHub.</Line>}
     </>
   );
 }

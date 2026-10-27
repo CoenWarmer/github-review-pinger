@@ -36,6 +36,8 @@ export interface Activity {
   login: string;
   kind: "approved" | "changesRequested" | "commented" | "pushed";
   at: string;
+  /** Where to read it: the comment, or the review when it has none. */
+  url: string | null;
 }
 
 export interface PullRequest {
