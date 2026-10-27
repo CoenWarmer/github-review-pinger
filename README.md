@@ -32,7 +32,19 @@ pnpm install
 pnpm tauri dev
 ```
 
-The repository is a Cargo workspace:
+The web version runs in a browser (and installs to a phone's home screen) with
+a token you paste in, so it needs no GitHub CLI:
+
+```sh
+pnpm web
+```
+
+The Rust toolchain needs the `wasm32-unknown-unknown` target and the
+`wasm-bindgen` CLI at the version pinned in `crates/wasm/Cargo.toml`
+(`rustup target add wasm32-unknown-unknown`, then
+`cargo install wasm-bindgen-cli --version 0.2.129 --locked`).
+
+The repository is a Cargo and pnpm workspace:
 
 - `apps/desktop/`: the desktop app: a thin entry point and a Tauri
   implementation of the platform interface in `src/`, and the Rust shell in
@@ -40,8 +52,12 @@ The repository is a Cargo workspace:
 - `packages/app/`: the React UI, shared by every front end. It asks its host
   for what it needs (data, opening links, tokens) through a `Platform`
   interface, so it doesn't depend on Tauri.
+- `apps/web/`: the web app: fetching from GitHub in TypeScript, browser
+  storage, and the installable-app files.
 - `crates/core/`: the pull request logic, with no dependency on Tauri, so
   other front ends can share it.
+- `crates/wasm/` and `packages/wasm/`: the core logic compiled to
+  WebAssembly for the web app, and the package that builds it.
 
 Run all Rust checks from the repository root: `cargo test --workspace`.
 

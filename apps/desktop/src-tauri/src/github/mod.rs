@@ -1,4 +1,5 @@
 pub use review_pinger_core::github::types;
+use review_pinger_core::github::{DETAILS_QUERY, MERGE_STATE_QUERY, SEARCH_QUERY};
 
 use std::collections::{HashMap, HashSet};
 use std::time::Duration;
@@ -14,12 +15,6 @@ use crate::directory::{Directory, Found, Needs};
 use types::{CheckState, MergeStateStatus, Mergeable, PullRequest, ReviewDecision, ReviewState};
 
 const ENDPOINT: &str = "https://api.github.com/graphql";
-const SEARCH_QUERY: &str = include_str!("search.graphql");
-const DETAILS_QUERY: &str = concat!(
-    include_str!("details.graphql"),
-    include_str!("pull_request.graphql")
-);
-const MERGE_STATE_QUERY: &str = include_str!("merge_state.graphql");
 const AUTHORED: &str = "is:pr is:open author:@me archived:false";
 const REVIEW_REQUESTED: &str = "is:pr is:open review-requested:@me -author:@me archived:false";
 const MAX_SEARCH_PAGES: usize = 10;
@@ -155,9 +150,6 @@ pub async fn add_merge_states(
     Ok(())
 }
 
-/// Approved, mergeable, green, and not already auto-merging: the only PRs
-/// whose ready-to-merge verdict depends on `mergeStateStatus`. Mirrors the
-/// other conditions of the rule in `prs::actions`.
 /// Aliases per directory query, which keeps each query light.
 const DIRECTORY_BATCH: usize = 15;
 const DIRECTORY_CONCURRENT: usize = 2;
@@ -267,6 +259,9 @@ pub async fn fetch_directory(
 
 const MEMBERS_QUERY: &str = "query($org: String!, $slug: String!, $after: String) { organization(login: $org) { team(slug: $slug) { members(first: 100, after: $after) { nodes { login } pageInfo { hasNextPage endCursor } } } } }";
 
+/// Approved, mergeable, green, and not already auto-merging: the only PRs
+/// whose ready-to-merge verdict depends on `mergeStateStatus`. Mirrors the
+/// other conditions of the rule in `prs::actions`.
 fn could_be_ready(pr: &PullRequest) -> bool {
     let approved = match pr.review_decision {
         Some(ReviewDecision::Approved) => true,

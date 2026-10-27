@@ -41,8 +41,8 @@ jobs:
           cargo clippy --workspace --all-targets -- -D warnings
           cargo test --workspace
 
-  # The browser build of the core logic: compile it to WebAssembly and run it
-  # through Node, which the Rust tests can't do.
+  # The browser build: compile the core logic to WebAssembly and run it through
+  # Node, which the Rust tests can't do, then test and build the web app on it.
   wasm:
     runs-on: ubuntu-22.04
     steps:
@@ -63,3 +63,5 @@ jobs:
       - run: pnpm --filter @review-pinger/wasm build:wasm
       - run: pnpm --filter @review-pinger/wasm typecheck
       - run: pnpm --filter @review-pinger/wasm smoke
+      - run: pnpm --filter @review-pinger/web test
+      - run: pnpm --filter @review-pinger/web build

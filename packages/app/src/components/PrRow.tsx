@@ -268,7 +268,7 @@ export function PrRow({ pr, now }: { pr: PullRequest; now: number }) {
 /** Revealed on hover so rows stay uncluttered. */
 export function RowActions({ pr }: { pr: Pick<PullRequest, "id" | "snoozedUntil"> }) {
   return (
-    <span className="invisible absolute top-1.5 right-2 rounded-md border bg-popover px-1 text-xs group-focus-within:visible group-hover:visible">
+    <span className="invisible absolute top-1.5 right-2 rounded-md border bg-popover px-1 text-xs group-focus-within:visible group-hover:visible [@media(hover:none)]:visible">
       <SnoozeControl pr={pr} />
     </span>
   );

@@ -390,6 +390,37 @@ own mute switch instead.
   periods, and snoozes persist in `state.json`
   in the app data directory, written atomically. Closed PRs are pruned.
 
+## Web version
+
+A browser version for phones and other machines without the desktop app, built
+from the same pieces: the React UI (`packages/app`) and the Rust logic
+(`crates/core`) compiled to WebAssembly (`crates/wasm`), so both show the same
+lists. It differs from the desktop app only where a browser has to:
+
+- **Sign-in**: a personal access token pasted into the setup screen, kept in
+  that browser's `localStorage`. There is no GitHub CLI option. Each device
+  needs its own token, and a token needs the `repo` scope (and `read:org` for
+  the hover cards' team details, with the same Settings hint when it's
+  missing). The first visit shows the setup screen, and Settings keeps the
+  token form afterwards.
+- **Fetching**: done in the page, by the same three steps as the desktop app
+  (ids, details in batches of 10, merge state for your own PRs that could be
+  ready), with the same retries and rate-limit handling. The GraphQL documents
+  are the ones in `crates/core/src/github`.
+- **Polling**: every 2 minutes while the page is visible. Coming back to the
+  page refreshes the PRs you opened first, then everything if older than 30 s.
+- **Storage**: snoozes, seen markers, learned check durations, saved Slack
+  channels and the team directory are kept in `localStorage`, as the desktop
+  app keeps `state.json`.
+- **Left out**: launch at login, the GitHub CLI, and notification cards. The
+  Notifications and Startup sections of Settings are hidden. Nudges can't run
+  while the page is closed, so the list is the only way to see what's waiting.
+- **Touch**: the snooze controls on a row are always visible, since there is
+  no hover. The page fills the screen and respects the notch and home bar.
+- **Installable**: a web app manifest, icons and a small service worker that
+  keeps the page's own files, so it can be added to a home screen and opens
+  without a network. GitHub's API is never cached.
+
 ## Distribution
 
 - `ci.yml` runs fmt, clippy, tests, and the frontend build on macOS, Linux,

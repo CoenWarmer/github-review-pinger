@@ -6,17 +6,19 @@ import { Label } from "@/components/ui/label";
 import { clockTime } from "../format";
 import type { Problem } from "../types";
 
-export function problemMessage(problem: Problem): string {
+export function problemMessage(problem: Problem, githubCli = true): string {
   switch (problem.code) {
     case "ghNotInstalled":
       return "The GitHub CLI isn't installed. Install it from cli.github.com and run `gh auth login`, or paste a token below.";
     case "ghNotLoggedIn":
       return "The GitHub CLI isn't logged in. Run `gh auth login` in a terminal, or paste a token below.";
+    case "noToken":
+      return "Paste a GitHub personal access token to see your pull requests. It stays in this browser.";
     case "noSavedToken":
       return "The saved token is selected, but none is saved. Paste one below, or use the GitHub CLI instead.";
     case "tokenRejected":
       return problem.source === "pat"
-        ? "GitHub rejected your saved token. Paste a new one or remove it to use the GitHub CLI."
+        ? `GitHub rejected your saved token. Paste a new one or remove it${githubCli ? " to use the GitHub CLI" : ""}.`
         : "GitHub rejected the GitHub CLI token. Run `gh auth refresh` in a terminal, or paste a token below.";
     case "rateLimited":
       return problem.resetAt
@@ -62,7 +64,8 @@ export function TokenForm({ hasSavedToken }: { hasSavedToken: boolean }) {
       }}
     >
       <Label htmlFor="token" className="text-xs font-normal text-muted-foreground">
-        Personal access token (classic, with the repo scope)
+        Personal access token (classic, with the repo scope
+        {platform.features.githubCli ? "" : "; add read:org for team details"})
       </Label>
       <div className="flex gap-1.5">
         <Input
@@ -87,7 +90,9 @@ export function TokenForm({ hasSavedToken }: { hasSavedToken: boolean }) {
           className="h-auto self-start p-0"
           onClick={remove}
         >
-          Remove saved token and use the GitHub CLI
+          {platform.features.githubCli
+            ? "Remove saved token and use the GitHub CLI"
+            : "Remove saved token"}
         </Button>
       )}
       {error && <p className="m-0 text-destructive">{error}</p>}
@@ -99,6 +104,7 @@ const AUTH_PROBLEMS: Problem["code"][] = [
   "ghNotInstalled",
   "ghNotLoggedIn",
   "noSavedToken",
+  "noToken",
   "tokenRejected",
 ];
 
@@ -110,7 +116,7 @@ export function Setup({ problem }: { problem: Problem }) {
       <h2 className="m-0 text-[15px] font-semibold">
         {isAuthProblem ? "Connect to GitHub" : "Couldn't load pull requests"}
       </h2>
-      <p className="m-0">{problemMessage(problem)}</p>
+      <p className="m-0">{problemMessage(problem, platform.features.githubCli)}</p>
       {isAuthProblem && (
         <TokenForm hasSavedToken={problem.code === "tokenRejected" && problem.source === "pat"} />
       )}
