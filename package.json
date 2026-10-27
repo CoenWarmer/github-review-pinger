@@ -4,7 +4,8 @@
   "scripts": {
     "dev": "pnpm --filter @review-pinger/desktop tauri dev",
     "tauri": "pnpm --filter @review-pinger/desktop tauri",
-    "build": "pnpm -r build"
+    "web": "pnpm --filter @review-pinger/web dev",
+    "build": "pnpm --filter @review-pinger/desktop build"
   },
   "packageManager": "pnpm@12.6.0"
 }

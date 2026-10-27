@@ -1,0 +1,29 @@
+{
+  "name": "@review-pinger/web",
+  "private": true,
+  "version": "0.3.0",
+  "type": "module",
+  "scripts": {
+    "dev": "pnpm --filter @review-pinger/wasm build:wasm && vite",
+    "build": "pnpm --filter @review-pinger/wasm build:wasm && tsc && vite build",
+    "preview": "vite preview",
+    "test": "node --test src/*.test.ts",
+    "live": "node scripts/live.ts"
+  },
+  "dependencies": {
+    "@review-pinger/app": "workspace:*",
+    "@review-pinger/wasm": "workspace:*",
+    "@tailwindcss/vite": "^4.3.3",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0",
+    "tailwindcss": "^4.3.3"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.5",
+    "@types/react": "^19.1.8",
+    "@types/react-dom": "^19.1.6",
+    "@vitejs/plugin-react": "^6.0.2",
+    "typescript": "~6.0.3",
+    "vite": "^8.0.16"
+  }
+}
