@@ -2,7 +2,14 @@ import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { TokenForm } from "./Setup";
 
-export function SettingsPanel({ hasSavedToken }: { hasSavedToken: boolean }) {
+export function SettingsPanel({
+  account,
+  hasSavedToken,
+}: {
+  /** Who is signed in and how, e.g. "CoenWarmer via GitHub CLI". */
+  account: string | null;
+  hasSavedToken: boolean;
+}) {
   const [autostart, setAutostart] = useState<boolean | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -24,6 +31,7 @@ export function SettingsPanel({ hasSavedToken }: { hasSavedToken: boolean }) {
 
   return (
     <div className="settings">
+      {account && <p className="settings-account">Signed in as {account}</p>}
       <label className="checkbox">
         <input
           type="checkbox"

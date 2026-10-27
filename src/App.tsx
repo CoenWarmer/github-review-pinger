@@ -169,13 +169,17 @@ function Footer({ snapshot, now }: { snapshot: Snapshot; now: number }) {
 
   return (
     <footer className="footer">
-      {showSettings && <SettingsPanel hasSavedToken={snapshot.tokenSource === "pat"} />}
+      {showSettings && (
+        <SettingsPanel
+          account={snapshot.viewer && `${snapshot.viewer} via ${source}`}
+          hasSavedToken={snapshot.tokenSource === "pat"}
+        />
+      )}
       <div className="footer-row">
         <span>
           {snapshot.refreshing
             ? "Refreshing…"
             : snapshot.fetchedAt && `Updated ${elapsed(snapshot.fetchedAt, now)} ago`}
-          {snapshot.viewer && ` · ${snapshot.viewer} via ${source}`}
         </span>
         <span className="footer-actions">
           <button type="button" className="link" onClick={() => setShowSettings(!showSettings)}>
