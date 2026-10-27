@@ -12,14 +12,14 @@ const ACTION_LABELS: Record<Action, string> = {
   readyToMerge: "Ready to merge",
 };
 
-const REVIEWER_GLYPHS: Record<ReviewerState, string> = {
+export const REVIEWER_GLYPHS: Record<ReviewerState, string> = {
   approved: "✓",
   changesRequested: "✕",
   commented: "•",
   pending: "○",
 };
 
-const REVIEWER_LABELS: Record<ReviewerState, string> = {
+export const REVIEWER_LABELS: Record<ReviewerState, string> = {
   approved: "approved",
   changesRequested: "requested changes",
   commented: "commented",
@@ -32,7 +32,7 @@ const SNOOZE_OPTIONS = [
   { days: 7, label: "1w" },
 ];
 
-function ReviewerChip({ reviewer }: { reviewer: Reviewer }) {
+export function ReviewerChip({ reviewer }: { reviewer: Reviewer }) {
   const label = `${reviewer.login} ${REVIEWER_LABELS[reviewer.state]}${
     reviewer.rerequested ? ", re-requested" : ""
   }`;
@@ -45,7 +45,7 @@ function ReviewerChip({ reviewer }: { reviewer: Reviewer }) {
   );
 }
 
-function SnoozeControl({ pr }: { pr: PullRequest }) {
+export function SnoozeControl({ pr }: { pr: Pick<PullRequest, "id" | "snoozedUntil"> }) {
   const [choosing, setChoosing] = useState(false);
 
   if (pr.snoozedUntil) {

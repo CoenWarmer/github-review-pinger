@@ -11,6 +11,8 @@ export type Action =
 
 export type Group = "approved" | "needsAction" | "waiting" | "snoozed" | "dormant" | "draft";
 
+export type ReviewGroup = "needsReview" | "waitingOnAuthor" | "snoozed" | "draft";
+
 export type ReviewerState = "changesRequested" | "approved" | "commented" | "pending";
 
 export interface Reviewer {
@@ -38,6 +40,25 @@ export interface PullRequest {
   reviewers: Reviewer[];
 }
 
+export interface ReviewRequest {
+  id: string;
+  number: number;
+  title: string;
+  url: string;
+  repo: string;
+  author: string;
+  group: ReviewGroup;
+  openSince: string;
+  /** When it became your turn; only for requested PRs. */
+  waitingSince: string | null;
+  rerequested: boolean;
+  myState: ReviewerState | null;
+  reviewedAt: string | null;
+  lastActivity: string;
+  snoozedUntil: string | null;
+  reviewers: Reviewer[];
+}
+
 export type Problem =
   | { code: "ghNotInstalled" }
   | { code: "ghNotLoggedIn" }
@@ -56,4 +77,5 @@ export interface Snapshot {
   fetchedAt: string | null;
   ssoPartial: boolean;
   pullRequests: PullRequest[];
+  reviewRequests: ReviewRequest[];
 }

@@ -67,6 +67,40 @@ button {
   height: 100%;
 }
 
+.tabs {
+  display: flex;
+  border-bottom: 1px solid var(--border);
+}
+
+.tab {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 8px 12px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: none;
+  color: var(--muted);
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.tab[aria-selected="true"] {
+  border-bottom-color: var(--accent);
+  color: var(--fg);
+}
+
+.tab-count {
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--bg-hover);
+  font-size: 11px;
+  line-height: 18px;
+  font-variant-numeric: tabular-nums;
+}
+
 .sections {
   flex: 1;
   overflow-y: auto;
@@ -205,6 +239,11 @@ button {
 .badge-autoMerge {
   color: var(--success);
   background: var(--success-bg);
+}
+
+.badge-rerequested {
+  color: var(--accent);
+  background: var(--accent-bg);
 }
 
 .badge-readyToMerge {
