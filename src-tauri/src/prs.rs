@@ -72,6 +72,9 @@ pub struct Reviewer {
     pub state: ReviewerState,
     /// Already reviewed, and the author has asked for another review since.
     pub rerequested: bool,
+    /// For team requests, the lowercase `org/slug` that Slack channels are
+    /// keyed by.
+    pub team: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -92,7 +95,19 @@ pub struct PrView {
     /// Has the approvals it needs; any further wait is on checks or merging.
     pub approved: bool,
     pub checks: Checks,
+    /// When the running checks started; only while they're running.
+    pub checks_started: Option<DateTime<Utc>>,
+    /// How long checks usually take in this repo, if known.
+    pub checks_estimate_secs: Option<u64>,
     pub auto_merge: bool,
+    /// Position in the merge queue (1 is next), when queued.
+    pub merge_queue_position: Option<u32>,
+    /// When GitHub expects the queue to merge it, so the UI can count down
+    /// between polls.
+    pub merge_eta: Option<DateTime<Utc>>,
+    /// When it entered the merge queue.
+    pub merge_enqueued_at: Option<DateTime<Utc>>,
+    pub queued: bool,
     pub reviewers: Vec<Reviewer>,
     /// Reviews and comments from other humans, oldest first, for notifications.
     #[serde(skip)]
@@ -153,9 +168,9 @@ pub fn derive(prs: &[PullRequest], viewer: &str, rules: &Rules, now: DateTime<Ut
     views
 }
 
-struct People<'a> {
-    viewer: &'a str,
-    ignored_logins: &'a [String],
+pub(crate) struct People<'a> {
+    pub viewer: &'a str,
+    pub ignored_logins: &'a [String],
 }
 
 impl People<'_> {
@@ -229,14 +244,26 @@ fn view(pr: &PullRequest, people: &People, rules: &Rules, now: DateTime<Utc>) ->
         snoozed_until,
         approved,
         checks,
+        checks_started: (checks == Checks::Pending)
+            .then(|| crate::checks::timing(pr).0)
+            .flatten(),
+        checks_estimate_secs: None,
         auto_merge: pr.auto_merge_request.is_some(),
+        merge_queue_position: pr.merge_queue_entry.as_ref().and_then(|e| e.position),
+        merge_eta: pr
+            .merge_queue_entry
+            .as_ref()
+            .and_then(|e| e.estimated_time_to_merge)
+            .map(|seconds| now + chrono::Duration::seconds(seconds)),
+        merge_enqueued_at: pr.merge_queue_entry.as_ref().and_then(|e| e.enqueued_at),
+        queued: pr.merge_queue_entry.is_some(),
         reviewers,
         responses,
     }
 }
 
 /// Time spent as a draft doesn't count against reviewers.
-fn open_since(pr: &PullRequest) -> DateTime<Utc> {
+pub(crate) fn open_since(pr: &PullRequest) -> DateTime<Utc> {
     pr.timeline_items
         .iter()
         .filter_map(|item| match item {
@@ -247,7 +274,11 @@ fn open_since(pr: &PullRequest) -> DateTime<Utc> {
         .unwrap_or(pr.created_at)
 }
 
-fn last_activity(pr: &PullRequest, people: &People, open_since: DateTime<Utc>) -> DateTime<Utc> {
+pub(crate) fn last_activity(
+    pr: &PullRequest,
+    people: &People,
+    open_since: DateTime<Utc>,
+) -> DateTime<Utc> {
     let last_push = pr
         .commits
         .iter()
@@ -283,7 +314,7 @@ fn has_new_feedback(pr: &PullRequest, people: &People, responses: &[Response]) -
         .timeline_items
         .iter()
         .filter_map(|item| match item {
-            TimelineItem::ReviewRequestedEvent { created_at } => Some(*created_at),
+            TimelineItem::ReviewRequestedEvent { created_at, .. } => Some(*created_at),
             _ => None,
         })
         .max();
@@ -345,7 +376,7 @@ fn responses(pr: &PullRequest, people: &People) -> Vec<Response> {
     responses
 }
 
-fn reviewers(pr: &PullRequest, people: &People) -> Vec<Reviewer> {
+pub(crate) fn reviewers(pr: &PullRequest, people: &People) -> Vec<Reviewer> {
     let mut by_login: BTreeMap<String, Reviewer> = BTreeMap::new();
 
     // Opinionated reviews (approve / request changes) stand even if the
@@ -372,18 +403,26 @@ fn reviewers(pr: &PullRequest, people: &People) -> Vec<Reviewer> {
                 kind: ReviewerKind::User,
                 state,
                 rerequested: false,
+                team: None,
             });
     }
 
     // Requested bots (e.g. Copilot) are shown; bots that merely commented are not.
     let requests = pr.review_requests.iter().flat_map(|n| n.iter());
     for requested in requests.filter_map(|r| r.requested_reviewer.as_ref()) {
-        let (login, kind) = match requested {
+        let (login, kind, team) = match requested {
             RequestedReviewer::User { login } | RequestedReviewer::Mannequin { login } => {
-                (login.clone(), ReviewerKind::User)
+                (login.clone(), ReviewerKind::User, None)
             }
-            RequestedReviewer::Bot { login } => (login.clone(), ReviewerKind::Bot),
-            RequestedReviewer::Team { slug } => (format!("@{slug}"), ReviewerKind::Team),
+            RequestedReviewer::Bot { login } => (login.clone(), ReviewerKind::Bot, None),
+            RequestedReviewer::Team {
+                slug,
+                combined_slug,
+            } => (
+                format!("@{slug}"),
+                ReviewerKind::Team,
+                Some(combined_slug.as_ref().unwrap_or(slug).to_lowercase()),
+            ),
             RequestedReviewer::Other => continue,
         };
         if people.is_ignored(&login) {
@@ -397,6 +436,7 @@ fn reviewers(pr: &PullRequest, people: &People) -> Vec<Reviewer> {
                 kind,
                 state: ReviewerState::Pending,
                 rerequested: false,
+                team,
             });
     }
 
@@ -405,7 +445,7 @@ fn reviewers(pr: &PullRequest, people: &People) -> Vec<Reviewer> {
     reviewers
 }
 
-fn checks(pr: &PullRequest) -> Checks {
+pub(crate) fn checks(pr: &PullRequest) -> Checks {
     let rollup = pr
         .commits
         .iter()
@@ -452,7 +492,8 @@ fn actions(
     let ci_failing = checks == Checks::Failing;
 
     // Only when merging is up to the author right now: checks done, branch
-    // protection satisfied, and auto-merge not already queued.
+    // protection satisfied, and neither auto-merge nor the merge queue
+    // already handling it.
     let ready_to_merge = approved
         && blocking_reviewers.is_empty()
         && !conflicts
@@ -461,7 +502,8 @@ fn actions(
             pr.merge_state_status,
             Some(MergeStateStatus::Clean | MergeStateStatus::HasHooks)
         )
-        && pr.auto_merge_request.is_none();
+        && pr.auto_merge_request.is_none()
+        && pr.merge_queue_entry.is_none();
 
     [
         (ready_to_merge, Action::ReadyToMerge),
@@ -810,6 +852,24 @@ mod tests {
     }
 
     #[test]
+    fn queued_prs_are_approved_but_not_ready_to_merge() {
+        let pr = derive_one(json!({
+            "reviewDecision": "APPROVED",
+            "mergeQueueEntry": {
+                "position": 5,
+                "estimatedTimeToMerge": 1800,
+                "enqueuedAt": "2026-10-10T08:50:00Z",
+            },
+        }));
+        assert_eq!(pr.group, Group::Approved);
+        assert!(pr.actions.is_empty());
+        assert!(pr.queued);
+        assert_eq!(pr.merge_queue_position, Some(5));
+        assert_eq!(pr.merge_eta, Some(at("2026-10-10T09:30:00Z")));
+        assert_eq!(pr.merge_enqueued_at, Some(at("2026-10-10T08:50:00Z")));
+    }
+
+    #[test]
     fn auto_merge_does_not_hide_what_blocks_it() {
         let pr = derive_one(json!({
             "reviewDecision": "APPROVED",
@@ -986,5 +1046,27 @@ mod tests {
                 "draft"
             ]
         );
+    }
+
+    #[test]
+    fn team_reviewers_carry_a_lowercase_org_qualified_key() {
+        let pr = derive_one(json!({
+            "reviewRequests": { "nodes": [
+                { "requestedReviewer": {
+                    "__typename": "Team", "slug": "Ops", "combinedSlug": "Elastic/Ops",
+                } },
+                { "requestedReviewer": { "__typename": "Team", "slug": "ui" } },
+                { "requestedReviewer": { "__typename": "User", "login": "ana" } },
+            ] },
+        }));
+        let teams: Vec<(&str, Option<&str>)> = pr
+            .reviewers
+            .iter()
+            .map(|r| (r.login.as_str(), r.team.as_deref()))
+            .collect();
+        assert!(teams.contains(&("@Ops", Some("elastic/ops"))));
+        // Without an organization the slug stands in.
+        assert!(teams.contains(&("@ui", Some("ui"))));
+        assert!(teams.contains(&("ana", None)));
     }
 }

@@ -3,12 +3,22 @@ fragment PullRequestFields on PullRequest {
   number
   title
   url
+  author {
+    __typename
+    login
+  }
   isDraft
+  closed
   createdAt
   reviewDecision
   mergeable
   autoMergeRequest {
     enabledAt
+  }
+  mergeQueueEntry {
+    position
+    estimatedTimeToMerge
+    enqueuedAt
   }
   repository {
     nameWithOwner
@@ -16,9 +26,25 @@ fragment PullRequestFields on PullRequest {
   commits(last: 1) {
     nodes {
       commit {
+        oid
         committedDate
         statusCheckRollup {
           state
+          # Timestamps only, to time how long checks take.
+          contexts(first: 50) {
+            nodes {
+              __typename
+              ... on CheckRun {
+                status
+                startedAt
+                completedAt
+              }
+              ... on StatusContext {
+                state
+                createdAt
+              }
+            }
+          }
         }
       }
     }
@@ -38,6 +64,7 @@ fragment PullRequestFields on PullRequest {
         }
         ... on Team {
           slug
+          combinedSlug
         }
       }
     }
@@ -45,6 +72,7 @@ fragment PullRequestFields on PullRequest {
   latestReviews(first: 50) {
     nodes {
       state
+      submittedAt
       author {
         __typename
         login
@@ -54,6 +82,7 @@ fragment PullRequestFields on PullRequest {
   latestOpinionatedReviews(first: 50) {
     nodes {
       state
+      submittedAt
       author {
         __typename
         login
@@ -87,6 +116,23 @@ fragment PullRequestFields on PullRequest {
       }
       ... on ReviewRequestedEvent {
         createdAt
+        requestedReviewer {
+          __typename
+          ... on User {
+            login
+          }
+          ... on Bot {
+            login
+          }
+          ... on Mannequin {
+            login
+          }
+          ... on Team {
+            slug
+            combinedSlug
+          combinedSlug
+          }
+        }
       }
       ... on IssueComment {
         createdAt

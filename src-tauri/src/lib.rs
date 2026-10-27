@@ -1,11 +1,15 @@
 mod auth;
 mod calendar;
+mod card;
+mod checks;
 mod github;
 mod memory;
 mod notify;
 mod poller;
 mod prs;
+mod reviews;
 mod settings;
+mod slack;
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -47,7 +51,7 @@ fn show_popover(app: &AppHandle) {
         return;
     };
     if let Some(poller) = app.try_state::<Arc<Poller>>() {
-        poller.refresh_if_stale();
+        poller::on_popover_open(app, poller.inner().clone());
     }
     #[cfg(not(target_os = "linux"))]
     let _ = window.move_window(Position::TrayBottomCenter);
@@ -72,12 +76,72 @@ fn get_snapshot(poller: State<Arc<Poller>>) -> Snapshot {
 }
 
 #[tauri::command]
+fn card_current(app: AppHandle) -> Option<card::Shown> {
+    card::current(&app)
+}
+
+#[tauri::command]
+fn card_resize(app: AppHandle, height: f64) {
+    card::resize(&app, height);
+}
+
+#[tauri::command]
+fn card_hovered(app: AppHandle) -> bool {
+    card::hovered(&app)
+}
+
+#[tauri::command]
+fn card_done(app: AppHandle, seq: u64) {
+    card::done(&app, seq);
+}
+
+/// A summary card has no PR to open, so clicking it shows the list.
+#[tauri::command]
+fn card_show_popover(app: AppHandle) {
+    show_popover(&app);
+}
+
+#[tauri::command]
+fn send_test_notification(app: AppHandle) {
+    card::send_test(&app);
+}
+
+#[tauri::command]
+fn set_notifications_muted(app: AppHandle, poller: State<Arc<Poller>>, muted: bool) {
+    poller.set_notifications_muted(&app, muted);
+}
+
+#[tauri::command]
+fn visit(poller: State<Arc<Poller>>, id: String) {
+    poller.visit(&id);
+}
+
+#[tauri::command]
+fn set_team_channel(
+    app: AppHandle,
+    poller: State<Arc<Poller>>,
+    team: String,
+    link: String,
+) -> Result<(), String> {
+    poller.set_team_channel(&app, &team, link.trim())
+}
+
+#[tauri::command]
+fn remove_team_channel(app: AppHandle, poller: State<Arc<Poller>>, team: String) {
+    poller.remove_team_channel(&app, &team);
+}
+
+#[tauri::command]
 fn refresh(poller: State<Arc<Poller>>) {
     poller.refresh();
 }
 
 #[tauri::command]
-async fn save_token(token: String, poller: State<'_, Arc<Poller>>) -> Result<(), String> {
+async fn save_token(
+    app: AppHandle,
+    token: String,
+    poller: State<'_, Arc<Poller>>,
+) -> Result<(), String> {
     let token = token.trim().to_string();
     if token.is_empty() {
         return Err("Token is empty".into());
@@ -86,18 +150,24 @@ async fn save_token(token: String, poller: State<'_, Arc<Poller>>) -> Result<(),
         .await
         .map_err(|e| e.to_string())?
         .map_err(|e| format!("Could not store token in the keychain: {e}"))?;
-    poller.refresh();
+    // Pasting a token is a choice to use it.
+    poller.set_auth_source(&app, auth::TokenSource::Pat);
     Ok(())
 }
 
 #[tauri::command]
-async fn clear_token(poller: State<'_, Arc<Poller>>) -> Result<(), String> {
+async fn clear_token(app: AppHandle, poller: State<'_, Arc<Poller>>) -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(auth::clear_pat)
         .await
         .map_err(|e| e.to_string())?
         .map_err(|e| format!("Could not remove token from the keychain: {e}"))?;
-    poller.refresh();
+    poller.set_auth_source(&app, auth::TokenSource::Gh);
     Ok(())
+}
+
+#[tauri::command]
+fn set_auth_source(app: AppHandle, poller: State<Arc<Poller>>, source: auth::TokenSource) {
+    poller.set_auth_source(&app, source);
 }
 
 #[tauri::command]
@@ -136,7 +206,6 @@ pub fn run() {
                 .build(),
         )
         .plugin(tauri_plugin_opener::init())
-        .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_autostart::init(
             MacosLauncher::LaunchAgent,
             None,
@@ -145,8 +214,19 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             get_snapshot,
             refresh,
+            visit,
+            card_current,
+            card_resize,
+            card_done,
+            card_hovered,
+            card_show_popover,
+            send_test_notification,
+            set_notifications_muted,
+            set_team_channel,
+            remove_team_channel,
             save_token,
             clear_token,
+            set_auth_source,
             snooze,
             unsnooze,
             get_autostart,
@@ -193,6 +273,7 @@ pub fn run() {
                 })
                 .build(app)?;
 
+            app.manage(card::Cards::default());
             let poller = poller::start(app.handle());
             // Launch at login defaults to on, but a dev build shouldn't
             // register itself as a login item.

@@ -2,24 +2,28 @@
 //! popover as a `snapshot` event, keeps the tray count in sync, and sends
 //! notifications for what changed between polls.
 
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use chrono::{DateTime, Local, Utc};
+use chrono::{DateTime, Local, NaiveDate, Utc};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager};
-use tauri_plugin_notification::NotificationExt;
 use tokio::sync::Notify;
 
 use crate::auth::{self, AuthError, TokenSource};
-use crate::github::types::PullRequest;
+use crate::card;
+use crate::checks;
+use crate::github::types::{PullRequest, RequestedReviewer};
 use crate::github::{self, FetchError};
 use crate::memory::Memory;
 use crate::notify;
 use crate::prs::{self, PrView};
-use crate::settings;
+use crate::reviews::{self, ReviewView};
+use crate::settings::{self, Settings, SlackOpensIn};
+use crate::slack::{self, Channel};
 
 const POLL_INTERVAL: Duration = Duration::from_secs(120);
 const STALE_AFTER: chrono::Duration = chrono::Duration::seconds(30);
@@ -36,10 +40,21 @@ pub struct Snapshot {
     pub refreshing: bool,
     pub viewer: Option<String>,
     pub token_source: Option<TokenSource>,
+    /// The source the user picked; `None` until they do.
+    pub auth_choice: Option<TokenSource>,
+    /// Whether a token is saved in the keychain, used or not.
+    pub has_saved_token: bool,
+    /// Notification cards are muted.
+    pub notifications_muted: bool,
     /// Wall-clock time, so staleness survives the machine sleeping.
     pub fetched_at: Option<DateTime<Utc>>,
     pub sso_partial: bool,
     pub pull_requests: Vec<PrView>,
+    pub review_requests: Vec<ReviewView>,
+    /// Slack channel links by lowercase `org/team-slug`, from settings and
+    /// those saved in the popover.
+    pub team_channels: HashMap<String, Channel>,
+    pub slack_opens_in: SlackOpensIn,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -59,6 +74,7 @@ pub enum Status {
 pub enum Problem {
     GhNotInstalled,
     GhNotLoggedIn,
+    NoSavedToken,
     TokenRejected { source: TokenSource },
     RateLimited { reset_at: Option<DateTime<Utc>> },
     Network { message: String },
@@ -72,6 +88,9 @@ pub struct Poller {
     latest: Mutex<Option<Fetched>>,
     memory: Mutex<Memory>,
     memory_path: Option<PathBuf>,
+    /// Pull requests the user opened on GitHub since the popover last
+    /// showed; refreshed first when it next opens. Not persisted.
+    visited: Mutex<HashSet<String>>,
     first_poll: AtomicBool,
     wake: Notify,
     http: reqwest::Client,
@@ -102,10 +121,87 @@ impl Poller {
             memory.set_snooze(id, until, Utc::now());
             self.save(&memory);
         }
+        self.rederive(app);
+    }
+
+    /// Saves the Slack channel for a team. Fails when the link isn't a
+    /// Slack link.
+    pub fn set_team_channel(&self, app: &AppHandle, team: &str, link: &str) -> Result<(), String> {
+        if !slack::is_valid_link(link) {
+            return Err("That doesn't look like a Slack channel link.".to_string());
+        }
+        let channels = {
+            let mut memory = self.memory.lock().unwrap();
+            memory
+                .team_channels
+                .insert(team.to_lowercase(), link.to_string());
+            self.save(&memory);
+            self.channels(&settings::load(app), &memory)
+        };
+        self.update(app, |s| s.team_channels = channels);
+        Ok(())
+    }
+
+    /// Forgets a team's saved channel, so its chip asks again.
+    pub fn remove_team_channel(&self, app: &AppHandle, team: &str) {
+        let channels = {
+            let mut memory = self.memory.lock().unwrap();
+            memory.team_channels.remove(&team.to_lowercase());
+            self.save(&memory);
+            self.channels(&settings::load(app), &memory)
+        };
+        self.update(app, |s| s.team_channels = channels);
+    }
+
+    fn channels(&self, settings: &Settings, memory: &Memory) -> HashMap<String, Channel> {
+        slack::merged_channels(&memory.team_channels, &settings.team_channels)
+    }
+
+    /// Picks which token to use, and refreshes with it.
+    pub fn set_auth_source(&self, app: &AppHandle, source: TokenSource) {
+        {
+            let mut memory = self.memory.lock().unwrap();
+            memory.auth_source = Some(source);
+            self.save(&memory);
+        }
+        self.update(app, |s| s.auth_choice = Some(source));
+        self.refresh();
+    }
+
+    /// Mutes or unmutes the notification cards. Muting drops those showing
+    /// and queued.
+    pub fn set_notifications_muted(&self, app: &AppHandle, muted: bool) {
+        {
+            let mut memory = self.memory.lock().unwrap();
+            memory.notifications_muted = muted;
+            self.save(&memory);
+        }
+        if muted {
+            card::clear(app);
+        }
+        self.update(app, |s| s.notifications_muted = muted);
+    }
+
+    fn auth_source(&self) -> Option<TokenSource> {
+        self.memory.lock().unwrap().auth_source
+    }
+
+    /// Remembers that the user opened this PR on GitHub, so it's refreshed
+    /// first the next time the popover shows.
+    pub fn visit(&self, id: &str) {
+        self.visited.lock().unwrap().insert(id.to_string());
+    }
+
+    /// Updates the snapshot from the last fetch, after snoozes or a single
+    /// PR changed.
+    fn rederive(&self, app: &AppHandle) {
         let latest = self.latest.lock().unwrap();
         if let Some(fetched) = latest.as_ref() {
-            let views = self.derive(app, fetched, Utc::now());
-            self.update(app, |s| s.pull_requests = views);
+            let (views, review_views) = self.derive(app, fetched, Utc::now());
+            self.update(app, |s| {
+                s.pull_requests = views;
+                s.review_requests = review_views;
+            });
         }
     }
 
@@ -121,15 +217,33 @@ impl Poller {
         true
     }
 
-    fn derive(&self, app: &AppHandle, fetched: &Fetched, now: DateTime<Utc>) -> Vec<PrView> {
+    fn derive(
+        &self,
+        app: &AppHandle,
+        fetched: &Fetched,
+        now: DateTime<Utc>,
+    ) -> (Vec<PrView>, Vec<ReviewView>) {
         let settings = settings::load(app);
-        let snoozed = self.memory.lock().unwrap().snoozes();
+        let (snoozed, estimates) = {
+            let memory = self.memory.lock().unwrap();
+            (
+                memory.snoozes(),
+                checks::estimates(&memory, &settings.check_durations),
+            )
+        };
         let rules = prs::Rules {
             ignored_logins: &settings.ignored_logins,
-            dormant_after: chrono::Duration::days(settings.dormant_after_days.into()),
+            dormant_after: dormant_after(&settings),
             snoozed: &snoozed,
         };
-        prs::derive(&fetched.pull_requests, &fetched.viewer, &rules, now)
+        let mut views = prs::derive(&fetched.pull_requests, &fetched.viewer, &rules, now);
+        for view in &mut views {
+            view.checks_estimate_secs = estimates.get(&view.repo).copied();
+        }
+        (
+            views,
+            reviews::derive(&fetched.review_pull_requests, &fetched.viewer, &rules, now),
+        )
     }
 
     fn save(&self, memory: &Memory) {
@@ -168,19 +282,127 @@ pub fn start(app: &AppHandle) -> Arc<Poller> {
             refreshing: false,
             viewer: None,
             token_source: None,
+            auth_choice: None,
+            has_saved_token: false,
+            notifications_muted: memory.notifications_muted,
             fetched_at: None,
             sso_partial: false,
             pull_requests: Vec::new(),
+            review_requests: Vec::new(),
+            team_channels: HashMap::new(),
+            slack_opens_in: SlackOpensIn::default(),
         }),
         latest: Mutex::new(None),
         memory: Mutex::new(memory),
         memory_path,
+        visited: Mutex::new(HashSet::new()),
         first_poll: AtomicBool::new(true),
         wake: Notify::new(),
         http: github::http_client(),
     });
     tauri::async_runtime::spawn(run(app.clone(), poller.clone()));
     poller
+}
+
+/// Called when the popover opens. PRs the user visited on GitHub since last
+/// time are refreshed alone first, so what they changed shows up quickly,
+/// and then the whole list is refreshed if it's stale.
+pub fn on_popover_open(app: &AppHandle, poller: Arc<Poller>) {
+    let visited: Vec<String> = poller.visited.lock().unwrap().drain().collect();
+    if visited.is_empty() {
+        poller.refresh_if_stale();
+        return;
+    }
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        refresh_visited(&app, &poller, visited).await;
+        poller.refresh_if_stale();
+    });
+}
+
+/// Refetches just `ids` and patches them into the last fetch. Notifications
+/// are left to the full poll that follows, which compares against memory this
+/// leaves untouched. Failures are only logged, since the full refresh reports
+/// problems.
+async fn refresh_visited(app: &AppHandle, poller: &Poller, ids: Vec<String>) {
+    let chosen = poller.auth_source();
+    let Ok(Ok(token)) =
+        tauri::async_runtime::spawn_blocking(move || auth::resolve_token(chosen)).await
+    else {
+        return;
+    };
+    let result = async {
+        let mut fresh = github::fetch_details(&poller.http, &token.value, &ids).await?;
+        // Only the viewer's own PRs need the expensive merge state.
+        let authored: HashSet<String> = match poller.latest.lock().unwrap().as_ref() {
+            Some(fetched) => fetched
+                .pull_requests
+                .iter()
+                .map(|pr| pr.id.clone())
+                .collect(),
+            None => return Ok(()),
+        };
+        let (mut own, others): (Vec<_>, Vec<_>) =
+            fresh.drain(..).partition(|pr| authored.contains(&pr.id));
+        github::add_merge_states(&poller.http, &token.value, &mut own).await?;
+        own.extend(others);
+
+        if let Some(fetched) = poller.latest.lock().unwrap().as_mut() {
+            apply_refresh(fetched, own);
+        }
+        Ok::<(), FetchError>(())
+    }
+    .await;
+
+    match result {
+        Ok(()) => poller.rederive(app),
+        Err(e) => log::warn!("Could not refresh visited pull requests: {e:?}"),
+    }
+}
+
+/// Replaces each refreshed PR in place, or drops it if it was merged or
+/// closed. PRs the last fetch didn't list are ignored; the full refresh
+/// decides what belongs in the lists.
+fn apply_refresh(fetched: &mut Fetched, fresh: Vec<PullRequest>) {
+    for pr in fresh {
+        if let Some(at) = fetched.pull_requests.iter().position(|p| p.id == pr.id) {
+            if pr.closed {
+                fetched.pull_requests.remove(at);
+            } else {
+                fetched.pull_requests[at] = pr;
+            }
+        } else if let Some(at) = fetched
+            .review_pull_requests
+            .iter()
+            .position(|p| p.id == pr.id)
+        {
+            if pr.closed {
+                fetched.review_pull_requests.remove(at);
+            } else {
+                let was_requested = fetched.review_pull_requests[at].review_requested;
+                let mut pr = pr;
+                pr.review_requested = still_requested(&pr, &fetched.viewer, was_requested);
+                fetched.review_pull_requests[at] = pr;
+            }
+        }
+    }
+}
+
+/// The `review-requested` search isn't repeated for one PR, so infer it:
+/// the viewer is asked directly, or a team still is and they were requested
+/// through it before. A review by the viewer clears only their own request.
+fn still_requested(pr: &PullRequest, viewer: &str, was_requested: bool) -> bool {
+    let pending = || {
+        pr.review_requests
+            .iter()
+            .flat_map(|n| n.iter())
+            .filter_map(|r| r.requested_reviewer.as_ref())
+    };
+    let directly = pending().any(
+        |r| matches!(r, RequestedReviewer::User { login } if login.eq_ignore_ascii_case(viewer)),
+    );
+    let via_team = was_requested && pending().any(|r| matches!(r, RequestedReviewer::Team { .. }));
+    directly || via_team
 }
 
 async fn run(app: AppHandle, poller: Arc<Poller>) {
@@ -216,9 +438,19 @@ fn backoff(failures: u32) -> Duration {
 }
 
 async fn poll_once(app: &AppHandle, poller: &Poller) -> Result<(), Problem> {
-    poller.update(app, |s| s.refreshing = true);
+    let has_saved_token = tauri::async_runtime::spawn_blocking(auth::has_saved_pat)
+        .await
+        .unwrap_or(false);
+    let auth_choice = poller.auth_source();
+    poller.update(app, |s| {
+        s.refreshing = true;
+        s.has_saved_token = has_saved_token;
+        s.auth_choice = auth_choice;
+    });
 
-    let fetched = match fetch(poller).await {
+    let settings = settings::load(app);
+    let reviewed_since = (Utc::now() - dormant_after(&settings)).date_naive();
+    let fetched = match fetch(poller, reviewed_since).await {
         Ok(fetched) => fetched,
         Err(problem) => {
             // Keep showing the last good data alongside the problem.
@@ -234,7 +466,8 @@ async fn poll_once(app: &AppHandle, poller: &Poller) -> Result<(), Problem> {
     };
 
     let now = Utc::now();
-    let views = poller.derive(app, &fetched, now);
+    let (views, review_views) = poller.derive(app, &fetched, now);
+    let channels = poller.channels(&settings, &poller.memory.lock().unwrap());
     let notifications = {
         let mut memory = poller.memory.lock().unwrap();
         let first_ever = memory.last_poll_at.is_none();
@@ -242,9 +475,19 @@ async fn poll_once(app: &AppHandle, poller: &Poller) -> Result<(), Problem> {
             || memory
                 .last_poll_at
                 .is_some_and(|at| now - at > COLD_START_GAP);
-        let nudge_after = chrono::Duration::hours(settings::load(app).nudge_after_hours.into());
+        let nudge_after = chrono::Duration::hours(settings.nudge_after_hours.into());
+        let review_nudge_after = chrono::Duration::hours(settings.review_nudge_after_hours.into());
 
-        let events = notify::diff(&views, &mut memory, now, nudge_after, &Local);
+        let events = notify::diff(
+            &views,
+            &review_views,
+            &mut memory,
+            now,
+            nudge_after,
+            review_nudge_after,
+            &Local,
+        );
+        checks::track(&fetched.pull_requests, &mut memory);
         poller.save(&memory);
         // Right after install everything is new; the list itself says what's pending.
         if first_ever {
@@ -253,16 +496,13 @@ async fn poll_once(app: &AppHandle, poller: &Poller) -> Result<(), Problem> {
             notify::compose(&events, cold_start)
         }
     };
-    for notification in notifications {
-        let shown = app
-            .notification()
-            .builder()
-            .title(&notification.title)
-            .body(&notification.body)
-            .show();
-        if let Err(e) = shown {
-            log::warn!("Could not show notification: {e}");
-        }
+    // The list already shows what changed while it's open, and muting drops
+    // the cards, but both still count the events as seen.
+    let popover_open = app
+        .get_webview_window("main")
+        .is_some_and(|window| window.is_visible().unwrap_or(false));
+    if !popover_open && !poller.memory.lock().unwrap().notifications_muted {
+        card::enqueue(app, notifications);
     }
 
     poller.update(app, |s| {
@@ -273,6 +513,9 @@ async fn poll_once(app: &AppHandle, poller: &Poller) -> Result<(), Problem> {
         s.fetched_at = Some(now);
         s.sso_partial = fetched.sso_partial;
         s.pull_requests = views;
+        s.review_requests = review_views;
+        s.team_channels = channels;
+        s.slack_opens_in = settings.slack_opens_in;
     });
     *poller.latest.lock().unwrap() = Some(fetched);
     Ok(())
@@ -283,10 +526,16 @@ struct Fetched {
     token_source: TokenSource,
     sso_partial: bool,
     pull_requests: Vec<PullRequest>,
+    review_pull_requests: Vec<PullRequest>,
 }
 
-async fn fetch(poller: &Poller) -> Result<Fetched, Problem> {
-    let token = tauri::async_runtime::spawn_blocking(auth::resolve_token)
+fn dormant_after(settings: &Settings) -> chrono::Duration {
+    chrono::Duration::days(settings.dormant_after_days.into())
+}
+
+async fn fetch(poller: &Poller, reviewed_since: NaiveDate) -> Result<Fetched, Problem> {
+    let chosen = poller.auth_source();
+    let token = tauri::async_runtime::spawn_blocking(move || auth::resolve_token(chosen))
         .await
         .map_err(|e| Problem::Api {
             message: e.to_string(),
@@ -294,9 +543,10 @@ async fn fetch(poller: &Poller) -> Result<Fetched, Problem> {
         .map_err(|e| match e {
             AuthError::GhNotInstalled => Problem::GhNotInstalled,
             AuthError::GhNotLoggedIn => Problem::GhNotLoggedIn,
+            AuthError::NoSavedToken => Problem::NoSavedToken,
         })?;
 
-    let fetched = github::fetch_open_pull_requests(&poller.http, &token.value)
+    let fetched = github::fetch_open_pull_requests(&poller.http, &token.value, reviewed_since)
         .await
         .map_err(|e| match e {
             FetchError::Unauthorized => Problem::TokenRejected {
@@ -312,6 +562,7 @@ async fn fetch(poller: &Poller) -> Result<Fetched, Problem> {
         token_source: token.source,
         sso_partial: fetched.sso_partial,
         pull_requests: fetched.pull_requests,
+        review_pull_requests: fetched.review_pull_requests,
     })
 }
 
@@ -324,28 +575,154 @@ fn update_tray(app: &AppHandle, snapshot: &Snapshot) {
         .iter()
         .filter(|pr| pr.needs_author())
         .count();
+    let needs_review = snapshot
+        .review_requests
+        .iter()
+        .filter(|pr| pr.needs_review())
+        .count();
     let failed_without_data =
         matches!(snapshot.status, Status::Error { .. }) && snapshot.fetched_at.is_none();
 
-    // Titles show next to the icon on macOS and Linux; Windows only has the tooltip.
-    let (title, tooltip) = if failed_without_data {
-        (
-            Some("!".to_string()),
-            "Review Pinger: needs setup".to_string(),
-        )
-    } else if needs_action == 0 {
-        (None, "Review Pinger: nothing needs your action".to_string())
-    } else {
-        let noun = if needs_action == 1 {
-            "PR needs"
-        } else {
-            "PRs need"
-        };
-        (
-            Some(needs_action.to_string()),
-            format!("Review Pinger: {needs_action} {noun} your action"),
-        )
-    };
+    let (title, tooltip) = tray_text(failed_without_data, needs_action, needs_review);
     let _ = tray.set_title(title);
     let _ = tray.set_tooltip(Some(tooltip));
+}
+
+/// The title shows next to the icon on macOS and Linux; Windows only has the
+/// tooltip. Both numbers show whenever either is nonzero, so the position is
+/// what tells them apart.
+fn tray_text(
+    failed_without_data: bool,
+    needs_action: usize,
+    needs_review: usize,
+) -> (Option<String>, String) {
+    if failed_without_data {
+        return (
+            Some("!".to_string()),
+            "Review Pinger: needs setup".to_string(),
+        );
+    }
+    if needs_action == 0 && needs_review == 0 {
+        return (None, "Review Pinger: nothing needs your action".to_string());
+    }
+    let prs = if needs_action == 1 {
+        "1 PR needs"
+    } else {
+        &format!("{needs_action} PRs need")
+    };
+    let reviews = if needs_review == 1 {
+        "1 review is".to_string()
+    } else {
+        format!("{needs_review} reviews are")
+    };
+    (
+        Some(format!("{needs_action} · {needs_review}")),
+        format!("Review Pinger: {prs} your action, {reviews} waiting on you"),
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_tray_shows_both_numbers() {
+        assert_eq!(tray_text(false, 3, 0).0.as_deref(), Some("3 · 0"));
+        assert_eq!(tray_text(false, 0, 2).0.as_deref(), Some("0 · 2"));
+        assert_eq!(tray_text(false, 0, 0).0, None);
+        assert_eq!(tray_text(true, 0, 0).0.as_deref(), Some("!"));
+    }
+
+    #[test]
+    fn the_tooltip_spells_both_out() {
+        assert_eq!(
+            tray_text(false, 3, 1).1,
+            "Review Pinger: 3 PRs need your action, 1 review is waiting on you"
+        );
+        assert_eq!(
+            tray_text(false, 1, 2).1,
+            "Review Pinger: 1 PR needs your action, 2 reviews are waiting on you"
+        );
+    }
+
+    fn pr(id: &str, overrides: serde_json::Value) -> PullRequest {
+        let mut pr = serde_json::json!({
+            "id": id,
+            "number": 1,
+            "title": "Old",
+            "url": "https://github.com/o/r/pull/1",
+            "isDraft": false,
+            "createdAt": "2026-10-01T09:00:00Z",
+            "reviewDecision": null,
+            "mergeable": "MERGEABLE",
+            "autoMergeRequest": null,
+            "repository": { "nameWithOwner": "o/r" },
+            "commits": { "nodes": [] },
+            "timelineItems": { "nodes": [] },
+        });
+        for (key, value) in overrides.as_object().unwrap() {
+            pr[key] = value.clone();
+        }
+        serde_json::from_value(pr).unwrap()
+    }
+
+    fn fetched() -> Fetched {
+        Fetched {
+            viewer: "me".into(),
+            token_source: TokenSource::Gh,
+            sso_partial: false,
+            pull_requests: vec![pr("mine", serde_json::json!({}))],
+            review_pull_requests: vec![pr(
+                "theirs",
+                serde_json::json!({ "reviewRequested": true }),
+            )],
+        }
+    }
+
+    #[test]
+    fn a_refreshed_pr_replaces_its_old_self() {
+        let mut fetched = fetched();
+        apply_refresh(
+            &mut fetched,
+            vec![pr("mine", serde_json::json!({ "title": "New" }))],
+        );
+        assert_eq!(fetched.pull_requests[0].title, "New");
+        assert_eq!(fetched.review_pull_requests[0].title, "Old");
+    }
+
+    #[test]
+    fn merged_or_closed_prs_are_dropped() {
+        let mut fetched = fetched();
+        let closed = serde_json::json!({ "closed": true });
+        apply_refresh(
+            &mut fetched,
+            vec![pr("mine", closed.clone()), pr("theirs", closed)],
+        );
+        assert!(fetched.pull_requests.is_empty());
+        assert!(fetched.review_pull_requests.is_empty());
+    }
+
+    #[test]
+    fn unknown_prs_are_left_to_the_full_refresh() {
+        let mut fetched = fetched();
+        apply_refresh(&mut fetched, vec![pr("other", serde_json::json!({}))]);
+        assert_eq!(fetched.pull_requests.len(), 1);
+        assert_eq!(fetched.review_pull_requests.len(), 1);
+    }
+
+    #[test]
+    fn reviewing_clears_a_direct_request_but_not_a_team_one() {
+        let direct = serde_json::json!({ "reviewRequests": { "nodes": [
+            { "requestedReviewer": { "__typename": "User", "login": "Me" } },
+        ] } });
+        let team = serde_json::json!({ "reviewRequests": { "nodes": [
+            { "requestedReviewer": { "__typename": "Team", "slug": "t" } },
+        ] } });
+        let none = serde_json::json!({ "reviewRequests": { "nodes": [] } });
+
+        assert!(still_requested(&pr("p", direct), "me", false));
+        assert!(still_requested(&pr("p", team.clone()), "me", true));
+        assert!(!still_requested(&pr("p", team), "me", false));
+        assert!(!still_requested(&pr("p", none), "me", true));
+    }
 }
