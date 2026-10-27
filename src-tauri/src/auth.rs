@@ -8,17 +8,10 @@ use std::env;
 use std::path::PathBuf;
 use std::process::Command;
 
-use serde::{Deserialize, Serialize};
-
 const KEYRING_SERVICE: &str = "dev.coenwarmer.reviewpinger";
 const KEYRING_USER: &str = "github-token";
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub enum TokenSource {
-    Pat,
-    Gh,
-}
+pub use review_pinger_core::auth::TokenSource;
 
 pub struct Token {
     pub value: String,

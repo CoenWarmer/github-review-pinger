@@ -1,0 +1,14 @@
+[workspace]
+members = ["src-tauri", "crates/core"]
+resolver = "3"
+
+[workspace.package]
+version = "0.3.0"
+
+# Profiles apply to the whole workspace, so the desktop app's release settings live here.
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = 3
+panic = "abort"
+strip = true

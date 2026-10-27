@@ -1,16 +1,8 @@
 mod auth;
-mod calendar;
 mod card;
-mod checks;
-mod directory;
 mod github;
-mod memory;
-mod notify;
 mod poller;
-mod prs;
-mod reviews;
 mod settings;
-mod slack;
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -25,6 +17,9 @@ use tauri_plugin_autostart::{MacosLauncher, ManagerExt};
 use tauri_plugin_positioner::{Position, WindowExt};
 
 use poller::{Poller, Snapshot};
+
+// The pure logic lives in its own crate; these keep the old `crate::` paths working.
+pub use review_pinger_core::{calendar, checks, directory, memory, notify, prs, reviews, slack};
 
 const POPOVER: &str = "main";
 
