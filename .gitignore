@@ -158,3 +158,6 @@ dist-ssr
 
 # Rust build output (the Cargo workspace root)
 /target
+
+# Generated WebAssembly and bindings
+packages/wasm/pkg

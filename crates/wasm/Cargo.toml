@@ -1,0 +1,17 @@
+[package]
+name = "review-pinger-wasm"
+version.workspace = true
+description = "Review Pinger's PR logic for the browser"
+authors = ["Coen Warmer"]
+edition = "2024"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+chrono = { version = "0.4.45", features = ["serde"] }
+review-pinger-core = { path = "../core" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# Must match the wasm-bindgen CLI that generates the bindings.
+wasm-bindgen = "=0.2.129"
