@@ -224,6 +224,8 @@ The footer shows when data was refreshed and a refresh icon button, which spins 
 The third tab holds, top to bottom:
 
 - A **Startup** section with Launch at login (on by default in release builds).
+- A **Notifications** section: a mute switch for the cards and a "Send test
+  notification" button.
 - An **Authentication** section: a GitHub CLI / Personal access token
   selector, who is signed in ("Signed in as CoenWarmer"), and the token form
   when the token is selected. With the CLI selected, a saved token is noted
@@ -288,6 +290,47 @@ waiting on you.
   offline), sends one "While you were away" summary instead of replaying.
 - The very first poll after install is silent: everything is marked seen and
   overdue PRs (including ones waiting on you) as nudged; the list itself shows what's pending.
+
+### Notification cards
+
+Notifications are shown as a small in-app card, not an OS notification, so
+they match the app's look. This replaces the native notification plugin, so
+macOS Focus and the OS notification permission don't apply. The card has its
+own mute switch instead.
+
+- **Window**: a frameless, transparent, always-on-top window (380 px wide,
+  height follows the content) with rounded corners, created hidden and shown
+  without taking focus. It's hidden when idle.
+- **Placement**: next to the tray icon, towards the screen center: below the
+  icon when the tray is in the top half of its screen (macOS), above it when
+  in the bottom half (Windows), clamped to the work area. Linux has no tray
+  position, so the card goes in the top-right corner of the primary screen.
+- **Content**: an event label with an accent dot and a close button, the PR
+  title, `repo#number · author`, and one detail line ("ana requested your
+  review"). Summary cards ("While you were away", "Pull request updates")
+  have a label and the summary text only.
+- **Accent by urgency**: red for changes requested, blue for a new review
+  request, re-request or other feedback, amber for staleness nudges, green
+  for approvals.
+- **Dismissal**: 5 seconds, with a thin countdown bar along the top edge.
+  Hovering pauses the countdown, and leaving restarts it. The close button
+  dismisses at once.
+- **Queue**: one card at a time. Events from one poll are queued and shown
+  in turn, 5 seconds each. A poll never produces more than 3 individual
+  cards, since larger batches fold into one summary.
+- **Click**: opens the PR on GitHub and marks it visited, like clicking a row.
+  A summary card has no PR, so it opens the popover instead.
+- **Popover open**: events that arrive while the popover is open show no
+  card; the list already shows them.
+- **Mute**: the Notifications section in Settings has a switch. While muted
+  no cards show and the queue is dropped. Events still count as seen, so
+  unmuting doesn't replay them. It's kept in `state.json`.
+- **Test**: "Send test notification" in the Notifications section queues one
+  card, rotating through the event types. It ignores the mute switch and the
+  popover-open rule.
+- **Not covered**: Windows quiet time and fullscreen presentations aren't
+  detected yet, so the card shows during them unless muted.
+
 - Seen responses, notified review requests, nudged quiet and waiting
   periods, and snoozes persist in `state.json`
   in the app data directory, written atomically. Closed PRs are pruned.
