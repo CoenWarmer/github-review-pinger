@@ -1510,6 +1510,7 @@ dependencies = [
  "keyring",
  "log",
  "reqwest",
+ "review-pinger-core",
  "serde",
  "serde_json",
  "tauri",
@@ -3440,6 +3441,17 @@ dependencies = [
  "wasm-bindgen-futures",
  "wasm-streams",
  "web-sys",
+]
+
+[[package]]
+name = "review-pinger-core"
+version = "0.3.0"
+dependencies = [
+ "chrono",
+ "chrono-tz",
+ "log",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

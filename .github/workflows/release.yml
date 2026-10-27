@@ -40,8 +40,6 @@ jobs:
         with:
           targets: ${{ runner.os == 'macOS' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
       - uses: swatinem/rust-cache@v2
-        with:
-          workspaces: src-tauri
 
       - run: pnpm install --frozen-lockfile
 

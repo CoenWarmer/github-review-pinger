@@ -1,4 +1,4 @@
-pub mod types;
+pub use review_pinger_core::github::types;
 
 use std::collections::{HashMap, HashSet};
 use std::time::Duration;

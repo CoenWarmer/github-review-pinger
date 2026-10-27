@@ -30,16 +30,13 @@ jobs:
         with:
           components: clippy, rustfmt
       - uses: swatinem/rust-cache@v2
-        with:
-          workspaces: src-tauri
 
       - run: pnpm install --frozen-lockfile
       # Also produces dist/, which tauri::generate_context! needs at compile time.
       - run: pnpm build
 
       - name: Rust checks
-        working-directory: src-tauri
         run: |
-          cargo fmt --check
-          cargo clippy --all-targets -- -D warnings
-          cargo test
+          cargo fmt --all --check
+          cargo clippy --workspace --all-targets -- -D warnings
+          cargo test --workspace

@@ -1,6 +1,6 @@
 [package]
 name = "github-review-pinger"
-version = "0.3.0"
+version.workspace = true
 description = "Tray app showing your open GitHub PRs and their review status"
 authors = ["Coen Warmer"]
 edition = "2024"
@@ -30,15 +30,8 @@ log = "0.4.34"
 tauri-plugin-log = "2.10.1"
 tauri-plugin-autostart = "2.7.0"
 futures-util = "0.3.34"
+review-pinger-core = { path = "../crates/core" }
 
-
-# Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration
-[profile.release]
-codegen-units = 1
-lto = true
-opt-level = 3
-panic = "abort"
-strip = true
 
 [target.'cfg(target_os = "macos")'.dependencies]
 keyring = { version = "3", features = ["apple-native"] }
