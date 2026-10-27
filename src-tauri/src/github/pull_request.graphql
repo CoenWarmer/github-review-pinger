@@ -15,6 +15,10 @@ fragment PullRequestFields on PullRequest {
   autoMergeRequest {
     enabledAt
   }
+  mergeQueueEntry {
+    position
+    estimatedTimeToMerge
+  }
   repository {
     nameWithOwner
   }

@@ -41,6 +41,9 @@ export interface PullRequest {
   /** How long checks usually take in this repo, if known. */
   checksEstimateSecs: number | null;
   autoMerge: boolean;
+  queued: boolean;
+  mergeQueuePosition: number | null;
+  mergeEta: string | null;
   reviewers: Reviewer[];
 }
 

@@ -51,6 +51,9 @@ pub struct PullRequest {
     pub review_requested: bool,
     /// Only presence matters: auto-merge is enabled.
     pub auto_merge_request: Option<IgnoredAny>,
+    /// Present while the PR sits in the repo's merge queue.
+    #[serde(default)]
+    pub merge_queue_entry: Option<MergeQueueEntry>,
     pub repository: Repository,
     pub commits: Nodes<CommitNode>,
     #[serde(default)]
@@ -105,6 +108,14 @@ pub enum MergeStateStatus {
     Draft,
     #[serde(other)]
     Unknown,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MergeQueueEntry {
+    pub position: Option<u32>,
+    /// GitHub's estimate, in seconds from the time of the query.
+    pub estimated_time_to_merge: Option<i64>,
 }
 
 #[derive(Debug, Deserialize)]

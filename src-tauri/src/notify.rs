@@ -285,6 +285,9 @@ mod tests {
             checks_started: None,
             checks_estimate_secs: None,
             auto_merge: false,
+            merge_queue_position: None,
+            merge_eta: None,
+            queued: false,
             reviewers: Vec::new(),
             responses,
         }

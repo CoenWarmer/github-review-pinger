@@ -311,7 +311,8 @@ button {
   background: var(--accent-bg);
 }
 
-.badge-checksRunning {
+.badge-checksRunning,
+.badge-queued {
   color: var(--warning);
   background: var(--warning-bg);
 }

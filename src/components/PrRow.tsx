@@ -1,7 +1,7 @@
 import { useState, type CSSProperties } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { checksProgress, dayAndTime, elapsed } from "../format";
+import { checksProgress, dayAndTime, elapsed, remaining } from "../format";
 import type { Action, PullRequest, Reviewer, ReviewerState } from "../types";
 
 /** Opens the PR on GitHub, and has it refreshed first the next time the popover shows. */
@@ -109,6 +109,15 @@ export function PrRow({ pr, now }: { pr: PullRequest; now: number }) {
                 : undefined,
           },
           pr.autoMerge && { label: "Auto-merge", className: "badge-autoMerge" },
+          pr.queued && {
+            label: [
+              pr.mergeQueuePosition ? `Queued #${pr.mergeQueuePosition}` : "Queued",
+              pr.mergeEta && remaining(pr.mergeEta, now),
+            ]
+              .filter(Boolean)
+              .join(" · "),
+            className: "badge-queued",
+          },
         ].filter((note) => note !== false)
       : [];
 
