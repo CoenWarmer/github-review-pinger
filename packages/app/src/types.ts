@@ -90,6 +90,7 @@ export type Problem =
   | { code: "ghNotInstalled" }
   | { code: "ghNotLoggedIn" }
   | { code: "noSavedToken" }
+  | { code: "noToken" }
   | { code: "tokenRejected"; source: TokenSource }
   | { code: "rateLimited"; resetAt: string | null }
   | { code: "network"; message: string }

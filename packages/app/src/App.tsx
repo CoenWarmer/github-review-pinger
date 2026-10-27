@@ -162,6 +162,7 @@ function Footer({ snapshot, now }: { snapshot: Snapshot; now: number }) {
 }
 
 function AppContent() {
+  const platform = usePlatform();
   const snapshot = useSnapshot();
   const now = useNow();
   const [tab, setTab] = useState<Tab>("mine");
@@ -195,7 +196,7 @@ function AppContent() {
     >
       <main className="flex h-full flex-col">
         {snapshot.status.kind === "error" && (
-          <Banner>{problemMessage(snapshot.status.problem)}</Banner>
+          <Banner>{problemMessage(snapshot.status.problem, platform.features.githubCli)}</Banner>
         )}
         {snapshot.ssoPartial && (
           <Banner>
