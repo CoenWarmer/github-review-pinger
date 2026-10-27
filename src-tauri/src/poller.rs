@@ -2,6 +2,7 @@
 //! popover as a `snapshot` event, keeps the tray count in sync, and sends
 //! notifications for what changed between polls.
 
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -14,7 +15,7 @@ use tauri_plugin_notification::NotificationExt;
 use tokio::sync::Notify;
 
 use crate::auth::{self, AuthError, TokenSource};
-use crate::github::types::PullRequest;
+use crate::github::types::{PullRequest, RequestedReviewer};
 use crate::github::{self, FetchError};
 use crate::memory::Memory;
 use crate::notify;
@@ -74,6 +75,9 @@ pub struct Poller {
     latest: Mutex<Option<Fetched>>,
     memory: Mutex<Memory>,
     memory_path: Option<PathBuf>,
+    /// Pull requests the user opened on GitHub since the popover last
+    /// showed; refreshed first when it next opens. Not persisted.
+    visited: Mutex<HashSet<String>>,
     first_poll: AtomicBool,
     wake: Notify,
     http: reqwest::Client,
@@ -104,6 +108,18 @@ impl Poller {
             memory.set_snooze(id, until, Utc::now());
             self.save(&memory);
         }
+        self.rederive(app);
+    }
+
+    /// Remembers that the user opened this PR on GitHub, so it's refreshed
+    /// first the next time the popover shows.
+    pub fn visit(&self, id: &str) {
+        self.visited.lock().unwrap().insert(id.to_string());
+    }
+
+    /// Updates the snapshot from the last fetch, after snoozes or a single
+    /// PR changed.
+    fn rederive(&self, app: &AppHandle) {
         let latest = self.latest.lock().unwrap();
         if let Some(fetched) = latest.as_ref() {
             let (views, review_views) = self.derive(app, fetched, Utc::now());
@@ -189,12 +205,111 @@ pub fn start(app: &AppHandle) -> Arc<Poller> {
         latest: Mutex::new(None),
         memory: Mutex::new(memory),
         memory_path,
+        visited: Mutex::new(HashSet::new()),
         first_poll: AtomicBool::new(true),
         wake: Notify::new(),
         http: github::http_client(),
     });
     tauri::async_runtime::spawn(run(app.clone(), poller.clone()));
     poller
+}
+
+/// Called when the popover opens. PRs the user visited on GitHub since last
+/// time are refreshed alone first, so what they changed shows up quickly,
+/// and then the whole list is refreshed if it's stale.
+pub fn on_popover_open(app: &AppHandle, poller: Arc<Poller>) {
+    let visited: Vec<String> = poller.visited.lock().unwrap().drain().collect();
+    if visited.is_empty() {
+        poller.refresh_if_stale();
+        return;
+    }
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        refresh_visited(&app, &poller, visited).await;
+        poller.refresh_if_stale();
+    });
+}
+
+/// Refetches just `ids` and patches them into the last fetch. Notifications
+/// are left to the full poll that follows, which compares against memory this
+/// leaves untouched. Failures are only logged, since the full refresh reports
+/// problems.
+async fn refresh_visited(app: &AppHandle, poller: &Poller, ids: Vec<String>) {
+    let Ok(Ok(token)) = tauri::async_runtime::spawn_blocking(auth::resolve_token).await else {
+        return;
+    };
+    let result = async {
+        let mut fresh = github::fetch_details(&poller.http, &token.value, &ids).await?;
+        // Only the viewer's own PRs need the expensive merge state.
+        let authored: HashSet<String> = match poller.latest.lock().unwrap().as_ref() {
+            Some(fetched) => fetched
+                .pull_requests
+                .iter()
+                .map(|pr| pr.id.clone())
+                .collect(),
+            None => return Ok(()),
+        };
+        let (mut own, others): (Vec<_>, Vec<_>) =
+            fresh.drain(..).partition(|pr| authored.contains(&pr.id));
+        github::add_merge_states(&poller.http, &token.value, &mut own).await?;
+        own.extend(others);
+
+        if let Some(fetched) = poller.latest.lock().unwrap().as_mut() {
+            apply_refresh(fetched, own);
+        }
+        Ok::<(), FetchError>(())
+    }
+    .await;
+
+    match result {
+        Ok(()) => poller.rederive(app),
+        Err(e) => log::warn!("Could not refresh visited pull requests: {e:?}"),
+    }
+}
+
+/// Replaces each refreshed PR in place, or drops it if it was merged or
+/// closed. PRs the last fetch didn't list are ignored; the full refresh
+/// decides what belongs in the lists.
+fn apply_refresh(fetched: &mut Fetched, fresh: Vec<PullRequest>) {
+    for pr in fresh {
+        if let Some(at) = fetched.pull_requests.iter().position(|p| p.id == pr.id) {
+            if pr.closed {
+                fetched.pull_requests.remove(at);
+            } else {
+                fetched.pull_requests[at] = pr;
+            }
+        } else if let Some(at) = fetched
+            .review_pull_requests
+            .iter()
+            .position(|p| p.id == pr.id)
+        {
+            if pr.closed {
+                fetched.review_pull_requests.remove(at);
+            } else {
+                let was_requested = fetched.review_pull_requests[at].review_requested;
+                let mut pr = pr;
+                pr.review_requested = still_requested(&pr, &fetched.viewer, was_requested);
+                fetched.review_pull_requests[at] = pr;
+            }
+        }
+    }
+}
+
+/// The `review-requested` search isn't repeated for one PR, so infer it:
+/// the viewer is asked directly, or a team still is and they were requested
+/// through it before. A review by the viewer clears only their own request.
+fn still_requested(pr: &PullRequest, viewer: &str, was_requested: bool) -> bool {
+    let pending = || {
+        pr.review_requests
+            .iter()
+            .flat_map(|n| n.iter())
+            .filter_map(|r| r.requested_reviewer.as_ref())
+    };
+    let directly = pending().any(
+        |r| matches!(r, RequestedReviewer::User { login } if login.eq_ignore_ascii_case(viewer)),
+    );
+    let via_team = was_requested && pending().any(|r| matches!(r, RequestedReviewer::Team { .. }));
+    directly || via_team
 }
 
 async fn run(app: AppHandle, poller: Arc<Poller>) {
@@ -424,5 +539,86 @@ mod tests {
             tray_text(false, 1, 2).1,
             "Review Pinger: 1 PR needs your action, 2 reviews are waiting on you"
         );
+    }
+
+    fn pr(id: &str, overrides: serde_json::Value) -> PullRequest {
+        let mut pr = serde_json::json!({
+            "id": id,
+            "number": 1,
+            "title": "Old",
+            "url": "https://github.com/o/r/pull/1",
+            "isDraft": false,
+            "createdAt": "2026-10-01T09:00:00Z",
+            "reviewDecision": null,
+            "mergeable": "MERGEABLE",
+            "autoMergeRequest": null,
+            "repository": { "nameWithOwner": "o/r" },
+            "commits": { "nodes": [] },
+            "timelineItems": { "nodes": [] },
+        });
+        for (key, value) in overrides.as_object().unwrap() {
+            pr[key] = value.clone();
+        }
+        serde_json::from_value(pr).unwrap()
+    }
+
+    fn fetched() -> Fetched {
+        Fetched {
+            viewer: "me".into(),
+            token_source: TokenSource::Gh,
+            sso_partial: false,
+            pull_requests: vec![pr("mine", serde_json::json!({}))],
+            review_pull_requests: vec![pr(
+                "theirs",
+                serde_json::json!({ "reviewRequested": true }),
+            )],
+        }
+    }
+
+    #[test]
+    fn a_refreshed_pr_replaces_its_old_self() {
+        let mut fetched = fetched();
+        apply_refresh(
+            &mut fetched,
+            vec![pr("mine", serde_json::json!({ "title": "New" }))],
+        );
+        assert_eq!(fetched.pull_requests[0].title, "New");
+        assert_eq!(fetched.review_pull_requests[0].title, "Old");
+    }
+
+    #[test]
+    fn merged_or_closed_prs_are_dropped() {
+        let mut fetched = fetched();
+        let closed = serde_json::json!({ "closed": true });
+        apply_refresh(
+            &mut fetched,
+            vec![pr("mine", closed.clone()), pr("theirs", closed)],
+        );
+        assert!(fetched.pull_requests.is_empty());
+        assert!(fetched.review_pull_requests.is_empty());
+    }
+
+    #[test]
+    fn unknown_prs_are_left_to_the_full_refresh() {
+        let mut fetched = fetched();
+        apply_refresh(&mut fetched, vec![pr("other", serde_json::json!({}))]);
+        assert_eq!(fetched.pull_requests.len(), 1);
+        assert_eq!(fetched.review_pull_requests.len(), 1);
+    }
+
+    #[test]
+    fn reviewing_clears_a_direct_request_but_not_a_team_one() {
+        let direct = serde_json::json!({ "reviewRequests": { "nodes": [
+            { "requestedReviewer": { "__typename": "User", "login": "Me" } },
+        ] } });
+        let team = serde_json::json!({ "reviewRequests": { "nodes": [
+            { "requestedReviewer": { "__typename": "Team", "slug": "t" } },
+        ] } });
+        let none = serde_json::json!({ "reviewRequests": { "nodes": [] } });
+
+        assert!(still_requested(&pr("p", direct), "me", false));
+        assert!(still_requested(&pr("p", team.clone()), "me", true));
+        assert!(!still_requested(&pr("p", team), "me", false));
+        assert!(!still_requested(&pr("p", none), "me", true));
     }
 }

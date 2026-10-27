@@ -1,7 +1,6 @@
-import { openUrl } from "@tauri-apps/plugin-opener";
 import { dayAndTime, elapsed } from "../format";
 import type { ReviewRequest } from "../types";
-import { REVIEWER_GLYPHS, REVIEWER_LABELS, ReviewerChip, SnoozeControl } from "./PrRow";
+import { REVIEWER_GLYPHS, REVIEWER_LABELS, ReviewerChip, SnoozeControl, visitPr } from "./PrRow";
 
 export function ReviewRow({ pr, now }: { pr: ReviewRequest; now: number }) {
   const waiting = pr.waitingSince && `waiting ${elapsed(pr.waitingSince, now)}`;
@@ -9,7 +8,7 @@ export function ReviewRow({ pr, now }: { pr: ReviewRequest; now: number }) {
 
   return (
     <li className="pr">
-      <button type="button" className="pr-main" onClick={() => openUrl(pr.url)}>
+      <button type="button" className="pr-main" onClick={() => visitPr(pr)}>
         <span className="pr-title">{pr.title}</span>
         <span className="pr-meta">
           {pr.repo}#{pr.number} · {pr.author}

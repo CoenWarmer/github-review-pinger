@@ -90,14 +90,7 @@ pub async fn fetch_open_pull_requests(
         .filter(|id| seen.insert(id.clone()))
         .collect();
 
-    let all: Vec<PullRequest> = in_batches(
-        http,
-        token,
-        DETAILS_QUERY,
-        &ids,
-        |nodes: Nodes<PullRequest>| nodes.nodes,
-    )
-    .await?;
+    let all = fetch_details(http, token, &ids).await?;
     let (mut pull_requests, mut review_pull_requests): (Vec<_>, Vec<_>) = all
         .into_iter()
         .partition(|pr| authored_ids.contains(&pr.id));
@@ -105,6 +98,40 @@ pub async fn fetch_open_pull_requests(
         pr.review_requested = requested_ids.contains(&pr.id);
     }
 
+    add_merge_states(http, token, &mut pull_requests).await?;
+
+    Ok(Fetched {
+        viewer: authored.viewer,
+        pull_requests,
+        review_pull_requests,
+        sso_partial,
+    })
+}
+
+/// Fetches the details of specific pull requests, for refreshing a few
+/// without searching again. Closed and merged ones come back with `closed` set.
+pub async fn fetch_details(
+    http: &reqwest::Client,
+    token: &str,
+    ids: &[String],
+) -> Result<Vec<PullRequest>, FetchError> {
+    in_batches(
+        http,
+        token,
+        DETAILS_QUERY,
+        ids,
+        |nodes: Nodes<PullRequest>| nodes.nodes,
+    )
+    .await
+}
+
+/// Fills in `merge_state_status`, which is expensive, only for PRs that
+/// could be ready to merge.
+pub async fn add_merge_states(
+    http: &reqwest::Client,
+    token: &str,
+    pull_requests: &mut [PullRequest],
+) -> Result<(), FetchError> {
     let candidates: Vec<String> = pull_requests
         .iter()
         .filter(|pr| could_be_ready(pr))
@@ -121,16 +148,10 @@ pub async fn fetch_open_pull_requests(
     .into_iter()
     .map(|state| (state.id, state.merge_state_status))
     .collect();
-    for pr in &mut pull_requests {
+    for pr in pull_requests {
         pr.merge_state_status = merge_states.get(&pr.id).copied();
     }
-
-    Ok(Fetched {
-        viewer: authored.viewer,
-        pull_requests,
-        review_pull_requests,
-        sso_partial,
-    })
+    Ok(())
 }
 
 /// Approved, mergeable, green, and not already auto-merging: the only PRs

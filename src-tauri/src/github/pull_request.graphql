@@ -8,6 +8,7 @@ fragment PullRequestFields on PullRequest {
     login
   }
   isDraft
+  closed
   createdAt
   reviewDecision
   mergeable

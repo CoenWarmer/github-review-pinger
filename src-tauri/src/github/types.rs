@@ -33,6 +33,10 @@ pub struct PullRequest {
     #[serde(default)]
     pub author: Option<Actor>,
     pub is_draft: bool,
+    /// Merged or closed; only matters when a single PR is refreshed after
+    /// the list was fetched.
+    #[serde(default)]
+    pub closed: bool,
     pub created_at: DateTime<Utc>,
     pub review_decision: Option<ReviewDecision>,
     pub mergeable: Mergeable,

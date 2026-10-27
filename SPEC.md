@@ -52,9 +52,18 @@ timeout:
    (approved, green, mergeable, no auto-merge), since GitHub computes it on
    demand and it doubles a PR's cost.
 
-A refresh takes ~5–8 s for ~70 PRs (previously ~38 s). 5xx responses are
+A refresh takes ~5–8 s for ~70 PRs (previously ~38 s), more with the review
+searches. 5xx responses are
 retried twice per request.
 
+- Clicking a row remembers that PR (in memory only). The next time the popover
+  opens, those PRs are refetched on their own (details, plus merge state for
+  your own) and patched into the lists, so what you just did on GitHub shows
+  up in about a second; merged or closed ones disappear. Only then does the
+  full refresh below run. The single refresh sends no notifications, which
+  stay with the full poll. For a review-request PR, whether it's still
+  requested is inferred: you're listed directly, or a team is and it was
+  requested through it before.
 - Poll every 2 minutes; also refresh when the popover opens and data is older
   than 30 s (wall-clock, so time asleep counts). Wait out rate limits until
   the reset time; back off exponentially (up to 10 min) on network and API

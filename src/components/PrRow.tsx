@@ -4,6 +4,12 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { dayAndTime, elapsed } from "../format";
 import type { Action, PullRequest, Reviewer, ReviewerState } from "../types";
 
+/** Opens the PR on GitHub, and has it refreshed first the next time the popover shows. */
+export function visitPr(pr: Pick<PullRequest, "id" | "url">) {
+  invoke("visit", { id: pr.id });
+  openUrl(pr.url);
+}
+
 const ACTION_LABELS: Record<Action, string> = {
   changesRequested: "Changes requested",
   newFeedback: "New feedback",
@@ -95,7 +101,7 @@ export function PrRow({ pr, now }: { pr: PullRequest; now: number }) {
 
   return (
     <li className="pr">
-      <button type="button" className="pr-main" onClick={() => openUrl(pr.url)}>
+      <button type="button" className="pr-main" onClick={() => visitPr(pr)}>
         <span className="pr-title">{pr.title}</span>
         <span className="pr-meta">
           {pr.repo}#{pr.number} · open {elapsed(pr.openSince, now)} · quiet{" "}
