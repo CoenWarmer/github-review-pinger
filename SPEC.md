@@ -68,6 +68,15 @@ A refresh takes ~5–8 s for ~70 PRs (previously ~38 s), more with the review
 searches. 5xx responses are
 retried twice per request.
 
+On the first load of a launch, with nothing to show yet, steps 2 and 3 run
+in a different order so My PRs appears sooner: your own PRs' details are
+asked for first, sharing the 8 request slots with everyone else's details
+(which start in the slots left idle), and My PRs is shown as soon as its details
+are in (about 6 s instead of 9–10 s on 150 PRs; the complete fetch takes as
+long as before). That first screen is display only, without merge states
+or notifications, and the Review Requests tab says it's loading until the
+complete fetch lands. Later refreshes fetch everything at once.
+
 - Clicking a row remembers that PR (in memory only). The next time the popover
   opens, those PRs are refetched on their own (details, plus merge state for
   your own) and patched into the lists, so what you just did on GitHub shows
@@ -77,11 +86,14 @@ retried twice per request.
   requested is inferred: you're listed directly, or a team is and it was
   requested through it before.
 - Team members (for the reviewer hover cards) come from a separate
-  lookup, cached in memory for an hour and refreshed by the poll: the members
-  of every team requested on a PR, now or earlier, in batched queries. It
-  needs the `read:org` scope.
+  lookup, kept for a day (saved to `directory.json` on desktop, with the web
+  app's state in the browser) and refreshed by the poll: the members of every
+  team requested on a PR, now or earlier, in batched queries (8 teams per
+  query, 10 queries at once: 75 teams take ~3.5 s). A stale lookup is still
+  shown while it's refreshed. It needs the `read:org` scope.
   Without it the lookup fails once per hour, quietly, and the cards show what
-  they can; Settings says how to add the scope. Recent commits (author and
+  they can; Settings says how to add the scope. A team GitHub had nothing on
+  is also asked about again after an hour. Recent commits (author and
   date, last 20) are fetched with each PR to see who pushed.
 - Poll every 2 minutes; also refresh whenever the popover opens (unless a
   refresh is already running). Wait out rate limits until the reset time; back off exponentially (up to 10 min) on network and API

@@ -188,6 +188,9 @@ export interface Snapshot {
   soundOnMerge: boolean;
   /** The team lookup was refused for lack of the `read:org` scope. */
   teamLookupDenied: boolean;
+  /** The first load is under way and only My PRs has arrived, so a list that
+   * is empty isn't known to be. */
+  partial: boolean;
   fetchedAt: string | null;
   ssoPartial: boolean;
   pullRequests: PullRequest[];

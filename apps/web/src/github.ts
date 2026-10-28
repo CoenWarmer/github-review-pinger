@@ -124,12 +124,15 @@ export interface Github {
   /**
    * `includeAuthored` is false to skip the search for your own open PRs
    * entirely. `views` is `[id, query]` pairs for enabled custom views, each
-   * already including `is:pr`.
+   * already including `is:pr`. With `onPartial`, your own PRs are fetched
+   * first and passed to it as soon as they're in (without merge states, and
+   * with nothing else yet), then the rest is fetched.
    */
   fetchOpenPullRequests(
     reviewedSince: string,
     includeAuthored: boolean,
     views: [string, string][],
+    onPartial?: (partial: Fetched) => void,
   ): Promise<Fetched>;
   fetchDetails(ids: string[]): Promise<RawPullRequest[]>;
   /** `cursor` continues from a previous page's `endCursor`; `null` starts from the top. */
@@ -186,6 +189,25 @@ async function mapLimit<T, R>(
   };
   await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
   return results;
+}
+
+/**
+ * Runs at most `max` tasks at once, starting them in the order they were
+ * asked for, so whatever is asked for first finishes first.
+ */
+function limiter(max: number) {
+  let active = 0;
+  const waiting: (() => void)[] = [];
+  return async <T>(task: () => Promise<T>): Promise<T> => {
+    if (active >= max) await new Promise<void>((resolve) => waiting.push(resolve));
+    active++;
+    try {
+      return await task();
+    } finally {
+      active--;
+      waiting.shift()?.();
+    }
+  };
 }
 
 function chunks<T>(items: T[], size: number): T[][] {
@@ -330,7 +352,7 @@ export function createGithub({
   }
 
   const github: Github = {
-    async fetchOpenPullRequests(reviewedSince, includeAuthored, views) {
+    async fetchOpenPullRequests(reviewedSince, includeAuthored, views, onPartial) {
       const reviewed = `is:pr is:open reviewed-by:@me -author:@me archived:false updated:>=${reviewedSince}`;
       const emptySearch = { viewer: "", ids: [] as string[], ssoPartial: false };
       const [authored, requested, reviewedByMe, viewResults] = await Promise.all([
@@ -355,13 +377,54 @@ export function createGithub({
         ]),
       ];
 
-      const all = await github.fetchDetails(ids);
-      const byId = new Map(all.map((pr) => [pr.id, pr]));
+      const viewer = authored.viewer || requested.viewer;
+      const ssoPartial =
+        authored.ssoPartial ||
+        requested.ssoPartial ||
+        reviewedByMe.ssoPartial ||
+        viewResults.some((r) => r.ssoPartial);
 
+      let byId: Map<string, RawPullRequest>;
       // Only your own PRs get the expensive merge state; done before
       // anything clones from `byId`, so a PR that's also in a view carries it.
-      const pullRequests = authored.ids.flatMap((id) => byId.get(id) ?? []);
-      await github.addMergeStates(pullRequests);
+      let pullRequests: RawPullRequest[];
+      if (onPartial && authored.ids.length > 0) {
+        // Your own PRs and the rest share the request slots, with your own
+        // asked for first: they finish first, and the rest starts in the
+        // slots they leave idle instead of waiting for all of them.
+        const limit = limiter(MAX_CONCURRENT);
+        const detailsOf = async (ids: string[]) => {
+          const replies = await Promise.all(
+            chunks(ids, BATCH_SIZE).map((batch) =>
+              limit(() => request<{ nodes: (RawPullRequest | null)[] }>(queries.details, { ids: batch })),
+            ),
+          );
+          return replies
+            .flatMap((reply) => reply.data.nodes)
+            .filter((node): node is RawPullRequest => node !== null);
+        };
+        const mine = async () => {
+          const own = await detailsOf(authored.ids);
+          onPartial({
+            viewer,
+            pullRequests: [...own],
+            reviewPullRequests: [],
+            viewPullRequests: {},
+            ssoPartial,
+          });
+          await github.addMergeStates(own);
+          return own;
+        };
+        const restIds = ids.filter((id) => !authoredIds.has(id));
+        const [own, rest] = await Promise.all([mine(), detailsOf(restIds)]);
+        pullRequests = own;
+        byId = new Map(rest.map((pr) => [pr.id, pr]));
+      } else {
+        const all = await github.fetchDetails(ids);
+        byId = new Map(all.map((pr) => [pr.id, pr]));
+        pullRequests = authored.ids.flatMap((id) => byId.get(id) ?? []);
+        await github.addMergeStates(pullRequests);
+      }
       for (const pr of pullRequests) byId.set(pr.id, pr);
 
       const reviewPullRequests = [...byId.values()].filter(
@@ -381,15 +444,11 @@ export function createGithub({
 
       return {
         // The authored search may have been skipped; the other two always know who the viewer is.
-        viewer: authored.viewer || requested.viewer,
+        viewer,
         pullRequests,
         reviewPullRequests,
         viewPullRequests,
-        ssoPartial:
-          authored.ssoPartial ||
-          requested.ssoPartial ||
-          reviewedByMe.ssoPartial ||
-          viewResults.some((r) => r.ssoPartial),
+        ssoPartial,
       };
     },
 

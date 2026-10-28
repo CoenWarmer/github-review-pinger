@@ -394,6 +394,16 @@ function AppContent() {
                   );
                 })
             )
+          ) : snapshot.partial && reviews.length === 0 ? (
+            // My PRs came first; this is still on its way, so empty isn't known.
+            snapshot.status.kind === "error" ? (
+              <Empty>Couldn't load review requests.</Empty>
+            ) : (
+              <div className="flex flex-col items-center gap-3 px-3 py-10 text-muted-foreground">
+                <RingsLoader loading />
+                <p className="m-0">Loading review requests…</p>
+              </div>
+            )
           ) : reviews.length === 0 ? (
             <Empty>No pull requests are waiting on your review.</Empty>
           ) : (

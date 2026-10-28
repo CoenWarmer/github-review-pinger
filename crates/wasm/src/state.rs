@@ -169,6 +169,33 @@ impl PingerState {
         })
     }
 
+    /// The lists for a fetch that isn't complete yet, to show while the rest
+    /// arrives. Display only: nothing is remembered, notified or kept as the
+    /// last fetch.
+    pub fn preview(&self, fetched: &str, now: &str) -> Result<String, String> {
+        let input: FetchedInput = serde_json::from_str(fetched).map_err(|e| e.to_string())?;
+        let now = time(now)?;
+        let fetched = Fetched {
+            viewer: input.viewer,
+            token_source: TokenSource::Pat,
+            sso_partial: input.sso_partial,
+            pull_requests: input.pull_requests,
+            review_pull_requests: input.review_pull_requests,
+            view_pull_requests: input.view_pull_requests,
+        };
+        let (pull_requests, review_requests) =
+            engine::derive(&fetched, &self.settings, &self.memory, &self.directory, now);
+        let views =
+            engine::derive_views(&fetched, &self.settings, &self.memory, &self.directory, now);
+        json(&Update {
+            pull_requests,
+            review_requests,
+            notifications: Vec::new(),
+            team_channels: self.channels(),
+            views,
+        })
+    }
+
     /// The lists again from the last fetch, after something changed. `None`
     /// before the first poll.
     pub fn derived(&self, now: &str) -> Result<Option<String>, String> {

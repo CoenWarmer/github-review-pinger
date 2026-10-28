@@ -79,16 +79,30 @@ class FakeGithub implements Github {
   mergedCalls: (string | null)[] = [];
 
   viewCalls: [string, string][][] = [];
+  /** How many fetches were asked to hand over their own PRs first. */
+  partialCalls = 0;
+  /** Holds a fetch after its own PRs are in, until released. */
+  hold: Promise<void> | null = null;
 
   async fetchOpenPullRequests(
     _reviewedSince: string,
     includeAuthored: boolean,
     views: [string, string][],
+    onPartial?: (partial: Fetched) => void,
   ) {
     this.polls++;
     this.includeAuthoredCalls.push(includeAuthored);
     this.viewCalls.push(views);
     if (this.failure) throw this.failure;
+    if (onPartial) {
+      this.partialCalls++;
+      onPartial({
+        ...structuredClone(this.fetched),
+        reviewPullRequests: [],
+        viewPullRequests: {},
+      });
+      await this.hold;
+    }
     return structuredClone(this.fetched);
   }
   async fetchMergedPage(cursor: string | null) {
@@ -180,6 +194,36 @@ describe("the web engine", () => {
     assert.equal(snapshot.pullRequests.length, 1);
     assert.equal(snapshot.hasSavedToken, true);
     assert.ok(JSON.parse(storage.data.get("reviewPinger.state")!).memory.pullRequests.mine);
+  });
+
+  it("shows My PRs before the rest of the first load arrives, and only then the full lists", async () => {
+    const { engine, github } = makeEngine();
+    github.fetched.reviewPullRequests = [
+      pr("theirs", { author: { __typename: "User", login: "them" }, reviewRequested: true }),
+    ];
+    let release!: () => void;
+    github.hold = new Promise((resolve) => (release = resolve));
+
+    const started = engine.start();
+    await settle();
+    const partial = engine.getSnapshot();
+    assert.equal(partial.partial, true);
+    assert.equal(partial.pullRequests.length, 1);
+    assert.equal(partial.reviewRequests.length, 0);
+    assert.notEqual(partial.fetchedAt, null);
+    assert.equal(partial.refreshing, true);
+
+    release();
+    await started;
+    await settle();
+    const full = engine.getSnapshot();
+    assert.equal(full.partial, false);
+    assert.equal(full.reviewRequests.length, 1);
+    assert.equal(full.refreshing, false);
+
+    // Once there is something to show, a refresh just replaces it.
+    await engine.refresh();
+    assert.equal(github.partialCalls, 1);
   });
 
   it("follows the system theme until one is chosen, then remembers it", async () => {

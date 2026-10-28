@@ -215,6 +215,43 @@ describe("fetching pull requests", () => {
     assert.ok(!searched.some((q) => q.includes("author:@me") && !q.includes("-author:@me")));
   });
 
+  it("hands over your own PRs first when asked, and still returns the same result", async () => {
+    const searches = {
+      "author:@me": [["own1", "own2"]],
+      "review-requested:@me": [["req1", "own1"]],
+      "reviewed-by:@me": [["done1"]],
+    };
+    const prs = {
+      own1: approved("own1"),
+      own2: { id: "own2", reviewDecision: null },
+      req1: { id: "req1" },
+      done1: { id: "done1" },
+    };
+    const normal = fakeGithub(searches, prs);
+    const expected = await github(normal.handler).fetchOpenPullRequests("2026-09-01", true, []);
+
+    const staged = fakeGithub(searches, prs);
+    const partials: { own: string[]; review: number; atCall: number }[] = [];
+    const fetched = await github(staged.handler).fetchOpenPullRequests(
+      "2026-09-01",
+      true,
+      [],
+      (partial) =>
+        partials.push({
+          own: partial.pullRequests.map((pr) => pr.id).sort(),
+          review: partial.reviewPullRequests.length,
+          atCall: staged.calls.length,
+        }),
+    );
+
+    // Your own PRs only, handed over once, before any merge state was asked for.
+    assert.deepEqual(partials.map((p) => [p.own, p.review]), [[["own1", "own2"], 0]]);
+    assert.ok(
+      !staged.calls.slice(0, partials[0].atCall).some((c) => c.query === "MERGE"),
+    );
+    assert.deepEqual(fetched, expected);
+  });
+
   it("fetches details in batches of ten", async () => {
     const ids = Array.from({ length: 25 }, (_, i) => `p${i}`);
     const { handler, calls } = fakeGithub({}, Object.fromEntries(ids.map((id) => [id, { id }])));

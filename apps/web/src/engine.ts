@@ -17,6 +17,7 @@ import type {
 } from "@review-pinger/app";
 import {
   FetchError,
+  type Fetched,
   type Found,
   type FoundPullRequest,
   type Github,
@@ -89,6 +90,7 @@ export interface PingerLike {
   removeView(id: string, now: string): void;
   setNotificationsMuted(muted: boolean): void;
   notificationsMuted(): boolean;
+  preview(fetched: string, now: string): string;
   setTheme(theme: string): void;
   theme(): string;
   syncEnabled(): boolean;
@@ -172,6 +174,7 @@ export class Engine {
       authChoice: null,
       hasSavedToken: false,
       notificationsMuted: false,
+      partial: false,
       theme: "system",
       soundOnMerge: false,
       teamLookupDenied: false,
@@ -346,8 +349,18 @@ export class Engine {
         return view ? [[id, viewSearch(view)] as [string, string]] : [];
       });
       // Synced alongside, so the lists are derived with the snoozes of other devices.
+      // With nothing to show yet, My PRs is fetched and shown first.
+      const showPartial =
+        this.snapshot.fetchedAt === null
+          ? (partial: Fetched) => this.showPartial(partial, now)
+          : undefined;
       const [fetched, mergedPage] = await Promise.all([
-        github.fetchOpenPullRequests(this.pinger.reviewedSince(now), needs.open, views),
+        github.fetchOpenPullRequests(
+          this.pinger.reviewedSince(now),
+          needs.open,
+          views,
+          showPartial,
+        ),
         needs.merged ? github.fetchMergedPage(null, MERGED_PAGE_SIZE) : Promise.resolve(null),
         this.sync(),
       ]);
@@ -370,6 +383,7 @@ export class Engine {
       this.persist();
       this.publish({
         refreshing: false,
+        partial: false,
         status: { kind: "ok" },
         viewer: fetched.viewer,
         fetchedAt: now,
@@ -394,6 +408,22 @@ export class Engine {
       this.publish({ refreshing: false, status: { kind: "error", problem } });
     }
     this.schedule(delay);
+  }
+
+  /**
+   * Shows My PRs from a first load that isn't complete yet. Display only:
+   * notifications and what's remembered wait for the complete fetch.
+   */
+  private showPartial(partial: Fetched, now: string) {
+    const update: Update = JSON.parse(this.pinger.preview(JSON.stringify(partial), now));
+    this.publish({
+      partial: true,
+      status: { kind: "ok" },
+      viewer: partial.viewer,
+      fetchedAt: now,
+      ssoPartial: partial.ssoPartial,
+      pullRequests: update.pullRequests,
+    });
   }
 
   /** Looks up the team members the hover cards still need, and redraws if any arrived. */

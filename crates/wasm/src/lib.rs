@@ -51,6 +51,11 @@ impl Pinger {
         js(self.0.poll(fetched, now, tz_offset_minutes))
     }
 
+    /// The lists for a fetch that isn't complete yet, for display only.
+    pub fn preview(&self, fetched: &str, now: &str) -> Result<String, JsError> {
+        js(self.0.preview(fetched, now))
+    }
+
     /// The lists again after a change, or nothing before the first poll.
     pub fn derived(&self, now: &str) -> Result<Option<String>, JsError> {
         js(self.0.derived(now))
