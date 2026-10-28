@@ -7,5 +7,8 @@
     "web": "pnpm --filter @review-pinger/web dev",
     "build": "pnpm --filter @review-pinger/desktop build"
   },
+  "engines": {
+    "node": ">=24"
+  },
   "packageManager": "pnpm@12.6.0"
 }
