@@ -42,6 +42,7 @@ export function createWebPlatform(engine: Engine): Platform {
 
     setMyPrsSections: (sections) => engine.setMyPrsSections(sections),
     loadMoreMerged: () => engine.loadMoreMerged(),
+    searchPullRequests: (text) => engine.searchPullRequests(text),
     addView: (name, query) => engine.addView(name, query),
     updateView: (id, name, query) => engine.updateView(id, name, query),
     removeView: (id) => engine.removeView(id),
@@ -54,6 +55,7 @@ export function createWebPlatform(engine: Engine): Platform {
 
     getAutostart: async () => false,
     setAutostart: async () => {},
+    setTheme: (theme) => engine.setTheme(theme),
     setNotificationsMuted: (muted) => engine.setNotificationsMuted(muted),
     sendTestNotification: () => {},
     setSoundOnMerge: () => {},

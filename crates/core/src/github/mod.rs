@@ -16,6 +16,8 @@ pub const MERGE_STATE_QUERY: &str = include_str!("merge_state.graphql");
 pub const MERGED_QUERY: &str = include_str!("merged.graphql");
 /// One page of your merged PRs, for the "Merged" section.
 pub const MERGED_SEARCH_QUERY: &str = include_str!("merged_search.graphql");
+/// The first page of PRs matching free-form text, for "Search on GitHub".
+pub const PR_SEARCH_QUERY: &str = include_str!("pr_search.graphql");
 /// The query text for the merged PRs search: always this one text, so
 /// "Load more" can keep paging through the same cursor sequence.
 pub const MERGED_SEARCH: &str = "is:pr is:merged author:@me archived:false sort:updated-desc";

@@ -2,8 +2,8 @@
 //! values GitHub adds don't break deserialization.
 
 use chrono::{DateTime, Utc};
-use serde::Deserialize;
 use serde::de::IgnoredAny;
+use serde::{Deserialize, Serialize};
 
 /// A merged PR as the lighter merged-PR search returns it: just enough to
 /// list it, none of the open-PR fields that don't apply once it's merged.
@@ -16,6 +16,57 @@ pub struct MergedPullRequest {
     pub url: String,
     pub repository: Repository,
     pub merged_at: DateTime<Utc>,
+}
+
+/// A PR found by "Search on GitHub", in any state: just enough to list it.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SearchedPullRequest {
+    pub id: String,
+    pub number: u64,
+    pub title: String,
+    pub url: String,
+    pub state: String,
+    pub is_draft: bool,
+    pub updated_at: DateTime<Utc>,
+    pub author: Option<Actor>,
+    pub repository: Repository,
+}
+
+/// What the UI lists for a [`SearchedPullRequest`].
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FoundPullRequest {
+    pub id: String,
+    pub number: u64,
+    pub title: String,
+    pub url: String,
+    pub repo: String,
+    pub author: Option<String>,
+    /// `open`, `draft`, `merged` or `closed`.
+    pub state: &'static str,
+    pub updated_at: DateTime<Utc>,
+}
+
+impl From<SearchedPullRequest> for FoundPullRequest {
+    fn from(pr: SearchedPullRequest) -> Self {
+        let state = match pr.state.as_str() {
+            "MERGED" => "merged",
+            "CLOSED" => "closed",
+            _ if pr.is_draft => "draft",
+            _ => "open",
+        };
+        Self {
+            id: pr.id,
+            number: pr.number,
+            title: pr.title,
+            url: pr.url,
+            repo: pr.repository.name_with_owner,
+            author: pr.author.map(|actor| actor.login),
+            state,
+            updated_at: pr.updated_at,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]

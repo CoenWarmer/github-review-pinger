@@ -82,7 +82,7 @@ export function TokenForm({
 }) {
   const platform = usePlatform();
   const [token, setToken] = useState("");
-  const [sync, setSync] = useState(false);
+  const [sync, setSync] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const canSync = useCanSync(token);
 

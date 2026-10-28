@@ -37,6 +37,10 @@ pub struct Memory {
     /// Notification cards are muted.
     #[serde(default)]
     pub notifications_muted: bool,
+    /// Light or dark appearance, or follow the system. Per device, so never
+    /// synced.
+    #[serde(default)]
+    pub theme: Theme,
     /// Whether and how snoozes and channels are shared with other devices.
     #[serde(default)]
     pub sync: SyncMemory,
@@ -51,6 +55,35 @@ pub struct Memory {
     /// Custom "My PRs" sections backed by your own GitHub search queries.
     #[serde(default)]
     pub views: Vec<View>,
+}
+
+/// How the UI looks: a fixed light or dark appearance, or the system's.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Theme {
+    #[default]
+    System,
+    Light,
+    Dark,
+}
+
+impl Theme {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Theme::System => "system",
+            Theme::Light => "light",
+            Theme::Dark => "dark",
+        }
+    }
+
+    /// Anything unknown means the system's.
+    pub fn parse(text: &str) -> Self {
+        match text {
+            "light" => Theme::Light,
+            "dark" => Theme::Dark,
+            _ => Theme::System,
+        }
+    }
 }
 
 /// Which events play a sound. Opt-in, off by default.

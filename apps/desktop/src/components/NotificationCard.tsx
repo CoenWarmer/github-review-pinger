@@ -5,7 +5,7 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
-import type { CardNotification } from "@review-pinger/app";
+import { useApplyTheme, type CardNotification, type Snapshot } from "@review-pinger/app";
 
 /** How long a card stays, unless the pointer is on it. */
 const DISMISS_MS = 5000;
@@ -20,6 +20,17 @@ const ACCENTS: Record<CardNotification["accent"], { text: string; bg: string }> 
 /** The notification window: shows the card Rust says is current. */
 export function NotificationCard() {
   const [card, setCard] = useState<CardNotification | null>(null);
+  const [theme, setTheme] = useState<Snapshot["theme"]>();
+  useApplyTheme(theme);
+
+  // The card is its own window, so it follows the saved theme through the snapshots too.
+  useEffect(() => {
+    const unlisten = listen<Snapshot>("snapshot", (event) => setTheme(event.payload.theme));
+    invoke<Snapshot>("get_snapshot").then((s) => setTheme((shown) => shown ?? s.theme));
+    return () => {
+      unlisten.then((stop) => stop());
+    };
+  }, []);
 
   useEffect(() => {
     const unlisten = listen<CardNotification>("card", (event) => setCard(event.payload));

@@ -1,7 +1,7 @@
 pub use review_pinger_core::github::types;
 use review_pinger_core::github::{
     DETAILS_QUERY, MERGE_STATE_QUERY, MERGED_QUERY, MERGED_SEARCH, MERGED_SEARCH_QUERY,
-    SEARCH_QUERY,
+    PR_SEARCH_QUERY, SEARCH_QUERY,
 };
 
 use std::collections::{HashMap, HashSet};
@@ -16,8 +16,8 @@ use serde_json::{Value, json};
 
 use crate::directory::{Directory, Found, Needs};
 use types::{
-    CheckState, MergeStateStatus, Mergeable, MergedPullRequest, PullRequest, ReviewDecision,
-    ReviewState,
+    CheckState, FoundPullRequest, MergeStateStatus, Mergeable, MergedPullRequest, PullRequest,
+    ReviewDecision, ReviewState, SearchedPullRequest,
 };
 
 const ENDPOINT: &str = "https://api.github.com/graphql";
@@ -217,6 +217,35 @@ struct MergedSearchData {
 struct MergedSearch {
     page_info: PageInfo,
     nodes: Vec<Option<MergedPullRequest>>,
+}
+
+/// The first page of PRs, in any state, matching what the user typed plus
+/// whatever qualifiers they added. Results are newest-updated first.
+pub async fn search_pull_requests(
+    http: &reqwest::Client,
+    token: &str,
+    text: &str,
+) -> Result<Vec<FoundPullRequest>, FetchError> {
+    let page: Response<PrSearchData> = request(
+        http,
+        token,
+        PR_SEARCH_QUERY,
+        json!({ "q": format!("is:pr {text} sort:updated-desc"), "count": 20 }),
+    )
+    .await?;
+    Ok(page
+        .data
+        .search
+        .nodes
+        .into_iter()
+        .flatten()
+        .map(Into::into)
+        .collect())
+}
+
+#[derive(Deserialize)]
+struct PrSearchData {
+    search: Nodes<SearchedPullRequest>,
 }
 
 /// Fetches the details of specific pull requests, for refreshing a few

@@ -99,6 +99,9 @@ class FakeGithub implements Github {
     this.detailCalls.push(ids);
     return structuredClone(this.details);
   }
+  async searchPullRequests() {
+    return [];
+  }
   async addMergeStates() {}
   async fetchDirectory() {
     this.directoryCalls++;
@@ -177,6 +180,19 @@ describe("the web engine", () => {
     assert.equal(snapshot.pullRequests.length, 1);
     assert.equal(snapshot.hasSavedToken, true);
     assert.ok(JSON.parse(storage.data.get("reviewPinger.state")!).memory.pullRequests.mine);
+  });
+
+  it("follows the system theme until one is chosen, then remembers it", async () => {
+    const { engine, storage } = makeEngine();
+    await engine.start();
+    assert.equal(engine.getSnapshot().theme, "system");
+
+    engine.setTheme("dark");
+    assert.equal(engine.getSnapshot().theme, "dark");
+
+    const { engine: next } = makeEngine({ storage });
+    await next.start();
+    assert.equal(next.getSnapshot().theme, "dark");
   });
 
   it("keeps showing the last data when a refresh fails, and says why", async () => {

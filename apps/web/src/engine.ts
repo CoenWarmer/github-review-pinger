@@ -12,11 +12,13 @@ import type {
   Snapshot,
   SyncStatus,
   TeamChannel,
+  Theme,
   View,
 } from "@review-pinger/app";
 import {
   FetchError,
   type Found,
+  type FoundPullRequest,
   type Github,
   type Needs,
   type RawMergedPullRequest,
@@ -87,6 +89,8 @@ export interface PingerLike {
   removeView(id: string, now: string): void;
   setNotificationsMuted(muted: boolean): void;
   notificationsMuted(): boolean;
+  setTheme(theme: string): void;
+  theme(): string;
   syncEnabled(): boolean;
   setSyncEnabled(enabled: boolean): void;
   syncGist(): string | undefined | null;
@@ -168,6 +172,7 @@ export class Engine {
       authChoice: null,
       hasSavedToken: false,
       notificationsMuted: false,
+      theme: "system",
       soundOnMerge: false,
       teamLookupDenied: false,
       fetchedAt: null,
@@ -245,6 +250,7 @@ export class Engine {
     this.publish({
       hasSavedToken: this.token !== null,
       notificationsMuted: this.pinger.notificationsMuted(),
+      theme: this.pinger.theme() as Theme,
       sync: {
         ...this.snapshot.sync,
         enabled: this.pinger.syncEnabled(),
@@ -499,6 +505,16 @@ export class Engine {
     }
   }
 
+  /** Searches GitHub for the search box. Rejects with a message to show. */
+  async searchPullRequests(text: string): Promise<FoundPullRequest[]> {
+    if (!this.github) throw "There's no token to search with.";
+    try {
+      return await this.github.searchPullRequests(text);
+    } catch (e) {
+      throw e instanceof Error ? e.message : String(e);
+    }
+  }
+
   /** Whether a token that isn't saved yet could sync, for the sign-in form. */
   async canSync(token: string): Promise<boolean> {
     try {
@@ -585,6 +601,12 @@ export class Engine {
       this.persist();
       return false;
     }
+  }
+
+  setTheme(theme: Theme) {
+    this.pinger.setTheme(theme);
+    this.persist();
+    this.publish({ theme });
   }
 
   setNotificationsMuted(muted: boolean) {

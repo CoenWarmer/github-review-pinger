@@ -25,6 +25,21 @@ export interface MergedPr {
   mergedAt: string;
 }
 
+/** A PR found by searching GitHub, in any state. */
+export interface FoundPr {
+  id: string;
+  number: number;
+  title: string;
+  url: string;
+  repo: string;
+  author: string | null;
+  state: "open" | "draft" | "merged" | "closed";
+  updatedAt: string;
+}
+
+/** How the UI looks: a fixed appearance, or whatever the system uses. */
+export type Theme = "system" | "light" | "dark";
+
 /** A custom "My PRs" section backed by your own GitHub search query. */
 export interface View {
   /** Stable regardless of renames, so the section order and sync don't break. */
@@ -168,6 +183,7 @@ export interface Snapshot {
   hasSavedToken: boolean;
   /** Notification cards are muted. */
   notificationsMuted: boolean;
+  theme: Theme;
   /** Plays a sound when one of your own PRs is merged. */
   soundOnMerge: boolean;
   /** The team lookup was refused for lack of the `read:org` scope. */

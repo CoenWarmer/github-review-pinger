@@ -112,6 +112,15 @@ impl Pinger {
         self.0.set_notifications_muted(muted);
     }
 
+    #[wasm_bindgen(js_name = setTheme)]
+    pub fn set_theme(&mut self, theme: &str) {
+        self.0.set_theme(theme);
+    }
+
+    pub fn theme(&self) -> String {
+        self.0.theme().to_string()
+    }
+
     #[wasm_bindgen(js_name = notificationsMuted)]
     pub fn notifications_muted(&self) -> bool {
         self.0.notifications_muted()
