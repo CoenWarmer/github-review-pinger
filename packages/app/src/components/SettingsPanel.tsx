@@ -19,6 +19,7 @@ const AUTH_OPTIONS: { source: TokenSource; label: string }[] = [
 export function SettingsPanel({
   account,
   authSource,
+  hasSavedToken,
   notificationsMuted,
   teamLookupDenied,
   channels,
@@ -45,6 +46,16 @@ export function SettingsPanel({
   } = platform.features;
   const [autostart, setAutostart] = useState<boolean | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [authError, setAuthError] = useState<string | null>(null);
+
+  async function logOut() {
+    try {
+      await platform.clearToken();
+      setAuthError(null);
+    } catch (e) {
+      setAuthError(String(e));
+    }
+  }
 
   useEffect(() => {
     if (!hasAutostart) return;
@@ -110,11 +121,20 @@ export function SettingsPanel({
       <Section>
         <Heading>Authentication</Heading>
         {account && (
-          <p className="flex p-2 mt-0 text-muted-foreground border rounded">
-            Signed in as {account} via{" "}
-            {authSource === "pat" ? "Personal Access Token" : "gh CLI"}
-          </p>
+          <div className="flex items-center justify-between gap-2 rounded border p-2 text-muted-foreground">
+            <p className="m-0">
+              Signed in as {account} via{" "}
+              {authSource === "pat" ? "Personal Access Token" : "gh CLI"}
+            </p>
+            {/* The GitHub CLI's login isn't the app's to end. */}
+            {authSource === "pat" && hasSavedToken && (
+              <Button type="button" variant="outline" size="xs" onClick={logOut}>
+                Log out
+              </Button>
+            )}
+          </div>
         )}
+        {authError && <p className="mt-2 mb-0 text-destructive">{authError}</p>}
         {githubCli && (
           <RadioGroup
             value={authSource}
