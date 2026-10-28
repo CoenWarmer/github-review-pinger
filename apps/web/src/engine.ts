@@ -16,8 +16,6 @@ const TOKEN_KEY = "reviewPinger.token";
 const STATE_KEY = "reviewPinger.state";
 
 const POLL_INTERVAL_MS = 120_000;
-/// The list is refreshed when it's shown, if older than this.
-const STALE_AFTER_MS = 30_000;
 const MAX_BACKOFF_MS = 600_000;
 
 /** What the engine needs to keep, like `localStorage`. */
@@ -181,16 +179,13 @@ export class Engine {
     }, delayMs);
   }
 
-  /** Refreshes the PRs you opened first, then the whole list if it's stale. */
+  /** Refreshes the PRs you opened first, then the whole list. */
   private async shown() {
     if (!this.github || !this.pinger) return;
     const ids = [...this.visited];
     this.visited.clear();
     if (ids.length > 0) await this.refreshVisited(ids);
-    const fetchedAt = this.snapshot.fetchedAt;
-    if (!fetchedAt || this.now().getTime() - Date.parse(fetchedAt) > STALE_AFTER_MS) {
-      await this.poll();
-    }
+    await this.poll();
   }
 
   private async refreshVisited(ids: string[]) {
