@@ -136,8 +136,10 @@ pub struct Poller {
     latest: Mutex<Option<Fetched>>,
     memory: Mutex<Memory>,
     memory_path: Option<PathBuf>,
-    /// Team members and users' teams, for the reviewer hover cards.
+    /// Team members and users' teams, for the reviewer hover cards. Kept
+    /// between launches, since memberships rarely change.
     directory: Mutex<Directory>,
+    directory_path: Option<PathBuf>,
     /// Pull requests the user opened on GitHub since the popover last
     /// showed; refreshed first when it next opens. Not persisted.
     visited: Mutex<HashSet<String>>,
@@ -579,6 +581,13 @@ pub fn start(app: &AppHandle) -> Arc<Poller> {
         .ok()
         .map(|dir| dir.join("state.json"));
     let memory = memory_path.as_deref().map(Memory::load).unwrap_or_default();
+    let directory_path = memory_path
+        .as_deref()
+        .map(|path| path.with_file_name("directory.json"));
+    let directory = directory_path
+        .as_deref()
+        .map(Directory::load)
+        .unwrap_or_default();
 
     let poller = Arc::new(Poller {
         snapshot: Mutex::new(Snapshot {
@@ -590,7 +599,7 @@ pub fn start(app: &AppHandle) -> Arc<Poller> {
             has_saved_token: false,
             notifications_muted: memory.notifications_muted,
             theme: memory.theme,
-            team_lookup_denied: false,
+            team_lookup_denied: directory.is_denied(),
             fetched_at: None,
             sso_partial: false,
             pull_requests: Vec::new(),
@@ -614,7 +623,8 @@ pub fn start(app: &AppHandle) -> Arc<Poller> {
         latest: Mutex::new(None),
         memory: Mutex::new(memory),
         memory_path,
-        directory: Mutex::new(Directory::default()),
+        directory: Mutex::new(directory),
+        directory_path,
         visited: Mutex::new(HashSet::new()),
         first_poll: AtomicBool::new(true),
         wake: Notify::new(),
@@ -885,11 +895,16 @@ async fn refresh_directory(app: &AppHandle, poller: &Poller) {
     };
     match github::fetch_directory(&poller.http, &token.value, &missing).await {
         Ok(found) => {
-            let changed = poller
-                .directory
-                .lock()
-                .unwrap()
-                .merge(&missing, found, Utc::now());
+            let changed = {
+                let mut directory = poller.directory.lock().unwrap();
+                let changed = directory.merge(&missing, found, Utc::now());
+                if let Some(path) = &poller.directory_path
+                    && let Err(e) = directory.save(path)
+                {
+                    log::warn!("Could not save {}: {e}", path.display());
+                }
+                changed
+            };
             if changed {
                 poller.rederive(app);
             }

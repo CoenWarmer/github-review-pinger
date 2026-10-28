@@ -313,8 +313,11 @@ pub async fn fetch_merged(
 }
 
 /// Aliases per directory query, which keeps each query light.
-const DIRECTORY_BATCH: usize = 15;
-const DIRECTORY_CONCURRENT: usize = 2;
+/// Measured against a real account: 8 teams per query and 10 queries at once
+/// looked up 75 teams in about 3.5 s, where 15 per query and 2 at once took
+/// about 10 s.
+const DIRECTORY_BATCH: usize = 8;
+const DIRECTORY_CONCURRENT: usize = 10;
 /// Members are read 100 at a time, so this reads teams of up to 500.
 const MAX_MEMBER_PAGES: usize = 5;
 
