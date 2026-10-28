@@ -9,7 +9,7 @@ import { TeamChannelForm } from "../slack";
 import { ago } from "../format";
 import { useNow } from "../hooks";
 import type { SyncStatus, TeamChannel, TokenSource } from "../types";
-import { SYNC_ABOUT, SYNC_LABEL, TokenForm } from "./Setup";
+import { SYNC_ABOUT, SYNC_LABEL } from "./Setup";
 
 const AUTH_OPTIONS: { source: TokenSource; label: string }[] = [
   { source: "gh", label: "GitHub CLI" },
@@ -19,7 +19,6 @@ const AUTH_OPTIONS: { source: TokenSource; label: string }[] = [
 export function SettingsPanel({
   account,
   authSource,
-  hasSavedToken,
   notificationsMuted,
   teamLookupDenied,
   channels,
@@ -39,7 +38,11 @@ export function SettingsPanel({
   sync: SyncStatus;
 }) {
   const platform = usePlatform();
-  const { githubCli, autostart: hasAutostart, notifications } = platform.features;
+  const {
+    githubCli,
+    autostart: hasAutostart,
+    notifications,
+  } = platform.features;
   const [autostart, setAutostart] = useState<boolean | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -106,11 +109,19 @@ export function SettingsPanel({
       )}
       <Section>
         <Heading>Authentication</Heading>
+        {account && (
+          <p className="flex p-2 mt-0 text-muted-foreground border rounded">
+            Signed in as {account} via{" "}
+            {authSource === "pat" ? "Personal Access Token" : "gh CLI"}
+          </p>
+        )}
         {githubCli && (
           <RadioGroup
             value={authSource}
-            onValueChange={(source) => platform.setAuthSource(source as TokenSource)}
-            className="mb-2 gap-1.5"
+            onValueChange={(source) =>
+              platform.setAuthSource(source as TokenSource)
+            }
+            className="mt-4 gap-1.5"
           >
             {AUTH_OPTIONS.map(({ source, label }) => (
               <div key={source} className="flex items-center gap-2">
@@ -122,8 +133,7 @@ export function SettingsPanel({
             ))}
           </RadioGroup>
         )}
-        {account && <p className="mt-0 mb-2 text-muted-foreground">Signed in as {account}</p>}
-        {!githubCli || authSource === "pat" ? (
+        {/* {!githubCli || authSource === "pat" ? (
           <TokenForm hasSavedToken={hasSavedToken} />
         ) : (
           hasSavedToken && (
@@ -131,13 +141,14 @@ export function SettingsPanel({
               A saved token is kept, but not used.
             </p>
           )
-        )}
+        )} */}
         {teamLookupDenied && (
           <p className="mt-3 mb-0 text-xs text-muted-foreground">
             Add the read:org scope to see team details on reviewer hover cards:
             {githubCli ? (
               <>
-                run <code>gh auth refresh -s read:org</code>, or add the scope to your token.
+                run <code>gh auth refresh -s read:org</code>, or add the scope
+                to your token.
               </>
             ) : (
               "add the scope to your token."
@@ -185,20 +196,23 @@ function SyncSetting({ sync }: { sync: SyncStatus }) {
       ) : (
         <p className="m-0 text-xs text-muted-foreground">
           {SYNC_ABOUT}
-          {sync.enabled && sync.lastSyncedAt && ` Last synced ${ago(sync.lastSyncedAt, now)}.`}
+          {sync.enabled &&
+            sync.lastSyncedAt &&
+            ` Last synced ${ago(sync.lastSyncedAt, now)}.`}{" "}
+          {sync.enabled && !unavailable && sync.gistUrl && (
+            <Button
+              type="button"
+              variant="link"
+              size="xs"
+              className="h-auto p-0"
+              onClick={() => platform.openUrl(sync.gistUrl!)}
+            >
+              Open gist
+            </Button>
+          )}
         </p>
       )}
-      {sync.enabled && !unavailable && sync.gistUrl && (
-        <Button
-          type="button"
-          variant="link"
-          size="xs"
-          className="h-auto self-start p-0"
-          onClick={() => platform.openUrl(sync.gistUrl!)}
-        >
-          Open the gist on GitHub
-        </Button>
-      )}
+
       {sync.enabled && !unavailable && sync.error && (
         <p className="m-0 text-xs text-destructive">{sync.error}</p>
       )}
@@ -218,17 +232,22 @@ function Section({ children }: { children: React.ReactNode }) {
   return <section className="py-3">{children}</section>;
 }
 
-function SlackChannels({ channels }: { channels: Record<string, TeamChannel> }) {
+function SlackChannels({
+  channels,
+}: {
+  channels: Record<string, TeamChannel>;
+}) {
   const teams = Object.keys(channels).sort();
   const platform = usePlatform();
   const [editing, setEditing] = useState<string | null>(null);
 
   return (
-    <section>
+    <Section>
       <Heading>Slack channels</Heading>
       {teams.length === 0 ? (
         <p className="m-0 text-xs text-muted-foreground">
-          No team has a Slack channel yet. Click a team chip on a pull request to add one.
+          No team has a Slack channel yet. Click a team chip on a pull request
+          to add one.
         </p>
       ) : (
         <ul className="m-0 list-none p-0 pb-6">
@@ -238,7 +257,10 @@ function SlackChannels({ channels }: { channels: Record<string, TeamChannel> }) 
             const entry = (
               <>
                 <span className="truncate font-medium">{team}</span>
-                <span className="truncate text-xs text-muted-foreground" title={link}>
+                <span
+                  className="truncate text-xs text-muted-foreground"
+                  title={link}
+                >
                   {link}
                 </span>
               </>
@@ -250,7 +272,11 @@ function SlackChannels({ channels }: { channels: Record<string, TeamChannel> }) 
               >
                 {saved && editing === team ? (
                   <div className="col-span-2 -mx-3">
-                    <TeamChannelForm team={team} initial={link} onDone={() => setEditing(null)} />
+                    <TeamChannelForm
+                      team={team}
+                      initial={link}
+                      onDone={() => setEditing(null)}
+                    />
                   </div>
                 ) : (
                   <>
@@ -291,6 +317,6 @@ function SlackChannels({ channels }: { channels: Record<string, TeamChannel> }) 
           })}
         </ul>
       )}
-    </section>
+    </Section>
   );
 }
