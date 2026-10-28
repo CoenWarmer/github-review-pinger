@@ -48,7 +48,15 @@ function memory(initial: Record<string, string> = {}): KeyValue & { data: Map<st
   };
 }
 
+/** A GitHub account's gists, which every device signed in to it shares. */
+class FakeGists {
+  gist: { id: string; files: Record<string, { content: string }> } | null = null;
+  calls: string[] = [];
+}
+
 class FakeGithub implements Github {
+  scopeHeader: string | null = "repo, read:org, gist";
+  gists_ = new FakeGists();
   fetched: Fetched = {
     viewer: "me",
     pullRequests: [pr("mine")],
@@ -76,6 +84,31 @@ class FakeGithub implements Github {
     this.directoryCalls++;
     return this.found;
   }
+
+  async scopes() {
+    return this.scopeHeader;
+  }
+  async gists() {
+    this.gists_.calls.push("list");
+    const gist = this.gists_.gist;
+    return JSON.stringify(gist ? [{ id: gist.id, files: { [Object.keys(gist.files)[0]]: {} } }] : []);
+  }
+  async gist(id: string) {
+    this.gists_.calls.push("read");
+    const gist = this.gists_.gist;
+    return gist && gist.id === id ? JSON.stringify(gist) : null;
+  }
+  async createGist(body: string) {
+    this.gists_.calls.push("create");
+    const created = JSON.parse(body);
+    assert.equal(created.public, false, "the gist must be secret");
+    this.gists_.gist = { id: "g1", files: created.files };
+    return "g1";
+  }
+  async updateGist(_id: string, body: string) {
+    this.gists_.calls.push("update");
+    this.gists_.gist = { ...this.gists_.gist!, files: JSON.parse(body).files };
+  }
 }
 
 const engines: Engine[] = [];
@@ -84,7 +117,11 @@ afterEach(() => {
 });
 
 function makeEngine(
-  options: { storage?: KeyValue & { data: Map<string, string> }; github?: FakeGithub } = {},
+  options: {
+    storage?: KeyValue & { data: Map<string, string> };
+    github?: FakeGithub;
+    now?: () => Date;
+  } = {},
 ) {
   const storage = options.storage ?? memory({ "reviewPinger.token": "ghp_x" });
   const github = options.github ?? new FakeGithub();
@@ -92,8 +129,9 @@ function makeEngine(
     storage,
     loadPinger: async (saved) => new Pinger(saved ?? undefined),
     createGithub: () => github,
-    now: () => new Date(NOW),
+    now: options.now ?? (() => new Date(NOW)),
     tzOffsetMinutes: () => 0,
+    syncDelayMs: 0,
   });
   engines.push(engine);
   return { engine, github, storage };
@@ -230,5 +268,178 @@ describe("the web engine", () => {
     await engine.start();
     assert.deepEqual(seen.slice(0, 2), ["loading", "loading+refreshing"]);
     assert.equal(seen.at(-1), "ok");
+  });
+});
+
+/** Lets the timers and promises of a sync finish. */
+const settle = () => new Promise((resolve) => setTimeout(resolve, 20));
+
+describe("syncing snoozes and channels", () => {
+  /** Two devices of one account, which share the gists. */
+  function twoDevices() {
+    // Later changes win, so time has to pass between them.
+    const clock = { ms: Date.parse(NOW) };
+    const now = () => new Date(clock.ms);
+    const later = () => void (clock.ms += 60_000);
+    const phone = makeEngine({ storage: memory({ "reviewPinger.token": "ghp_x" }), now });
+    const laptop = makeEngine({ storage: memory({ "reviewPinger.token": "ghp_y" }), now });
+    laptop.github.gists_ = phone.github.gists_;
+    return { phone, laptop, later };
+  }
+
+  it("stays off, and away from gists, until it's turned on", async () => {
+    const { engine, github } = makeEngine();
+    await engine.start();
+    engine.snooze("mine", 3);
+    await settle();
+
+    assert.equal(engine.getSnapshot().sync.enabled, false);
+    assert.deepEqual(github.gists_.calls, []);
+  });
+
+  it("can be turned on once the token is known to have the gist scope", async () => {
+    const { engine } = makeEngine();
+    await engine.start();
+    assert.equal(engine.getSnapshot().sync.available, true);
+
+    engine.setSync(true);
+    await settle();
+
+    const { sync } = engine.getSnapshot();
+    assert.equal(sync.enabled, true);
+    assert.equal(sync.error, null);
+    assert.equal(Date.parse(sync.lastSyncedAt!), Date.parse(NOW));
+  });
+
+  it("can't be turned on with a token that lacks the scope", async () => {
+    const github = new FakeGithub();
+    github.scopeHeader = "repo, read:org";
+    const { engine } = makeEngine({ github });
+    await engine.start();
+    assert.equal(engine.getSnapshot().sync.available, false);
+
+    engine.setSync(true);
+    await settle();
+
+    assert.equal(engine.getSnapshot().sync.enabled, false);
+    assert.deepEqual(github.gists_.calls, []);
+  });
+
+  it("treats tokens without scopes, like fine-grained ones, as unable to sync", async () => {
+    const github = new FakeGithub();
+    github.scopeHeader = null;
+    const { engine } = makeEngine({ github });
+    await engine.start();
+    assert.equal(engine.getSnapshot().sync.available, false);
+    assert.equal(await engine.canSync("github_pat_x"), false);
+  });
+
+  it("tells the sign-in form whether a typed token could sync", async () => {
+    const { engine, github } = makeEngine({ storage: memory() });
+    await engine.start();
+    assert.equal(await engine.canSync(" ghp_x "), true);
+    github.scopeHeader = "repo";
+    assert.equal(await engine.canSync("ghp_x"), false);
+  });
+
+  it("turns on with the token when the sign-in form asked for it", async () => {
+    const { engine } = makeEngine({ storage: memory() });
+    await engine.start();
+
+    await engine.saveToken("ghp_x", true);
+    await settle();
+
+    assert.equal(engine.getSnapshot().sync.enabled, true);
+    assert.ok(engine.getSnapshot().sync.lastSyncedAt);
+  });
+
+  it("brings a snooze from one device to another", async () => {
+    const { phone, laptop } = twoDevices();
+    await laptop.engine.start();
+    laptop.engine.setSync(true);
+    laptop.engine.snooze("mine", 3);
+    await settle();
+    assert.equal(laptop.github.gists_.gist?.id, "g1");
+
+    // The phone starts later, with sync on, and has never seen the snooze.
+    phone.storage.data.set(
+      "reviewPinger.state",
+      JSON.stringify({ memory: { sync: { enabled: true } }, directory: {} }),
+    );
+    await phone.engine.start();
+
+    assert.equal(phone.engine.getSnapshot().pullRequests[0].group, "snoozed");
+  });
+
+  it("brings the end of a snooze to the other device on its next refresh", async () => {
+    const { phone, laptop, later } = twoDevices();
+    await laptop.engine.start();
+    laptop.engine.setSync(true);
+    laptop.engine.snooze("mine", 3);
+    await settle();
+    await phone.engine.start();
+    phone.engine.setSync(true);
+    await settle();
+    await phone.engine.refresh();
+    assert.equal(phone.engine.getSnapshot().pullRequests[0].group, "snoozed");
+
+    later();
+    laptop.engine.snooze("mine", undefined);
+    await settle();
+    await phone.engine.refresh();
+
+    assert.notEqual(phone.engine.getSnapshot().pullRequests[0].group, "snoozed");
+  });
+
+  it("shares Slack channels, and their removal", async () => {
+    const { phone, laptop, later } = twoDevices();
+    await laptop.engine.start();
+    laptop.engine.setSync(true);
+    laptop.engine.setTeamChannel("o/core", "https://app.slack.com/client/T1/C1");
+    await settle();
+    await phone.engine.start();
+    phone.engine.setSync(true);
+    await settle();
+    assert.equal(phone.engine.getSnapshot().teamChannels["o/core"].source, "saved");
+
+    // Removed later, which has to win over the copy the phone still has.
+    later();
+    laptop.engine.removeTeamChannel("o/core");
+    await settle();
+    await phone.engine.refresh();
+
+    assert.deepEqual(phone.engine.getSnapshot().teamChannels, {});
+  });
+
+  it("reports a failed sync without breaking the refresh", async () => {
+    const github = new FakeGithub();
+    github.createGist = async () => {
+      throw new FetchError("api", "GitHub wouldn't let this token use gists.");
+    };
+    const { engine } = makeEngine({ github });
+    await engine.start();
+    engine.setSync(true);
+    await settle();
+
+    const snapshot = engine.getSnapshot();
+    assert.match(snapshot.sync.error!, /gists/);
+    assert.deepEqual(snapshot.status, { kind: "ok" });
+  });
+
+  it("makes a new gist when the old one was deleted", async () => {
+    const { engine, github } = makeEngine({
+      storage: memory({
+        "reviewPinger.token": "ghp_x",
+        "reviewPinger.state": JSON.stringify({
+          memory: { sync: { enabled: true, gistId: "gone" } },
+          directory: {},
+        }),
+      }),
+    });
+    await engine.start();
+    engine.snooze("mine", 3);
+    await settle();
+
+    assert.equal(github.gists_.gist?.id, "g1");
   });
 });

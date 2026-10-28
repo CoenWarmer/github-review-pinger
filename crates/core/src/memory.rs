@@ -10,6 +10,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use crate::auth::TokenSource;
+use crate::sync::SyncMemory;
 
 #[derive(Debug, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -34,6 +35,9 @@ pub struct Memory {
     /// Notification cards are muted.
     #[serde(default)]
     pub notifications_muted: bool,
+    /// Whether and how snoozes and channels are shared with other devices.
+    #[serde(default)]
+    pub sync: SyncMemory,
 }
 
 /// How many durations are kept per repo.
@@ -122,5 +126,16 @@ impl Memory {
             .entry(id.to_string())
             .or_insert_with(|| PrMemory::new(now))
             .snoozed_until = until;
+        self.sync.snoozes.insert(id.to_string(), now);
+    }
+
+    /// Saves a team's Slack channel link, or forgets it with `None`.
+    pub fn set_team_channel(&mut self, team: &str, link: Option<String>, now: DateTime<Utc>) {
+        let team = team.to_lowercase();
+        match link {
+            Some(link) => self.team_channels.insert(team.clone(), link),
+            None => self.team_channels.remove(&team),
+        };
+        self.sync.team_channels.insert(team, now);
     }
 }

@@ -1,5 +1,6 @@
 mod auth;
 mod card;
+mod gist;
 mod github;
 mod poller;
 mod settings;
@@ -20,7 +21,7 @@ use poller::{Poller, Snapshot};
 
 // The pure logic lives in its own crate; these keep the old `crate::` paths working.
 pub use review_pinger_core::{
-    calendar, checks, directory, engine, memory, notify, prs, reviews, slack,
+    calendar, checks, directory, engine, memory, notify, prs, reviews, slack, sync,
 };
 
 const POPOVER: &str = "main";
@@ -138,6 +139,7 @@ fn refresh(poller: State<Arc<Poller>>) {
 async fn save_token(
     app: AppHandle,
     token: String,
+    sync: bool,
     poller: State<'_, Arc<Poller>>,
 ) -> Result<(), String> {
     let token = token.trim().to_string();
@@ -148,9 +150,23 @@ async fn save_token(
         .await
         .map_err(|e| e.to_string())?
         .map_err(|e| format!("Could not store token in the keychain: {e}"))?;
+    if sync {
+        poller.set_sync_enabled(&app, true);
+    }
     // Pasting a token is a choice to use it.
     poller.set_auth_source(&app, auth::TokenSource::Pat);
     Ok(())
+}
+
+/// Whether a token could sync, so the sign-in form can offer it.
+#[tauri::command]
+async fn token_can_sync(token: String, poller: State<'_, Arc<Poller>>) -> Result<bool, ()> {
+    Ok(poller.token_can_sync(token.trim()).await)
+}
+
+#[tauri::command]
+fn set_sync_enabled(app: AppHandle, poller: State<Arc<Poller>>, enabled: bool) {
+    poller.set_sync_enabled(&app, enabled);
 }
 
 #[tauri::command]
@@ -223,6 +239,8 @@ pub fn run() {
             set_team_channel,
             remove_team_channel,
             save_token,
+            token_can_sync,
+            set_sync_enabled,
             clear_token,
             set_auth_source,
             snooze,

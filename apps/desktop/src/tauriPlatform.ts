@@ -37,7 +37,11 @@ export const tauriPlatform: Platform = {
     invoke("remove_team_channel", { team });
   },
 
-  saveToken: (token) => invoke("save_token", { token }),
+  saveToken: (token, sync) => invoke("save_token", { token, sync }),
+  canSync: (token) => invoke<boolean>("token_can_sync", { token }),
+  setSync: (enabled) => {
+    invoke("set_sync_enabled", { enabled });
+  },
   clearToken: () => invoke("clear_token"),
   setAuthSource: (source) => {
     invoke("set_auth_source", { source });

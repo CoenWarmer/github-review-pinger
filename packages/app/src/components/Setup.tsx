@@ -1,8 +1,9 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { usePlatform } from "../platform";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Switch } from "@/components/ui/switch";
 import { clockTime } from "../format";
 import type { Problem } from "../types";
 
@@ -31,14 +32,56 @@ export function problemMessage(problem: Problem, githubCli = true): string {
   }
 }
 
-export function TokenForm({ hasSavedToken }: { hasSavedToken: boolean }) {
+/** How long to wait after typing before asking GitHub what a token can do. */
+const CHECK_DELAY_MS = 500;
+
+export const SYNC_LABEL = "Sync snoozes and Slack channels";
+export const SYNC_ABOUT =
+  "Keeps them the same on your other devices, through a secret gist in your GitHub account.";
+
+/** Whether the token being typed could sync: null while unknown. */
+function useCanSync(token: string): boolean | null {
+  const platform = usePlatform();
+  const [result, setResult] = useState<{ token: string; can: boolean } | null>(null);
+  const trimmed = token.trim();
+
+  useEffect(() => {
+    if (!trimmed) return;
+    let stale = false;
+    const timer = setTimeout(() => {
+      platform
+        .canSync(trimmed)
+        .catch(() => false)
+        .then((can) => {
+          if (!stale) setResult({ token: trimmed, can });
+        });
+    }, CHECK_DELAY_MS);
+    return () => {
+      stale = true;
+      clearTimeout(timer);
+    };
+  }, [platform, trimmed]);
+
+  return result?.token === trimmed ? result.can : null;
+}
+
+export function TokenForm({
+  hasSavedToken,
+  offerSync = false,
+}: {
+  hasSavedToken: boolean;
+  /** Also asks whether to sync, which depends on what the token can do. */
+  offerSync?: boolean;
+}) {
   const platform = usePlatform();
   const [token, setToken] = useState("");
+  const [sync, setSync] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const canSync = useCanSync(token);
 
   async function save() {
     try {
-      await platform.saveToken(token);
+      await platform.saveToken(token, offerSync && sync && canSync === true);
       setToken("");
       setError(null);
     } catch (e) {
@@ -65,7 +108,8 @@ export function TokenForm({ hasSavedToken }: { hasSavedToken: boolean }) {
     >
       <Label htmlFor="token" className="text-xs font-normal text-muted-foreground">
         Personal access token (classic, with the repo scope
-        {platform.features.githubCli ? "" : "; add read:org for team details"})
+        {platform.features.githubCli ? "" : "; add read:org for team details"}
+        {offerSync ? ", and gist to sync" : ""})
       </Label>
       <div className="flex gap-1.5">
         <Input
@@ -82,6 +126,28 @@ export function TokenForm({ hasSavedToken }: { hasSavedToken: boolean }) {
           Save
         </Button>
       </div>
+      {offerSync && (
+        <div className="mt-1 flex flex-col gap-1">
+          <div className="flex items-center gap-2">
+            <Switch
+              id="sync-on-sign-in"
+              checked={sync && canSync === true}
+              disabled={canSync !== true}
+              onCheckedChange={setSync}
+            />
+            <Label htmlFor="sync-on-sign-in" className="font-normal">
+              {SYNC_LABEL}
+            </Label>
+          </div>
+          <p className="m-0 text-xs text-muted-foreground">
+            {canSync === false
+              ? "This token can't use gists. Give a classic token the gist scope to sync."
+              : token.trim() && canSync === null
+                ? "Checking what the token can do…"
+                : SYNC_ABOUT}
+          </p>
+        </div>
+      )}
       {hasSavedToken && (
         <Button
           type="button"
@@ -118,7 +184,10 @@ export function Setup({ problem }: { problem: Problem }) {
       </h2>
       <p className="m-0">{problemMessage(problem, platform.features.githubCli)}</p>
       {isAuthProblem && (
-        <TokenForm hasSavedToken={problem.code === "tokenRejected" && problem.source === "pat"} />
+        <TokenForm
+          hasSavedToken={problem.code === "tokenRejected" && problem.source === "pat"}
+          offerSync
+        />
       )}
       {problem.code === "noSavedToken" && platform.features.githubCli && (
         <Button

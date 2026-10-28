@@ -235,6 +235,7 @@ function AppContent() {
               notificationsMuted={snapshot.notificationsMuted}
               teamLookupDenied={snapshot.teamLookupDenied}
               channels={snapshot.teamChannels}
+              sync={snapshot.sync}
             />
           ) : tab === "mine" ? (
             prs.length === 0 ? (

@@ -6,8 +6,10 @@ import { Label } from "@/components/ui/label";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Switch } from "@/components/ui/switch";
 import { TeamChannelForm } from "../slack";
-import type { TeamChannel, TokenSource } from "../types";
-import { TokenForm } from "./Setup";
+import { ago } from "../format";
+import { useNow } from "../hooks";
+import type { SyncStatus, TeamChannel, TokenSource } from "../types";
+import { SYNC_ABOUT, SYNC_LABEL, TokenForm } from "./Setup";
 
 const AUTH_OPTIONS: { source: TokenSource; label: string }[] = [
   { source: "gh", label: "GitHub CLI" },
@@ -21,6 +23,7 @@ export function SettingsPanel({
   notificationsMuted,
   teamLookupDenied,
   channels,
+  sync,
 }: {
   /** Who is signed in. */
   account: string | null;
@@ -33,6 +36,7 @@ export function SettingsPanel({
   teamLookupDenied: boolean;
   /** Slack channels by team. */
   channels: Record<string, TeamChannel>;
+  sync: SyncStatus;
 }) {
   const platform = usePlatform();
   const { githubCli, autostart: hasAutostart, notifications } = platform.features;
@@ -141,7 +145,52 @@ export function SettingsPanel({
           </p>
         )}
       </Section>
+      <Section>
+        <Heading>Sync</Heading>
+        <SyncSetting sync={sync} />
+      </Section>
       <SlackChannels channels={channels} />
+    </div>
+  );
+}
+
+function SyncSetting({ sync }: { sync: SyncStatus }) {
+  const platform = usePlatform();
+  const now = useNow();
+  // A token without the scope can't sync, whatever was chosen before.
+  const unavailable = sync.available === false;
+  return (
+    <div className="flex flex-col gap-1">
+      <div className="flex items-center gap-2">
+        <Switch
+          id="sync"
+          checked={sync.enabled && !unavailable}
+          disabled={sync.available !== true}
+          onCheckedChange={(enabled) => platform.setSync(enabled)}
+        />
+        <Label htmlFor="sync" className="font-normal">
+          {SYNC_LABEL}
+        </Label>
+      </div>
+      {unavailable ? (
+        <p className="m-0 text-xs text-muted-foreground">
+          The token needs the gist scope, which fine-grained tokens can't have.
+          {platform.features.githubCli && (
+            <>
+              {" "}
+              For the GitHub CLI, run <code>gh auth refresh -s gist</code>.
+            </>
+          )}
+        </p>
+      ) : (
+        <p className="m-0 text-xs text-muted-foreground">
+          {SYNC_ABOUT}
+          {sync.enabled && sync.lastSyncedAt && ` Last synced ${ago(sync.lastSyncedAt, now)}.`}
+        </p>
+      )}
+      {sync.enabled && !unavailable && sync.error && (
+        <p className="m-0 text-xs text-destructive">{sync.error}</p>
+      )}
     </div>
   );
 }
