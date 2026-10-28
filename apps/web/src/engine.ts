@@ -8,6 +8,7 @@ import type {
   PullRequest,
   ReviewRequest,
   Snapshot,
+  SyncStatus,
   TeamChannel,
 } from "@review-pinger/app";
 import { FetchError, type Found, type Github, type Needs, type RawPullRequest } from "./github.ts";
@@ -17,6 +18,9 @@ const STATE_KEY = "reviewPinger.state";
 
 const POLL_INTERVAL_MS = 120_000;
 const MAX_BACKOFF_MS = 600_000;
+const SYNC_DELAY_MS = 1_000;
+/// Gists are listed 100 at a time.
+const MAX_GIST_PAGES = 5;
 
 /** What the engine needs to keep, like `localStorage`. */
 export interface KeyValue {
@@ -36,10 +40,18 @@ export interface PingerLike {
   directoryNeeds(now: string): string;
   mergeDirectory(asked: string, found: string, now: string): boolean;
   directoryDenied(): boolean;
-  setTeamChannel(team: string, link: string): void;
-  removeTeamChannel(team: string): void;
+  setTeamChannel(team: string, link: string, now: string): void;
+  removeTeamChannel(team: string, now: string): void;
   setNotificationsMuted(muted: boolean): void;
   notificationsMuted(): boolean;
+  syncEnabled(): boolean;
+  setSyncEnabled(enabled: boolean): void;
+  syncGist(): string | undefined | null;
+  setSyncGist(id: string | undefined | null): void;
+  syncGistUrl(): string | undefined | null;
+  canSync(scopes: string | undefined | null): boolean;
+  findSyncGist(list: string): string | undefined | null;
+  syncReconcile(gist: string | undefined | null, now: string): string;
 }
 
 export interface EngineDeps {
@@ -50,6 +62,8 @@ export interface EngineDeps {
   now?: () => Date;
   /** Local time east of UTC, in minutes. */
   tzOffsetMinutes?: () => number;
+  /** How long a change waits to be shared with other devices, so several go out together. */
+  syncDelayMs?: number;
 }
 
 interface Update {
@@ -84,6 +98,9 @@ export class Engine {
   /** Ids of the viewer's own PRs, which are the only ones that need a merge state. */
   private ownIds = new Set<string>();
   private polling: Promise<void> | null = null;
+  /** Syncs run one after another. */
+  private syncQueue: Promise<unknown> = Promise.resolve();
+  private syncTimer: ReturnType<typeof setTimeout> | null = null;
   private timer: ReturnType<typeof setTimeout> | null = null;
   private failures = 0;
   private visible = true;
@@ -107,6 +124,7 @@ export class Engine {
       reviewRequests: [],
       teamChannels: {},
       slackOpensIn: "app",
+      sync: { enabled: false, available: null, lastSyncedAt: null, gistUrl: null, error: null },
     };
   }
 
@@ -128,6 +146,10 @@ export class Engine {
   private publish(change: Partial<Snapshot>) {
     this.snapshot = { ...this.snapshot, ...change };
     for (const listener of this.listeners) listener(this.snapshot);
+  }
+
+  private publishSync(change: Partial<SyncStatus>) {
+    this.publish({ sync: { ...this.snapshot.sync, ...change } });
   }
 
   private persist() {
@@ -159,6 +181,11 @@ export class Engine {
     this.publish({
       hasSavedToken: this.token !== null,
       notificationsMuted: this.pinger.notificationsMuted(),
+      sync: {
+        ...this.snapshot.sync,
+        enabled: this.pinger.syncEnabled(),
+        gistUrl: this.pinger.syncGistUrl() ?? null,
+      },
     });
     if (this.token) await this.poll();
     else this.publish({ status: { kind: "error", problem: { code: "noToken" } } });
@@ -207,6 +234,8 @@ export class Engine {
   stop() {
     if (this.timer) clearTimeout(this.timer);
     this.timer = null;
+    if (this.syncTimer) clearTimeout(this.syncTimer);
+    this.syncTimer = null;
   }
 
   /** Asks the next poll to refresh a PR first, and remembers it for the next visit. */
@@ -236,7 +265,11 @@ export class Engine {
     let delay = POLL_INTERVAL_MS;
     try {
       const now = this.nowIso();
-      const fetched = await github.fetchOpenPullRequests(this.pinger.reviewedSince(now));
+      // Synced alongside, so the lists are derived with the snoozes of other devices.
+      const [fetched] = await Promise.all([
+        github.fetchOpenPullRequests(this.pinger.reviewedSince(now)),
+        this.sync(),
+      ]);
       this.ownIds = new Set(fetched.pullRequests.map((pr) => pr.id));
       const tz = this.deps.tzOffsetMinutes?.() ?? -new Date().getTimezoneOffset();
       const update: Update = JSON.parse(this.pinger.poll(JSON.stringify(fetched), now, tz));
@@ -290,18 +323,109 @@ export class Engine {
     this.pinger.setSnooze(id, days, this.nowIso());
     this.persist();
     this.rederive();
+    this.syncSoon();
   }
 
   setTeamChannel(team: string, link: string) {
-    this.pinger.setTeamChannel(team, link);
+    this.pinger.setTeamChannel(team, link, this.nowIso());
     this.persist();
     this.rederive();
+    this.syncSoon();
   }
 
   removeTeamChannel(team: string) {
-    this.pinger.removeTeamChannel(team);
+    this.pinger.removeTeamChannel(team, this.nowIso());
     this.persist();
     this.rederive();
+    this.syncSoon();
+  }
+
+  /** Whether a token that isn't saved yet could sync, for the sign-in form. */
+  async canSync(token: string): Promise<boolean> {
+    try {
+      const scopes = await this.deps.createGithub(token.trim()).scopes();
+      return this.pinger.canSync(scopes);
+    } catch {
+      return false;
+    }
+  }
+
+  setSync(enabled: boolean) {
+    if (enabled && this.snapshot.sync.available === false) return;
+    this.pinger.setSyncEnabled(enabled);
+    this.persist();
+    this.publishSync({ enabled, error: null });
+    if (enabled) this.syncSoon(0);
+  }
+
+  /** Shares a change, after a moment so several go out together. */
+  private syncSoon(delayMs = this.deps.syncDelayMs ?? SYNC_DELAY_MS) {
+    if (!this.pinger.syncEnabled()) return;
+    if (this.syncTimer) clearTimeout(this.syncTimer);
+    this.syncTimer = setTimeout(() => {
+      this.syncTimer = null;
+      void this.sync().then((changed) => {
+        if (changed) this.rederive();
+      });
+    }, delayMs);
+  }
+
+  /**
+   * Merges the snoozes and channels with the sync gist, if syncing is on and
+   * the token can use gists. Returns whether anything here changed. Problems
+   * are shown in the settings and never thrown.
+   */
+  private sync(): Promise<boolean> {
+    const run = this.syncQueue.then(() => this.syncOnce());
+    this.syncQueue = run;
+    return run;
+  }
+
+  private async syncOnce(): Promise<boolean> {
+    const github = this.github;
+    if (!github) return false;
+    try {
+      if (this.snapshot.sync.available === null) {
+        this.publishSync({ available: this.pinger.canSync(await github.scopes()) });
+      }
+      if (this.snapshot.sync.available !== true || !this.pinger.syncEnabled()) return false;
+
+      let id = this.pinger.syncGist() ?? null;
+      for (let page = 1; !id && page <= MAX_GIST_PAGES; page++) {
+        const list = await github.gists(page);
+        id = this.pinger.findSyncGist(list) ?? null;
+        if ((JSON.parse(list) as unknown[]).length < 100) break;
+      }
+      let remote = id ? await github.gist(id) : null;
+      // Deleted, so a new one is made from what's here.
+      if (id && remote === null) id = null;
+
+      const now = this.nowIso();
+      const result: { changed: boolean; createBody: string | null; updateBody: string | null } =
+        JSON.parse(this.pinger.syncReconcile(remote, now));
+      this.pinger.setSyncGist(id);
+      if (result.updateBody !== null && result.createBody !== null) {
+        if (id) {
+          await github.updateGist(id, result.updateBody);
+        } else {
+          id = await github.createGist(result.createBody);
+          this.pinger.setSyncGist(id);
+        }
+      }
+      this.persist();
+      this.publishSync({
+        lastSyncedAt: now,
+        gistUrl: this.pinger.syncGistUrl() ?? null,
+        error: null,
+      });
+      return result.changed;
+    } catch (e) {
+      console.warn("Could not sync", e);
+      this.publishSync({ error: e instanceof Error ? e.message : String(e) });
+      // Whatever was merged before the failure still needs saving and showing.
+      this.persist();
+      return false;
+    }
   }
 
   setNotificationsMuted(muted: boolean) {
@@ -310,14 +434,20 @@ export class Engine {
     this.publish({ notificationsMuted: muted });
   }
 
-  async saveToken(token: string) {
+  async saveToken(token: string, sync = false) {
     const trimmed = token.trim();
     if (!trimmed) throw new Error("Token is empty");
     this.deps.storage.set(TOKEN_KEY, trimmed);
     this.token = trimmed;
     this.github = this.deps.createGithub(trimmed);
     this.failures = 0;
+    if (sync) {
+      this.pinger.setSyncEnabled(true);
+      this.persist();
+    }
     this.publish({ hasSavedToken: true });
+    // Another token may have other scopes.
+    this.publishSync({ enabled: this.pinger.syncEnabled(), available: null, error: null });
     await this.poll();
   }
 
@@ -328,6 +458,9 @@ export class Engine {
     this.github = null;
     if (this.timer) clearTimeout(this.timer);
     this.timer = null;
+    if (this.syncTimer) clearTimeout(this.syncTimer);
+    this.syncTimer = null;
+    this.publishSync({ available: null, error: null });
     this.publish({
       hasSavedToken: false,
       viewer: null,

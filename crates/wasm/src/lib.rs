@@ -93,13 +93,13 @@ impl Pinger {
     }
 
     #[wasm_bindgen(js_name = setTeamChannel)]
-    pub fn set_team_channel(&mut self, team: &str, link: &str) -> Result<(), JsError> {
-        js(self.0.set_team_channel(team, link))
+    pub fn set_team_channel(&mut self, team: &str, link: &str, now: &str) -> Result<(), JsError> {
+        js(self.0.set_team_channel(team, link, now))
     }
 
     #[wasm_bindgen(js_name = removeTeamChannel)]
-    pub fn remove_team_channel(&mut self, team: &str) {
-        self.0.remove_team_channel(team);
+    pub fn remove_team_channel(&mut self, team: &str, now: &str) -> Result<(), JsError> {
+        js(self.0.remove_team_channel(team, now))
     }
 
     #[wasm_bindgen(js_name = teamChannels)]
@@ -115,5 +115,53 @@ impl Pinger {
     #[wasm_bindgen(js_name = notificationsMuted)]
     pub fn notifications_muted(&self) -> bool {
         self.0.notifications_muted()
+    }
+
+    #[wasm_bindgen(js_name = syncEnabled)]
+    pub fn sync_enabled(&self) -> bool {
+        self.0.sync_enabled()
+    }
+
+    #[wasm_bindgen(js_name = setSyncEnabled)]
+    pub fn set_sync_enabled(&mut self, enabled: bool) {
+        self.0.set_sync_enabled(enabled);
+    }
+
+    /// The gist that holds the synced snoozes and channels, once known.
+    #[wasm_bindgen(js_name = syncGist)]
+    pub fn sync_gist(&self) -> Option<String> {
+        self.0.sync_gist()
+    }
+
+    /// Where the sync gist is on GitHub, once there is one.
+    #[wasm_bindgen(js_name = syncGistUrl)]
+    pub fn sync_gist_url(&self) -> Option<String> {
+        self.0.sync_gist_url()
+    }
+
+    #[wasm_bindgen(js_name = setSyncGist)]
+    pub fn set_sync_gist(&mut self, id: Option<String>) {
+        self.0.set_sync_gist(id);
+    }
+
+    /// Whether a token can use gists, from its `X-OAuth-Scopes` header.
+    #[wasm_bindgen(js_name = canSync)]
+    pub fn can_sync(&self, scopes: Option<String>) -> bool {
+        self.0.can_sync(scopes)
+    }
+
+    /// The id of the sync gist in GitHub's list of the user's gists.
+    #[wasm_bindgen(js_name = findSyncGist)]
+    pub fn find_sync_gist(&self, list: &str) -> Option<String> {
+        self.0.find_sync_gist(list)
+    }
+
+    /// Merges the sync gist, as GitHub returned it (nothing when there is
+    /// none yet), into the snoozes and channels. Returns
+    /// `{ changed, createBody, updateBody }`: whether the lists need deriving
+    /// again, and the request bodies for the gist when it lacks something.
+    #[wasm_bindgen(js_name = syncReconcile)]
+    pub fn sync_reconcile(&mut self, gist: Option<String>, now: &str) -> Result<String, JsError> {
+        js(self.0.sync_reconcile(gist.as_deref(), now))
     }
 }

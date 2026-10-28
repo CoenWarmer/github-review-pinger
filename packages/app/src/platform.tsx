@@ -32,8 +32,15 @@ export interface Platform {
   setTeamChannel(team: string, link: string): Promise<void>;
   removeTeamChannel(team: string): void;
 
-  /** Rejects with a message to show when the token can't be saved. */
-  saveToken(token: string): Promise<void>;
+  /**
+   * Rejects with a message to show when the token can't be saved. `sync`
+   * turns on syncing with it.
+   */
+  saveToken(token: string, sync: boolean): Promise<void>;
+  /** Whether a token that isn't saved yet could sync, which needs the gist scope. */
+  canSync(token: string): Promise<boolean>;
+  /** Shares snoozes and Slack channels with other devices, or stops. */
+  setSync(enabled: boolean): void;
   clearToken(): Promise<void>;
   setAuthSource(source: TokenSource): void;
 

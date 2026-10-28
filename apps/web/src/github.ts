@@ -4,6 +4,7 @@
 // viewer's own PRs that could be ready to merge.
 
 const ENDPOINT = "https://api.github.com/graphql";
+const REST = "https://api.github.com";
 const MAX_SEARCH_PAGES = 10;
 /** Small enough that each request finishes well inside GitHub's ~10 s GraphQL timeout. */
 const BATCH_SIZE = 10;
@@ -84,6 +85,15 @@ export interface Github {
   fetchDetails(ids: string[]): Promise<RawPullRequest[]>;
   addMergeStates(pullRequests: RawPullRequest[]): Promise<void>;
   fetchDirectory(needs: Needs): Promise<Found>;
+  /** The token's scopes as GitHub lists them; `null` for tokens that have none, such as fine-grained ones. */
+  scopes(): Promise<string | null>;
+  /** One page of the user's gists, 100 at a time, as JSON. */
+  gists(page: number): Promise<string>;
+  /** The gist as JSON, or `null` when it's gone. */
+  gist(id: string): Promise<string | null>;
+  /** Creates a gist from a request body and returns its id. */
+  createGist(body: string): Promise<string>;
+  updateGist(id: string, body: string): Promise<void>;
 }
 
 interface Options {
@@ -203,6 +213,39 @@ export function createGithub({
     return { data: parsed.data, ssoPartial, scopeMissing };
   }
 
+  /** A REST call, which unlike the GraphQL ones is a single attempt: sync tries again on the next change. */
+  async function rest(method: string, path: string, body?: string): Promise<Response> {
+    let response: Response;
+    try {
+      response = await fetchImpl(`${REST}${path}`, {
+        method,
+        headers: {
+          Authorization: `bearer ${token}`,
+          Accept: "application/vnd.github+json",
+          "X-GitHub-Api-Version": "2022-11-28",
+          ...(body === undefined ? {} : { "Content-Type": "application/json" }),
+        },
+        body,
+      });
+    } catch (e) {
+      throw new FetchError("network", e instanceof Error ? e.message : String(e));
+    }
+    if (response.status === 401) throw new FetchError("unauthorized", "GitHub rejected the token");
+    const reset = rateLimitReset(response.status, response.headers);
+    if (reset !== undefined)
+      throw new FetchError("rateLimited", "GitHub rate limit reached", reset);
+    return response;
+  }
+
+  function gistFailure(response: Response): FetchError {
+    return new FetchError(
+      "api",
+      response.status === 403 || response.status === 404
+        ? "GitHub wouldn't let this token use gists. Check that it has the gist scope."
+        : `GitHub returned HTTP ${response.status} for the sync gist.`,
+    );
+  }
+
   async function searchIds(search: string) {
     interface Data {
       viewer: { login: string };
@@ -313,6 +356,38 @@ export function createGithub({
         }
       }
       return found;
+    },
+
+    async scopes() {
+      const response = await rest("GET", "/user");
+      if (!response.ok) throw new FetchError("api", `GitHub returned HTTP ${response.status}`);
+      return response.headers.get("x-oauth-scopes");
+    },
+
+    async gists(page) {
+      const response = await rest("GET", `/gists?per_page=100&page=${page}`);
+      if (!response.ok) throw gistFailure(response);
+      return response.text();
+    },
+
+    async gist(id) {
+      const response = await rest("GET", `/gists/${encodeURIComponent(id)}`);
+      if (response.status === 404) return null;
+      if (!response.ok) throw gistFailure(response);
+      return response.text();
+    },
+
+    async createGist(body) {
+      const response = await rest("POST", "/gists", body);
+      if (!response.ok) throw gistFailure(response);
+      const created: { id?: string } = await response.json();
+      if (!created.id) throw new FetchError("api", "GitHub's reply had no gist id.");
+      return created.id;
+    },
+
+    async updateGist(id, body) {
+      const response = await rest("PATCH", `/gists/${encodeURIComponent(id)}`, body);
+      if (!response.ok) throw gistFailure(response);
     },
   };
   return github;

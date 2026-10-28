@@ -6,8 +6,10 @@ import { Label } from "@/components/ui/label";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Switch } from "@/components/ui/switch";
 import { TeamChannelForm } from "../slack";
-import type { TeamChannel, TokenSource } from "../types";
-import { TokenForm } from "./Setup";
+import { ago } from "../format";
+import { useNow } from "../hooks";
+import type { SyncStatus, TeamChannel, TokenSource } from "../types";
+import { SYNC_ABOUT, SYNC_LABEL } from "./Setup";
 
 const AUTH_OPTIONS: { source: TokenSource; label: string }[] = [
   { source: "gh", label: "GitHub CLI" },
@@ -21,6 +23,7 @@ export function SettingsPanel({
   notificationsMuted,
   teamLookupDenied,
   channels,
+  sync,
 }: {
   /** Who is signed in. */
   account: string | null;
@@ -33,11 +36,26 @@ export function SettingsPanel({
   teamLookupDenied: boolean;
   /** Slack channels by team. */
   channels: Record<string, TeamChannel>;
+  sync: SyncStatus;
 }) {
   const platform = usePlatform();
-  const { githubCli, autostart: hasAutostart, notifications } = platform.features;
+  const {
+    githubCli,
+    autostart: hasAutostart,
+    notifications,
+  } = platform.features;
   const [autostart, setAutostart] = useState<boolean | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [authError, setAuthError] = useState<string | null>(null);
+
+  async function logOut() {
+    try {
+      await platform.clearToken();
+      setAuthError(null);
+    } catch (e) {
+      setAuthError(String(e));
+    }
+  }
 
   useEffect(() => {
     if (!hasAutostart) return;
@@ -102,11 +120,28 @@ export function SettingsPanel({
       )}
       <Section>
         <Heading>Authentication</Heading>
+        {account && (
+          <div className="flex items-center justify-between gap-2 rounded border p-2 text-muted-foreground">
+            <p className="m-0">
+              Signed in as {account} via{" "}
+              {authSource === "pat" ? "Personal Access Token" : "gh CLI"}
+            </p>
+            {/* The GitHub CLI's login isn't the app's to end. */}
+            {authSource === "pat" && hasSavedToken && (
+              <Button type="button" variant="outline" size="xs" onClick={logOut}>
+                Log out
+              </Button>
+            )}
+          </div>
+        )}
+        {authError && <p className="mt-2 mb-0 text-destructive">{authError}</p>}
         {githubCli && (
           <RadioGroup
             value={authSource}
-            onValueChange={(source) => platform.setAuthSource(source as TokenSource)}
-            className="mb-2 gap-1.5"
+            onValueChange={(source) =>
+              platform.setAuthSource(source as TokenSource)
+            }
+            className="mt-4 gap-1.5"
           >
             {AUTH_OPTIONS.map(({ source, label }) => (
               <div key={source} className="flex items-center gap-2">
@@ -118,8 +153,7 @@ export function SettingsPanel({
             ))}
           </RadioGroup>
         )}
-        {account && <p className="mt-0 mb-2 text-muted-foreground">Signed in as {account}</p>}
-        {!githubCli || authSource === "pat" ? (
+        {/* {!githubCli || authSource === "pat" ? (
           <TokenForm hasSavedToken={hasSavedToken} />
         ) : (
           hasSavedToken && (
@@ -127,13 +161,14 @@ export function SettingsPanel({
               A saved token is kept, but not used.
             </p>
           )
-        )}
+        )} */}
         {teamLookupDenied && (
           <p className="mt-3 mb-0 text-xs text-muted-foreground">
             Add the read:org scope to see team details on reviewer hover cards:
             {githubCli ? (
               <>
-                run <code>gh auth refresh -s read:org</code>, or add the scope to your token.
+                run <code>gh auth refresh -s read:org</code>, or add the scope
+                to your token.
               </>
             ) : (
               "add the scope to your token."
@@ -141,7 +176,66 @@ export function SettingsPanel({
           </p>
         )}
       </Section>
+      <Section>
+        <Heading>Sync</Heading>
+        <SyncSetting sync={sync} />
+      </Section>
       <SlackChannels channels={channels} />
+    </div>
+  );
+}
+
+function SyncSetting({ sync }: { sync: SyncStatus }) {
+  const platform = usePlatform();
+  const now = useNow();
+  // A token without the scope can't sync, whatever was chosen before.
+  const unavailable = sync.available === false;
+  return (
+    <div className="flex flex-col gap-1">
+      <div className="flex items-center gap-2">
+        <Switch
+          id="sync"
+          checked={sync.enabled && !unavailable}
+          disabled={sync.available !== true}
+          onCheckedChange={(enabled) => platform.setSync(enabled)}
+        />
+        <Label htmlFor="sync" className="font-normal">
+          {SYNC_LABEL}
+        </Label>
+      </div>
+      {unavailable ? (
+        <p className="m-0 text-xs text-muted-foreground">
+          The token needs the gist scope, which fine-grained tokens can't have.
+          {platform.features.githubCli && (
+            <>
+              {" "}
+              For the GitHub CLI, run <code>gh auth refresh -s gist</code>.
+            </>
+          )}
+        </p>
+      ) : (
+        <p className="m-0 text-xs text-muted-foreground">
+          {SYNC_ABOUT}
+          {sync.enabled &&
+            sync.lastSyncedAt &&
+            ` Last synced ${ago(sync.lastSyncedAt, now)}.`}{" "}
+          {sync.enabled && !unavailable && sync.gistUrl && (
+            <Button
+              type="button"
+              variant="link"
+              size="xs"
+              className="h-auto p-0"
+              onClick={() => platform.openUrl(sync.gistUrl!)}
+            >
+              Open gist
+            </Button>
+          )}
+        </p>
+      )}
+
+      {sync.enabled && !unavailable && sync.error && (
+        <p className="m-0 text-xs text-destructive">{sync.error}</p>
+      )}
     </div>
   );
 }
@@ -158,17 +252,22 @@ function Section({ children }: { children: React.ReactNode }) {
   return <section className="py-3">{children}</section>;
 }
 
-function SlackChannels({ channels }: { channels: Record<string, TeamChannel> }) {
+function SlackChannels({
+  channels,
+}: {
+  channels: Record<string, TeamChannel>;
+}) {
   const teams = Object.keys(channels).sort();
   const platform = usePlatform();
   const [editing, setEditing] = useState<string | null>(null);
 
   return (
-    <section>
+    <Section>
       <Heading>Slack channels</Heading>
       {teams.length === 0 ? (
         <p className="m-0 text-xs text-muted-foreground">
-          No team has a Slack channel yet. Click a team chip on a pull request to add one.
+          No team has a Slack channel yet. Click a team chip on a pull request
+          to add one.
         </p>
       ) : (
         <ul className="m-0 list-none p-0 pb-6">
@@ -178,7 +277,10 @@ function SlackChannels({ channels }: { channels: Record<string, TeamChannel> }) 
             const entry = (
               <>
                 <span className="truncate font-medium">{team}</span>
-                <span className="truncate text-xs text-muted-foreground" title={link}>
+                <span
+                  className="truncate text-xs text-muted-foreground"
+                  title={link}
+                >
                   {link}
                 </span>
               </>
@@ -190,7 +292,11 @@ function SlackChannels({ channels }: { channels: Record<string, TeamChannel> }) 
               >
                 {saved && editing === team ? (
                   <div className="col-span-2 -mx-3">
-                    <TeamChannelForm team={team} initial={link} onDone={() => setEditing(null)} />
+                    <TeamChannelForm
+                      team={team}
+                      initial={link}
+                      onDone={() => setEditing(null)}
+                    />
                   </div>
                 ) : (
                   <>
@@ -231,6 +337,6 @@ function SlackChannels({ channels }: { channels: Record<string, TeamChannel> }) 
           })}
         </ul>
       )}
-    </section>
+    </Section>
   );
 }

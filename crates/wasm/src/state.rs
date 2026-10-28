@@ -16,6 +16,7 @@ use review_pinger_core::prs::{self, PrView};
 use review_pinger_core::reviews::ReviewView;
 use review_pinger_core::settings::Settings;
 use review_pinger_core::slack::{self, Channel};
+use review_pinger_core::sync;
 use serde::{Deserialize, Serialize};
 
 /// What is kept between visits.
@@ -216,18 +217,18 @@ impl PingerState {
     }
 
     /// Saves a Slack channel link for a team. Fails for anything that isn't one.
-    pub fn set_team_channel(&mut self, team: &str, link: &str) -> Result<(), String> {
+    pub fn set_team_channel(&mut self, team: &str, link: &str, now: &str) -> Result<(), String> {
         if !slack::is_valid_link(link) {
             return Err("That doesn't look like a Slack channel link.".to_string());
         }
         self.memory
-            .team_channels
-            .insert(team.to_lowercase(), link.to_string());
+            .set_team_channel(team, Some(link.to_string()), time(now)?);
         Ok(())
     }
 
-    pub fn remove_team_channel(&mut self, team: &str) {
-        self.memory.team_channels.remove(&team.to_lowercase());
+    pub fn remove_team_channel(&mut self, team: &str, now: &str) -> Result<(), String> {
+        self.memory.set_team_channel(team, None, time(now)?);
+        Ok(())
     }
 
     fn channels(&self) -> HashMap<String, Channel> {
@@ -244,6 +245,59 @@ impl PingerState {
 
     pub fn notifications_muted(&self) -> bool {
         self.memory.notifications_muted
+    }
+
+    pub fn sync_enabled(&self) -> bool {
+        self.memory.sync.enabled
+    }
+
+    pub fn set_sync_enabled(&mut self, enabled: bool) {
+        self.memory.sync.enabled = enabled;
+    }
+
+    /// The gist that holds the synced snoozes and channels, once known.
+    pub fn sync_gist(&self) -> Option<String> {
+        self.memory.sync.gist_id.clone()
+    }
+
+    pub fn set_sync_gist(&mut self, id: Option<String>) {
+        self.memory.sync.gist_id = id;
+    }
+
+    /// Where the sync gist is on GitHub, once there is one.
+    pub fn sync_gist_url(&self) -> Option<String> {
+        self.memory.sync.gist_id.as_deref().map(sync::gist_url)
+    }
+
+    /// Whether a token can use gists, from its `X-OAuth-Scopes` header.
+    pub fn can_sync(&self, scopes: Option<String>) -> bool {
+        sync::can_sync(scopes.as_deref())
+    }
+
+    /// The id of the sync gist in a list of the user's gists.
+    pub fn find_sync_gist(&self, list: &str) -> Option<String> {
+        sync::find_gist(list)
+    }
+
+    /// Merges the sync gist (as GitHub returned it; `None` when there is
+    /// none yet) into the snoozes and channels. Returns
+    /// `{ changed, createBody, updateBody }`: whether the lists need deriving
+    /// again, and the request bodies for the gist when it lacks something.
+    pub fn sync_reconcile(&mut self, gist: Option<&str>, now: &str) -> Result<String, String> {
+        #[derive(Serialize)]
+        #[serde(rename_all = "camelCase")]
+        struct Out {
+            changed: bool,
+            create_body: Option<String>,
+            update_body: Option<String>,
+        }
+        let remote = gist.and_then(sync::read_gist);
+        let result = sync::reconcile(&mut self.memory, remote, time(now)?);
+        json(&Out {
+            changed: result.changed,
+            create_body: result.upload.as_ref().map(sync::create_body),
+            update_body: result.upload.as_ref().map(sync::update_body),
+        })
     }
 }
 
@@ -325,6 +379,20 @@ mod tests {
     }
 
     #[test]
+    fn a_snooze_survives_a_poll_that_misses_the_pr() {
+        let mut pinger = PingerState::new(None);
+        pinger.set_snooze("mine", Some(5), NOW).unwrap();
+        let group = |out: String| update(&out)["pullRequests"][0]["group"].clone();
+        let with = fetch(vec![pr("mine", json!({}))], vec![]);
+
+        assert_eq!(group(pinger.poll(&with, NOW, 120).unwrap()), "snoozed");
+        // GitHub's search sometimes leaves a PR out for a poll.
+        pinger.poll(&fetch(vec![], vec![]), NOW, 120).unwrap();
+
+        assert_eq!(group(pinger.poll(&with, NOW, 120).unwrap()), "snoozed");
+    }
+
+    #[test]
     fn nothing_is_derived_before_the_first_poll() {
         assert_eq!(PingerState::new(None).derived(NOW).unwrap(), None);
     }
@@ -334,16 +402,52 @@ mod tests {
         let mut pinger = PingerState::new(None);
         assert!(
             pinger
-                .set_team_channel("O/Core", "https://example.com/x")
+                .set_team_channel("O/Core", "https://example.com/x", NOW)
                 .is_err()
         );
         pinger
-            .set_team_channel("O/Core", "https://app.slack.com/client/T1/C1")
+            .set_team_channel("O/Core", "https://app.slack.com/client/T1/C1", NOW)
             .unwrap();
         let channels: Value = serde_json::from_str(&pinger.team_channels().unwrap()).unwrap();
         assert_eq!(channels["o/core"]["source"], "saved");
-        pinger.remove_team_channel("o/CORE");
+        pinger.remove_team_channel("o/CORE", NOW).unwrap();
         assert_eq!(pinger.team_channels().unwrap(), "{}");
+    }
+
+    #[test]
+    fn a_snooze_made_on_one_device_reaches_another_through_the_gist() {
+        let mut desktop = PingerState::new(None);
+        desktop.set_snooze("pr1", Some(5), NOW).unwrap();
+        let first: Value =
+            serde_json::from_str(&desktop.sync_reconcile(None, NOW).unwrap()).unwrap();
+        let create: Value = serde_json::from_str(first["createBody"].as_str().unwrap()).unwrap();
+        let content = create["files"][review_pinger_core::sync::FILE_NAME]["content"].clone();
+        let gist =
+            json!({ "files": { review_pinger_core::sync::FILE_NAME: { "content": content } } });
+
+        let mut web = PingerState::new(None);
+        let second: Value =
+            serde_json::from_str(&web.sync_reconcile(Some(&gist.to_string()), NOW).unwrap())
+                .unwrap();
+
+        assert_eq!(second["changed"], true);
+        assert!(second["updateBody"].is_null());
+        assert!(web.state().unwrap().contains("pr1"));
+    }
+
+    #[test]
+    fn sync_is_off_until_turned_on_and_remembers_its_gist() {
+        let mut pinger = PingerState::new(None);
+        assert!(!pinger.sync_enabled());
+        pinger.set_sync_enabled(true);
+        pinger.set_sync_gist(Some("abc".into()));
+
+        let restored = PingerState::new(Some(&pinger.state().unwrap()));
+
+        assert!(restored.sync_enabled());
+        assert_eq!(restored.sync_gist().as_deref(), Some("abc"));
+        assert!(restored.can_sync(Some("repo, gist".into())));
+        assert!(!restored.can_sync(None));
     }
 
     #[test]

@@ -6,6 +6,7 @@ export type {
   PullRequest,
   ReviewRequest,
   Snapshot,
+  SyncStatus,
   TeamChannel,
   TokenSource,
 } from "./types";

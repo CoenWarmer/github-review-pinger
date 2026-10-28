@@ -118,6 +118,18 @@ export interface TeamChannel {
   source: "saved" | "settings";
 }
 
+/** Sharing snoozes and Slack channels with other devices through a gist. */
+export interface SyncStatus {
+  enabled: boolean;
+  /** The token can use gists; null until checked. */
+  available: boolean | null;
+  lastSyncedAt: string | null;
+  /** Where the gist is on GitHub, once there is one. */
+  gistUrl: string | null;
+  /** What went wrong the last time. */
+  error: string | null;
+}
+
 export interface Snapshot {
   status: Status;
   refreshing: boolean;
@@ -138,4 +150,5 @@ export interface Snapshot {
   /** Slack channels by lowercase `org/team-slug`. */
   teamChannels: Record<string, TeamChannel>;
   slackOpensIn: "app" | "browser";
+  sync: SyncStatus;
 }

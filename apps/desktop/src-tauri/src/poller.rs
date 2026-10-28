@@ -17,12 +17,14 @@ use crate::auth::{self, AuthError, TokenSource};
 use crate::card;
 use crate::directory::Directory;
 use crate::engine::{self, Fetched};
+use crate::gist;
 use crate::github::{self, FetchError};
 use crate::memory::Memory;
 use crate::prs::{self, PrView};
 use crate::reviews::ReviewView;
 use crate::settings::{self, Settings, SlackOpensIn};
 use crate::slack::{self, Channel};
+use crate::sync;
 
 const POLL_INTERVAL: Duration = Duration::from_secs(120);
 const MAX_BACKOFF: Duration = Duration::from_secs(600);
@@ -52,6 +54,21 @@ pub struct Snapshot {
     /// those saved in the popover.
     pub team_channels: HashMap<String, Channel>,
     pub slack_opens_in: SlackOpensIn,
+    pub sync: SyncStatus,
+}
+
+/// Sharing snoozes and Slack channels with other devices.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SyncStatus {
+    pub enabled: bool,
+    /// Whether the token can use gists; `None` until checked.
+    pub available: Option<bool>,
+    pub last_synced_at: Option<DateTime<Utc>>,
+    /// Where the gist is on GitHub, once there is one.
+    pub gist_url: Option<String>,
+    /// What went wrong the last time, to show.
+    pub error: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -92,6 +109,10 @@ pub struct Poller {
     visited: Mutex<HashSet<String>>,
     first_poll: AtomicBool,
     wake: Notify,
+    /// Asks the sync task to run, soon.
+    sync_wake: Notify,
+    /// Keeps a poll and a change from syncing at the same time.
+    sync_lock: tokio::sync::Mutex<()>,
     http: reqwest::Client,
 }
 
@@ -118,6 +139,7 @@ impl Poller {
             self.save(&memory);
         }
         self.rederive(app);
+        self.sync_wake.notify_one();
     }
 
     /// Saves the Slack channel for a team. Fails when the link isn't a
@@ -128,13 +150,12 @@ impl Poller {
         }
         let channels = {
             let mut memory = self.memory.lock().unwrap();
-            memory
-                .team_channels
-                .insert(team.to_lowercase(), link.to_string());
+            memory.set_team_channel(team, Some(link.to_string()), Utc::now());
             self.save(&memory);
             self.channels(&settings::load(app), &memory)
         };
         self.update(app, |s| s.team_channels = channels);
+        self.sync_wake.notify_one();
         Ok(())
     }
 
@@ -142,11 +163,12 @@ impl Poller {
     pub fn remove_team_channel(&self, app: &AppHandle, team: &str) {
         let channels = {
             let mut memory = self.memory.lock().unwrap();
-            memory.team_channels.remove(&team.to_lowercase());
+            memory.set_team_channel(team, None, Utc::now());
             self.save(&memory);
             self.channels(&settings::load(app), &memory)
         };
         self.update(app, |s| s.team_channels = channels);
+        self.sync_wake.notify_one();
     }
 
     fn channels(&self, settings: &Settings, memory: &Memory) -> HashMap<String, Channel> {
@@ -160,8 +182,114 @@ impl Poller {
             memory.auth_source = Some(source);
             self.save(&memory);
         }
-        self.update(app, |s| s.auth_choice = Some(source));
+        // Another token may have other scopes.
+        self.update(app, |s| {
+            s.auth_choice = Some(source);
+            s.sync.available = None;
+        });
         self.refresh();
+    }
+
+    /// Turns syncing on or off. Turning it on syncs right away.
+    pub fn set_sync_enabled(&self, app: &AppHandle, enabled: bool) {
+        {
+            let mut memory = self.memory.lock().unwrap();
+            memory.sync.enabled = enabled;
+            self.save(&memory);
+        }
+        self.update(app, |s| {
+            s.sync.enabled = enabled;
+            s.sync.error = None;
+        });
+        if enabled {
+            self.sync_wake.notify_one();
+        }
+    }
+
+    /// Whether a token pasted but not yet saved can use gists.
+    pub async fn token_can_sync(&self, token: &str) -> bool {
+        match gist::can_sync(&self.http, token).await {
+            Ok(can) => can,
+            Err(e) => {
+                log::warn!("Could not check the token's scopes: {e}");
+                false
+            }
+        }
+    }
+
+    /// Merges snoozes and channels with the sync gist, if syncing is on and
+    /// the token can use gists, and shows the result. Never fails: problems
+    /// are shown in the settings and the next sync tries again.
+    async fn sync(&self, app: &AppHandle, token: &str) {
+        let _one_at_a_time = self.sync_lock.lock().await;
+        let mut available = self.snapshot.lock().unwrap().sync.available;
+        if available.is_none() {
+            available = gist::can_sync(&self.http, token).await.ok();
+            self.update(app, |s| s.sync.available = available);
+        }
+        if available != Some(true) || !self.memory.lock().unwrap().sync.enabled {
+            return;
+        }
+        let result = self.sync_gist(token).await;
+        let changed = *result.as_ref().unwrap_or(&false);
+        let gist_url = self
+            .memory
+            .lock()
+            .unwrap()
+            .sync
+            .gist_id
+            .as_deref()
+            .map(sync::gist_url);
+        self.update(app, |s| {
+            s.sync.gist_url = gist_url;
+            match &result {
+                Ok(_) => {
+                    s.sync.last_synced_at = Some(Utc::now());
+                    s.sync.error = None;
+                }
+                Err(e) => s.sync.error = Some(e.clone()),
+            }
+        });
+        if changed {
+            self.rederive(app);
+        }
+    }
+
+    /// Returns whether snoozes or channels here changed.
+    async fn sync_gist(&self, token: &str) -> Result<bool, String> {
+        let mut id = self.memory.lock().unwrap().sync.gist_id.clone();
+        if id.is_none() {
+            id = gist::find(&self.http, token).await?;
+        }
+        let mut remote = None;
+        if let Some(found) = &id {
+            remote = gist::read(&self.http, token, found).await?;
+            if remote.is_none() {
+                // Deleted, so a new one is made from what's here.
+                id = None;
+            }
+        }
+
+        let result = {
+            let mut memory = self.memory.lock().unwrap();
+            let doc = remote.as_deref().and_then(sync::read_gist);
+            let result = sync::reconcile(&mut memory, doc, Utc::now());
+            memory.sync.gist_id = id.clone();
+            self.save(&memory);
+            result
+        };
+        if let Some(doc) = result.upload {
+            match id {
+                Some(id) => gist::update(&self.http, token, &id, sync::update_body(&doc)).await?,
+                None => {
+                    let created = gist::create(&self.http, token, sync::create_body(&doc)).await?;
+                    let mut memory = self.memory.lock().unwrap();
+                    memory.sync.gist_id = Some(created);
+                    self.save(&memory);
+                }
+            }
+        }
+        Ok(result.changed)
     }
 
     /// Mutes or unmutes the notification cards. Muting drops those showing
@@ -273,6 +401,13 @@ pub fn start(app: &AppHandle) -> Arc<Poller> {
             review_requests: Vec::new(),
             team_channels: HashMap::new(),
             slack_opens_in: SlackOpensIn::default(),
+            sync: SyncStatus {
+                enabled: memory.sync.enabled,
+                available: None,
+                last_synced_at: None,
+                gist_url: memory.sync.gist_id.as_deref().map(sync::gist_url),
+                error: None,
+            },
         }),
         latest: Mutex::new(None),
         memory: Mutex::new(memory),
@@ -281,9 +416,12 @@ pub fn start(app: &AppHandle) -> Arc<Poller> {
         visited: Mutex::new(HashSet::new()),
         first_poll: AtomicBool::new(true),
         wake: Notify::new(),
+        sync_wake: Notify::new(),
+        sync_lock: tokio::sync::Mutex::new(()),
         http: github::http_client(),
     });
     tauri::async_runtime::spawn(run(app.clone(), poller.clone()));
+    tauri::async_runtime::spawn(sync_on_change(app.clone(), poller.clone()));
     poller
 }
 
@@ -388,7 +526,7 @@ async fn poll_once(app: &AppHandle, poller: &Poller) -> Result<(), Problem> {
 
     let settings = settings::load(app);
     let reviewed_since = (Utc::now() - engine::dormant_after(&settings)).date_naive();
-    let fetched = match fetch(poller, reviewed_since).await {
+    let fetched = match fetch_and_sync(app, poller, reviewed_since).await {
         Ok(fetched) => fetched,
         Err(problem) => {
             // Keep showing the last good data alongside the problem.
@@ -487,9 +625,39 @@ async fn refresh_directory(app: &AppHandle, poller: &Poller) {
     }
 }
 
-async fn fetch(poller: &Poller, reviewed_since: NaiveDate) -> Result<Fetched, Problem> {
+/// Fetches the PRs while the snoozes and channels sync, so the lists are
+/// derived with both.
+async fn fetch_and_sync(
+    app: &AppHandle,
+    poller: &Poller,
+    reviewed_since: NaiveDate,
+) -> Result<Fetched, Problem> {
+    let token = resolve_token(poller).await?;
+    let (fetched, ()) = tokio::join!(
+        fetch(poller, &token, reviewed_since),
+        poller.sync(app, &token.value)
+    );
+    fetched
+}
+
+/// Waits for a snooze or channel to change, then shares it.
+async fn sync_on_change(app: AppHandle, poller: Arc<Poller>) {
+    loop {
+        poller.sync_wake.notified().await;
+        // Several changes in a row go out together.
+        tokio::time::sleep(Duration::from_secs(1)).await;
+        let chosen = poller.auth_source();
+        if let Ok(Ok(token)) =
+            tauri::async_runtime::spawn_blocking(move || auth::resolve_token(chosen)).await
+        {
+            poller.sync(&app, &token.value).await;
+        }
+    }
+}
+
+async fn resolve_token(poller: &Poller) -> Result<auth::Token, Problem> {
     let chosen = poller.auth_source();
-    let token = tauri::async_runtime::spawn_blocking(move || auth::resolve_token(chosen))
+    tauri::async_runtime::spawn_blocking(move || auth::resolve_token(chosen))
         .await
         .map_err(|e| Problem::Api {
             message: e.to_string(),
@@ -498,8 +666,14 @@ async fn fetch(poller: &Poller, reviewed_since: NaiveDate) -> Result<Fetched, Pr
             AuthError::GhNotInstalled => Problem::GhNotInstalled,
             AuthError::GhNotLoggedIn => Problem::GhNotLoggedIn,
             AuthError::NoSavedToken => Problem::NoSavedToken,
-        })?;
+        })
+}
 
+async fn fetch(
+    poller: &Poller,
+    token: &auth::Token,
+    reviewed_since: NaiveDate,
+) -> Result<Fetched, Problem> {
     let fetched = github::fetch_open_pull_requests(&poller.http, &token.value, reviewed_since)
         .await
         .map_err(|e| match e {

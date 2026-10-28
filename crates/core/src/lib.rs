@@ -15,3 +15,4 @@ pub mod prs;
 pub mod reviews;
 pub mod settings;
 pub mod slack;
+pub mod sync;
