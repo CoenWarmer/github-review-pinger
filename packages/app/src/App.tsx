@@ -27,7 +27,8 @@ import { SORT_OPTIONS, sortRows, useSectionSort, type SortKey } from "./sort";
 import type { ReviewGroup, Section, Snapshot } from "./types";
 
 /** Sections with little left to act on, so they start collapsed. */
-const COLLAPSIBLE: ReadonlySet<Section> = new Set(["snoozed", "dormant", "draft", "merged"]);
+/** Sections that start collapsed; every section can be toggled either way. */
+const STARTS_COLLAPSED: ReadonlySet<Section> = new Set(["snoozed", "dormant", "draft", "merged"]);
 
 const REVIEW_SECTIONS: { group: ReviewGroup; title: string }[] = [
   { group: "needsReview", title: "Needs your review" },
@@ -91,17 +92,18 @@ function Section<
   id,
   title,
   rows,
-  collapsible,
+  defaultOpen,
   render,
 }: {
   /** Names the section for remembering its sort, e.g. `mine:approved`. */
   id: string;
   title: string;
   rows: T[];
-  collapsible: boolean;
+  /** Every section can be collapsed; this is just whether it starts that way. */
+  defaultOpen: boolean;
   render: (row: T) => ReactNode;
 }) {
-  const [open, setOpen] = useState(!collapsible);
+  const [open, setOpen] = useState(defaultOpen);
   const [sort, setSort] = useSectionSort(id);
   if (rows.length === 0) return null;
 
@@ -115,14 +117,10 @@ function Section<
     <Collapsible asChild open={open} onOpenChange={setOpen}>
       <section>
         <h2 className="sticky top-0 z-10 m-0 flex items-center justify-between border-b bg-background px-3 py-1 text-[11px] font-semibold tracking-wide text-muted-foreground uppercase">
-          {collapsible ? (
-            <CollapsibleTrigger className="flex cursor-pointer items-center gap-1 border-0 bg-transparent p-0 font-[inherit] tracking-[inherit] uppercase">
-              {open ? <ChevronDown className="size-3" /> : <ChevronRight className="size-3" />}
-              {heading}
-            </CollapsibleTrigger>
-          ) : (
-            <span>{heading}</span>
-          )}
+          <CollapsibleTrigger className="flex cursor-pointer items-center gap-1 border-0 bg-transparent p-0 font-[inherit] tracking-[inherit] uppercase">
+            {open ? <ChevronDown className="size-3" /> : <ChevronRight className="size-3" />}
+            {heading}
+          </CollapsibleTrigger>
           <SortMenu value={sort} onChange={setSort} />
         </h2>
         <CollapsibleContent asChild>
@@ -305,7 +303,7 @@ function AppContent() {
                         id={`mine:view:${pref.id}`}
                         title={view.name}
                         rows={snapshot.viewPullRequests[pref.id] ?? []}
-                        collapsible
+                        defaultOpen={false}
                         render={(pr) => <PrRow key={pr.id} pr={pr} now={now} />}
                       />
                     );
@@ -326,7 +324,7 @@ function AppContent() {
                       id={`mine:${pref.section}`}
                       title={SECTION_TITLES[pref.section]}
                       rows={prs.filter((pr) => pr.group === pref.section)}
-                      collapsible={COLLAPSIBLE.has(pref.section)}
+                      defaultOpen={!STARTS_COLLAPSED.has(pref.section)}
                       render={(pr) => <PrRow key={pr.id} pr={pr} now={now} />}
                     />
                   );
@@ -341,7 +339,7 @@ function AppContent() {
                 id={`reviews:${group}`}
                 title={title}
                 rows={reviews.filter((pr) => pr.group === group)}
-                collapsible={group === "snoozed" || group === "draft"}
+                defaultOpen={group !== "snoozed" && group !== "draft"}
                 render={(pr) => <ReviewRow key={pr.id} pr={pr} now={now} />}
               />
             ))
