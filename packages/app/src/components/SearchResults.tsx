@@ -73,16 +73,18 @@ type GithubSearch =
  */
 export function SearchResults({
   query,
-  count,
+  shownIds,
   rows,
   now,
 }: {
   query: string;
-  count: number;
+  /** The ids of the PRs in `rows`, which GitHub's results leave out. */
+  shownIds: string[];
   rows: ReactNode;
   now: number;
 }) {
   const platform = usePlatform();
+  const count = shownIds.length;
   const [search, setSearch] = useState<GithubSearch>({ kind: "idle" });
   const mounted = useRef(true);
   useEffect(() => {
@@ -101,6 +103,9 @@ export function SearchResults({
       if (mounted.current) setSearch({ kind: "failed", message: String(e) });
     }
   }
+
+  const shown = new Set(shownIds);
+  const newFound = search.kind === "done" ? search.found.filter((pr) => !shown.has(pr.id)) : [];
 
   return (
     <>
@@ -133,17 +138,19 @@ export function SearchResults({
       {search.kind === "done" && (
         <section>
           <Heading>
-            On GitHub <span className="font-normal">{search.found.length}</span>
+            On GitHub <span className="font-normal">{newFound.length}</span>
           </Heading>
-          {search.found.length > 0 ? (
+          {newFound.length > 0 ? (
             <ul className="m-0 list-none p-0">
-              {search.found.map((pr) => (
+              {newFound.map((pr) => (
                 <FoundRow key={pr.id} pr={pr} now={now} />
               ))}
             </ul>
           ) : (
             <p className="m-0 px-3 py-4 text-center text-muted-foreground">
-              GitHub found no matching pull requests.
+              {search.found.length > 0
+                ? "Everything GitHub found is already in the results."
+                : "GitHub found no matching pull requests."}
             </p>
           )}
         </section>

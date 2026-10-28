@@ -236,7 +236,7 @@ function AppContent() {
     reviews: reviews.filter((pr) => pr.group === "needsReview").length,
   };
   const searching = tab !== "settings" && query.trim() !== "";
-  const searchRows = (): { count: number; rows: ReactNode } => {
+  const searchRows = (): { ids: string[]; rows: ReactNode } => {
     if (tab === "reviews") {
       const found = reviews.filter((pr) =>
         matchesQuery(query, [
@@ -248,7 +248,7 @@ function AppContent() {
         ]),
       );
       return {
-        count: found.length,
+        ids: found.map((pr) => pr.id),
         rows: found.map((pr) => <ReviewRow key={pr.id} pr={pr} now={now} />),
       };
     }
@@ -263,7 +263,7 @@ function AppContent() {
       matchesQuery(query, [pr.title, pr.repo, pr.number]),
     );
     return {
-      count: foundOpen.length + foundMerged.length,
+      ids: [...foundOpen, ...foundMerged].map((pr) => pr.id),
       rows: [
         ...foundOpen.map((pr) => <PrRow key={pr.id} pr={pr} now={now} />),
         ...foundMerged.map((pr) => <MergedRow key={pr.id} pr={pr} now={now} />),
@@ -330,7 +330,7 @@ function AppContent() {
             <SearchResults
               key={`${tab}:${query.trim()}`}
               query={query}
-              count={search.count}
+              shownIds={search.ids}
               rows={search.rows}
               now={now}
             />
