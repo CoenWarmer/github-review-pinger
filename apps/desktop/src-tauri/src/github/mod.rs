@@ -1,5 +1,5 @@
 pub use review_pinger_core::github::types;
-use review_pinger_core::github::{DETAILS_QUERY, MERGE_STATE_QUERY, SEARCH_QUERY};
+use review_pinger_core::github::{DETAILS_QUERY, MERGE_STATE_QUERY, MERGED_QUERY, SEARCH_QUERY};
 
 use std::collections::{HashMap, HashSet};
 use std::time::Duration;
@@ -148,6 +148,24 @@ pub async fn add_merge_states(
         pr.merge_state_status = merge_states.get(&pr.id).copied();
     }
     Ok(())
+}
+
+/// Which of `ids`, previously your own open PRs, are merged rather than just
+/// closed. Called for the few that drop out of a poll's open search.
+pub async fn fetch_merged(
+    http: &reqwest::Client,
+    token: &str,
+    ids: &[String],
+) -> Result<Vec<String>, FetchError> {
+    let states: Vec<Merged> = in_batches(http, token, MERGED_QUERY, ids, |nodes: Nodes<Merged>| {
+        nodes.nodes
+    })
+    .await?;
+    Ok(states
+        .into_iter()
+        .filter(|state| state.merged)
+        .map(|state| state.id)
+        .collect())
 }
 
 /// Aliases per directory query, which keeps each query light.
@@ -366,6 +384,12 @@ struct Nodes<T> {
 struct MergeState {
     id: String,
     merge_state_status: MergeStateStatus,
+}
+
+#[derive(Deserialize)]
+struct Merged {
+    id: String,
+    merged: bool,
 }
 
 #[derive(Deserialize)]

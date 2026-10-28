@@ -233,6 +233,7 @@ function AppContent() {
               authSource={snapshot.authChoice ?? (snapshot.hasSavedToken ? "pat" : "gh")}
               hasSavedToken={snapshot.hasSavedToken}
               notificationsMuted={snapshot.notificationsMuted}
+              soundOnMerge={snapshot.soundOnMerge}
               teamLookupDenied={snapshot.teamLookupDenied}
               channels={snapshot.teamChannels}
               sync={snapshot.sync}

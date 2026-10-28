@@ -14,6 +14,8 @@ export interface Platform {
     autostart: boolean;
     /** Notification cards can be shown, muted, and tried out. */
     notifications: boolean;
+    /** A sound can be played for events, such as one of your PRs merging. */
+    sound: boolean;
   };
 
   getSnapshot(): Promise<Snapshot>;
@@ -48,6 +50,7 @@ export interface Platform {
   setAutostart(enabled: boolean): Promise<void>;
   setNotificationsMuted(muted: boolean): void;
   sendTestNotification(): void;
+  setSoundOnMerge(enabled: boolean): void;
 }
 
 const PlatformContext = createContext<Platform | null>(null);

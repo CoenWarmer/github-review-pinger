@@ -141,6 +141,8 @@ export interface Snapshot {
   hasSavedToken: boolean;
   /** Notification cards are muted. */
   notificationsMuted: boolean;
+  /** Plays a sound when one of your own PRs is merged. */
+  soundOnMerge: boolean;
   /** The team lookup was refused for lack of the `read:org` scope. */
   teamLookupDenied: boolean;
   fetchedAt: string | null;

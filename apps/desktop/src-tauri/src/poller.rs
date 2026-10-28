@@ -20,10 +20,12 @@ use crate::engine::{self, Fetched};
 use crate::gist;
 use crate::github::{self, FetchError};
 use crate::memory::Memory;
+use crate::notify;
 use crate::prs::{self, PrView};
 use crate::reviews::ReviewView;
 use crate::settings::{self, Settings, SlackOpensIn};
 use crate::slack::{self, Channel};
+use crate::sound;
 use crate::sync;
 
 const POLL_INTERVAL: Duration = Duration::from_secs(120);
@@ -55,6 +57,8 @@ pub struct Snapshot {
     pub team_channels: HashMap<String, Channel>,
     pub slack_opens_in: SlackOpensIn,
     pub sync: SyncStatus,
+    /// Plays a sound when one of your own PRs is merged.
+    pub sound_on_merge: bool,
 }
 
 /// Sharing snoozes and Slack channels with other devices.
@@ -306,6 +310,16 @@ impl Poller {
         self.update(app, |s| s.notifications_muted = muted);
     }
 
+    /// Turns the "PR merged" sound on or off.
+    pub fn set_sound_on_merge(&self, app: &AppHandle, enabled: bool) {
+        {
+            let mut memory = self.memory.lock().unwrap();
+            memory.sound.pr_merged = enabled;
+            self.save(&memory);
+        }
+        self.update(app, |s| s.sound_on_merge = enabled);
+    }
+
     fn auth_source(&self) -> Option<TokenSource> {
         self.memory.lock().unwrap().auth_source
     }
@@ -408,6 +422,7 @@ pub fn start(app: &AppHandle) -> Arc<Poller> {
                 gist_url: memory.sync.gist_id.as_deref().map(sync::gist_url),
                 error: None,
             },
+            sound_on_merge: memory.sound.pr_merged,
         }),
         latest: Mutex::new(None),
         memory: Mutex::new(memory),
@@ -544,6 +559,8 @@ async fn poll_once(app: &AppHandle, poller: &Poller) -> Result<(), Problem> {
     let now = Utc::now();
     let (views, review_views) = poller.derive(app, &fetched, now);
     let channels = poller.channels(&settings, &poller.memory.lock().unwrap());
+    // Computed before `record_poll` prunes PRs no longer open.
+    let vanished_own = notify::vanished_own_prs(&views, &poller.memory.lock().unwrap());
     let notifications = {
         let mut memory = poller.memory.lock().unwrap();
         let first_poll = poller.first_poll.swap(false, Ordering::Relaxed);
@@ -583,12 +600,33 @@ async fn poll_once(app: &AppHandle, poller: &Poller) -> Result<(), Problem> {
     });
     *poller.latest.lock().unwrap() = Some(fetched);
     refresh_directory(app, poller).await;
+    check_merged(poller, vanished_own).await;
     Ok(())
 }
 
 /// Looks up whatever the hover cards still need to know about teams and
 /// users, and redraws the lists when something arrived. Failures are only
 /// logged: the cards then show what they can, and the next poll tries again.
+/// Checks `ids` (your own PRs that just dropped out of the open search) for
+/// a merge, and plays the sound if one did. Skipped, with no request at all,
+/// while the sound is off. Failures are only logged.
+async fn check_merged(poller: &Poller, ids: Vec<String>) {
+    if ids.is_empty() || !poller.memory.lock().unwrap().sound.pr_merged {
+        return;
+    }
+    let chosen = poller.auth_source();
+    let Ok(Ok(token)) =
+        tauri::async_runtime::spawn_blocking(move || auth::resolve_token(chosen)).await
+    else {
+        return;
+    };
+    match github::fetch_merged(&poller.http, &token.value, &ids).await {
+        Ok(merged) if !merged.is_empty() => sound::play_pr_merged(),
+        Ok(_) => {}
+        Err(e) => log::warn!("Could not check merged status: {e:?}"),
+    }
+}
+
 async fn refresh_directory(app: &AppHandle, poller: &Poller) {
     let needs = match poller.latest.lock().unwrap().as_ref() {
         Some(fetched) => prs::directory_needs(

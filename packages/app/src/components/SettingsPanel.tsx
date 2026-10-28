@@ -21,6 +21,7 @@ export function SettingsPanel({
   authSource,
   hasSavedToken,
   notificationsMuted,
+  soundOnMerge,
   teamLookupDenied,
   channels,
   sync,
@@ -32,6 +33,8 @@ export function SettingsPanel({
   hasSavedToken: boolean;
   /** Notification cards are muted. */
   notificationsMuted: boolean;
+  /** Plays a sound when one of your own PRs is merged. */
+  soundOnMerge: boolean;
   /** The team lookup was refused for lack of the read:org scope. */
   teamLookupDenied: boolean;
   /** Slack channels by team. */
@@ -43,6 +46,7 @@ export function SettingsPanel({
     githubCli,
     autostart: hasAutostart,
     notifications,
+    sound,
   } = platform.features;
   const [autostart, setAutostart] = useState<boolean | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -76,7 +80,7 @@ export function SettingsPanel({
   }
 
   return (
-    <div className="flex flex-col px-3">
+    <div className="flex flex-col">
       {hasAutostart && (
         <Section>
           <Heading>Startup</Heading>
@@ -94,30 +98,7 @@ export function SettingsPanel({
           {error && <p className="m-0 text-destructive">{error}</p>}
         </Section>
       )}
-      {notifications && (
-        <Section>
-          <Heading>Notifications</Heading>
-          <div className="flex items-center gap-2">
-            <Switch
-              id="mute"
-              checked={notificationsMuted}
-              onCheckedChange={(muted) => platform.setNotificationsMuted(muted)}
-            />
-            <Label htmlFor="mute" className="font-normal">
-              Mute notifications
-            </Label>
-          </div>
-          <Button
-            type="button"
-            variant="outline"
-            size="xs"
-            className="mt-3"
-            onClick={() => platform.sendTestNotification()}
-          >
-            Send test notification
-          </Button>
-        </Section>
-      )}
+
       <Section>
         <Heading>Authentication</Heading>
         {account && (
@@ -128,7 +109,12 @@ export function SettingsPanel({
             </p>
             {/* The GitHub CLI's login isn't the app's to end. */}
             {authSource === "pat" && hasSavedToken && (
-              <Button type="button" variant="outline" size="xs" onClick={logOut}>
+              <Button
+                type="button"
+                variant="outline"
+                size="xs"
+                onClick={logOut}
+              >
                 Log out
               </Button>
             )}
@@ -176,6 +162,56 @@ export function SettingsPanel({
           </p>
         )}
       </Section>
+
+      {(notifications || sound) && (
+        <Section>
+          <Heading>Notifications</Heading>
+          {notifications && (
+            <>
+              <div className="flex justify-between center items-center">
+                <div className="flex items-center gap-2">
+                  <Switch
+                    id="mute"
+                    checked={!notificationsMuted}
+                    onCheckedChange={(enabled) =>
+                      platform.setNotificationsMuted(!enabled)
+                    }
+                  />
+                  <Label htmlFor="mute" className="font-normal">
+                    Enable notifications
+                  </Label>
+                </div>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="xs"
+                  onClick={() => platform.sendTestNotification()}
+                >
+                  Send test notification
+                </Button>
+              </div>
+            </>
+          )}
+          {sound && (
+            <div
+              className={
+                notifications
+                  ? "mt-3 flex items-center gap-2"
+                  : "flex items-center gap-2"
+              }
+            >
+              <Switch
+                id="sound-on-merge"
+                checked={soundOnMerge}
+                onCheckedChange={(enabled) => platform.setSoundOnMerge(enabled)}
+              />
+              <Label htmlFor="sound-on-merge" className="font-normal">
+                Play a sound when a PR is merged
+              </Label>
+            </div>
+          )}
+        </Section>
+      )}
       <Section>
         <Heading>Sync</Heading>
         <SyncSetting sync={sync} />
@@ -249,7 +285,7 @@ function Heading({ children }: { children: string }) {
 }
 
 function Section({ children }: { children: React.ReactNode }) {
-  return <section className="py-3">{children}</section>;
+  return <section className="py-3 px-3 pb-5 border-b">{children}</section>;
 }
 
 function SlackChannels({
