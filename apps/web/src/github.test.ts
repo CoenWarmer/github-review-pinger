@@ -8,7 +8,7 @@ import {
   type RawPullRequest,
 } from "./github.ts";
 
-const queries: Queries = { search: "SEARCH", details: "DETAILS", mergeState: "MERGE" };
+const queries: Queries = { search: "SEARCH", details: "DETAILS", mergeState: "MERGE", mergedSearch: "MERGED" };
 
 type Handler = (body: {
   query: string;
@@ -162,7 +162,7 @@ describe("fetching pull requests", () => {
         done1: { id: "done1" },
       },
     );
-    const fetched = await github(handler).fetchOpenPullRequests("2026-09-01");
+    const fetched = await github(handler).fetchOpenPullRequests("2026-09-01", true);
 
     assert.equal(fetched.viewer, "me");
     assert.deepEqual(fetched.pullRequests.map((pr) => pr.id).sort(), ["own1", "own2"]);
@@ -192,6 +192,27 @@ describe("fetching pull requests", () => {
     assert.deepEqual(merged, ["own1"]);
     const own = Object.fromEntries(fetched.pullRequests.map((pr) => [pr.id, pr.mergeStateStatus]));
     assert.deepEqual(own, { own1: "CLEAN", own2: null });
+  });
+
+  it("skips the authored search entirely when nothing needs it", async () => {
+    const { handler, calls } = fakeGithub(
+      {
+        "author:@me": [["own1"]],
+        "review-requested:@me": [["req1"]],
+        "reviewed-by:@me": [[]],
+      },
+      { own1: { id: "own1" }, req1: { id: "req1" } },
+    );
+    const fetched = await github(handler).fetchOpenPullRequests("2026-09-01", false);
+
+    assert.equal(fetched.viewer, "me");
+    assert.deepEqual(fetched.pullRequests, []);
+    assert.deepEqual(
+      fetched.reviewPullRequests.map((pr) => pr.id),
+      ["req1"],
+    );
+    const searched = calls.filter((c) => c.query === "SEARCH").map((c) => String(c.variables.q));
+    assert.ok(!searched.some((q) => q.includes("author:@me") && !q.includes("-author:@me")));
   });
 
   it("fetches details in batches of ten", async () => {
@@ -274,6 +295,40 @@ describe("the team directory", () => {
   it("asks nothing when there are no teams", async () => {
     const gh = github(() => assert.fail("no request expected"));
     assert.deepEqual(await gh.fetchDirectory({ teams: [] }), { teams: {}, denied: false });
+  });
+});
+
+describe("fetching merged pull requests", () => {
+  it("pages through merged PRs by cursor", async () => {
+    const pages = [
+      {
+        pageInfo: { hasNextPage: true, endCursor: "c1" },
+        nodes: [{ id: "a", number: 1, title: "A", url: "u", mergedAt: "2026-10-27T00:00:00Z", repository: { nameWithOwner: "o/r" } }],
+      },
+      {
+        pageInfo: { hasNextPage: false, endCursor: null },
+        nodes: [{ id: "b", number: 2, title: "B", url: "u", mergedAt: "2026-10-20T00:00:00Z", repository: { nameWithOwner: "o/r" } }],
+      },
+    ];
+    const calls: Record<string, unknown>[] = [];
+    const handler: Handler = ({ variables }) => {
+      calls.push(variables);
+      return reply({ search: pages[variables.cursor ? 1 : 0] });
+    };
+    const client = github(handler);
+
+    const first = await client.fetchMergedPage(null, 10);
+    assert.deepEqual(first.items.map((i) => i.id), ["a"]);
+    assert.equal(first.hasNextPage, true);
+    assert.equal(first.endCursor, "c1");
+
+    const second = await client.fetchMergedPage(first.endCursor, 5);
+    assert.deepEqual(second.items.map((i) => i.id), ["b"]);
+    assert.equal(second.hasNextPage, false);
+
+    assert.deepEqual(calls[0].cursor, null);
+    assert.equal(calls[1].cursor, "c1");
+    assert.equal(calls[1].count, 5);
   });
 });
 

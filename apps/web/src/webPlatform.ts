@@ -40,6 +40,9 @@ export function createWebPlatform(engine: Engine): Platform {
     setTeamChannel: (team, link) => rejectWithMessage(() => engine.setTeamChannel(team, link)),
     removeTeamChannel: (team) => engine.removeTeamChannel(team),
 
+    setMyPrsSections: (sections) => engine.setMyPrsSections(sections),
+    loadMoreMerged: () => engine.loadMoreMerged(),
+
     saveToken: (token, sync) => rejectWithMessage(() => engine.saveToken(token, sync)),
     canSync: (token) => engine.canSync(token),
     setSync: (enabled) => engine.setSync(enabled),

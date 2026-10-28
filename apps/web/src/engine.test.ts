@@ -9,6 +9,7 @@ import {
   type Fetched,
   type Found,
   type Github,
+  type RawMergedPullRequest,
   type RawPullRequest,
 } from "./github.ts";
 
@@ -70,10 +71,21 @@ class FakeGithub implements Github {
   details: RawPullRequest[] = [];
   directoryCalls = 0;
 
-  async fetchOpenPullRequests() {
+  includeAuthoredCalls: boolean[] = [];
+  mergedPages: { items: RawMergedPullRequest[]; hasNextPage: boolean; endCursor: string | null }[] = [
+    { items: [], hasNextPage: false, endCursor: null },
+  ];
+  mergedCalls: (string | null)[] = [];
+
+  async fetchOpenPullRequests(_reviewedSince: string, includeAuthored: boolean) {
     this.polls++;
+    this.includeAuthoredCalls.push(includeAuthored);
     if (this.failure) throw this.failure;
     return structuredClone(this.fetched);
+  }
+  async fetchMergedPage(cursor: string | null) {
+    this.mergedCalls.push(cursor);
+    return this.mergedPages[this.mergedCalls.length - 1] ?? this.mergedPages.at(-1)!;
   }
   async fetchDetails(ids: string[]) {
     this.detailCalls.push(ids);

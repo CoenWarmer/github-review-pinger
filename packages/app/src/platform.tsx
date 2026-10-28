@@ -1,5 +1,5 @@
 import { createContext, useContext, type ReactNode } from "react";
-import type { Snapshot, TokenSource } from "./types";
+import type { SectionPref, Snapshot, TokenSource } from "./types";
 
 /**
  * What the UI needs from whatever hosts it: the desktop app talks to its Rust
@@ -33,6 +33,11 @@ export interface Platform {
   /** Rejects with a message to show when the link isn't a Slack link. */
   setTeamChannel(team: string, link: string): Promise<void>;
   removeTeamChannel(team: string): void;
+
+  /** Saves the order and visibility of "My PRs" sections. */
+  setMyPrsSections(sections: SectionPref[]): void;
+  /** Fetches further merged PRs, older than what's already shown. */
+  loadMoreMerged(): Promise<void>;
 
   /**
    * Rejects with a message to show when the token can't be saved. `sync`

@@ -9,11 +9,14 @@ use chrono::{DateTime, Duration, FixedOffset, Utc};
 use review_pinger_core::auth::TokenSource;
 use review_pinger_core::directory::{Directory, Found, Needs};
 use review_pinger_core::engine::{self, Fetched};
+use review_pinger_core::github::types::MergedPullRequest;
 use review_pinger_core::github::types::PullRequest;
 use review_pinger_core::memory::Memory;
+use review_pinger_core::merged;
 use review_pinger_core::notify::Notification;
 use review_pinger_core::prs::{self, PrView};
 use review_pinger_core::reviews::ReviewView;
+use review_pinger_core::sections::SectionPref;
 use review_pinger_core::settings::Settings;
 use review_pinger_core::slack::{self, Channel};
 use review_pinger_core::sync;
@@ -299,6 +302,34 @@ impl PingerState {
             update_body: result.upload.as_ref().map(sync::update_body),
         })
     }
+
+    /// The order and visibility of "My PRs" sections: what was saved,
+    /// completed with any section it's missing.
+    pub fn my_prs_sections(&self) -> Result<String, String> {
+        json(&self.memory.my_prs_sections())
+    }
+
+    pub fn set_my_prs_sections(&mut self, sections: &str, now: &str) -> Result<(), String> {
+        let sections: Vec<SectionPref> =
+            serde_json::from_str(sections).map_err(|e| e.to_string())?;
+        self.memory.set_my_prs_sections(sections, time(now)?);
+        Ok(())
+    }
+
+    /// The Merged section: `page` is the latest automatic fetch, `loaded_more`
+    /// whatever "Load more" has fetched this session (both raw GraphQL
+    /// nodes), merged within the window plus loaded more, newest first.
+    pub fn merged_derive(
+        &self,
+        page: &str,
+        loaded_more: &str,
+        now: &str,
+    ) -> Result<String, String> {
+        let page: Vec<MergedPullRequest> = serde_json::from_str(page).map_err(|e| e.to_string())?;
+        let loaded_more: Vec<MergedPullRequest> =
+            serde_json::from_str(loaded_more).map_err(|e| e.to_string())?;
+        json(&merged::derive(&page, &loaded_more, time(now)?))
+    }
 }
 
 #[cfg(test)]
@@ -448,6 +479,48 @@ mod tests {
         assert_eq!(restored.sync_gist().as_deref(), Some("abc"));
         assert!(restored.can_sync(Some("repo, gist".into())));
         assert!(!restored.can_sync(None));
+    }
+
+    #[test]
+    fn sections_are_saved_and_restored_with_todays_defaults_filled_in() {
+        let mut pinger = PingerState::new(None);
+        let defaults: Value = serde_json::from_str(&pinger.my_prs_sections().unwrap()).unwrap();
+        assert_eq!(defaults.as_array().unwrap().len(), 7);
+
+        pinger
+            .set_my_prs_sections(
+                r#"[{"section":"merged","enabled":true},{"section":"draft","enabled":false}]"#,
+                NOW,
+            )
+            .unwrap();
+        let restored = PingerState::new(Some(&pinger.state().unwrap()));
+        let sections: Value = serde_json::from_str(&restored.my_prs_sections().unwrap()).unwrap();
+        assert_eq!(sections[0]["section"], "merged");
+        assert_eq!(sections[0]["enabled"], true);
+        assert_eq!(sections[1]["section"], "draft");
+        assert_eq!(sections[1]["enabled"], false);
+        // Everything else, not mentioned, keeps today's default.
+        assert_eq!(sections.as_array().unwrap().len(), 7);
+    }
+
+    #[test]
+    fn the_merged_section_combines_the_page_with_what_was_loaded_more() {
+        let pinger = PingerState::new(None);
+        let pr = |id: &str, merged_at: &str| {
+            json!({
+                "id": id, "number": 1, "title": "Fix it", "url": "u",
+                "mergedAt": merged_at, "repository": { "nameWithOwner": "o/r" },
+            })
+        };
+        let page = json!([pr("recent", "2026-10-27T12:00:00Z")]).to_string();
+        let loaded_more = json!([pr("old", "2026-10-01T12:00:00Z")]).to_string();
+
+        let views: Value =
+            serde_json::from_str(&pinger.merged_derive(&page, &loaded_more, NOW).unwrap()).unwrap();
+
+        assert_eq!(views.as_array().unwrap().len(), 2);
+        assert_eq!(views[0]["id"], "recent");
+        assert_eq!(views[1]["id"], "old");
     }
 
     #[test]

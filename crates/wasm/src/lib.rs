@@ -164,4 +164,29 @@ impl Pinger {
     pub fn sync_reconcile(&mut self, gist: Option<String>, now: &str) -> Result<String, JsError> {
         js(self.0.sync_reconcile(gist.as_deref(), now))
     }
+
+    /// The order and visibility of "My PRs" sections, as JSON.
+    #[wasm_bindgen(js_name = myPrsSections)]
+    pub fn my_prs_sections(&self) -> Result<String, JsError> {
+        js(self.0.my_prs_sections())
+    }
+
+    #[wasm_bindgen(js_name = setMyPrsSections)]
+    pub fn set_my_prs_sections(&mut self, sections: &str, now: &str) -> Result<(), JsError> {
+        js(self.0.set_my_prs_sections(sections, now))
+    }
+
+    /// The Merged section: `page` (the latest fetch) and `loadedMore` (what
+    /// "Load more" has fetched this session) are JSON arrays of raw GraphQL
+    /// nodes. Returns the PRs merged within the window plus loaded more,
+    /// newest first, as JSON.
+    #[wasm_bindgen(js_name = mergedDerive)]
+    pub fn merged_derive(
+        &self,
+        page: &str,
+        loaded_more: &str,
+        now: &str,
+    ) -> Result<String, JsError> {
+        js(self.0.merged_derive(page, loaded_more, now))
+    }
 }

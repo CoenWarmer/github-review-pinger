@@ -14,6 +14,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::memory::{Memory, PrMemory};
+use crate::sections::SectionPref;
 use crate::slack;
 
 pub const FILE_NAME: &str = "review-pinger-sync.json";
@@ -50,6 +51,10 @@ pub struct SyncDoc {
     pub snoozes: BTreeMap<String, Stamped<Option<DateTime<Utc>>>>,
     /// Slack channel links by lowercase `org/team-slug`; `None` once removed.
     pub team_channels: BTreeMap<String, Stamped<Option<String>>>,
+    /// Order and visibility of "My PRs" sections: one whole list, not a map,
+    /// since reordering is a single change, not many independent ones.
+    #[serde(default)]
+    pub sections: Option<Stamped<Vec<SectionPref>>>,
 }
 
 /// What a device remembers about syncing.
@@ -62,6 +67,9 @@ pub struct SyncMemory {
     /// When each snooze last changed on this device or was taken from the gist.
     pub snoozes: HashMap<String, DateTime<Utc>>,
     pub team_channels: HashMap<String, DateTime<Utc>>,
+    /// When the "My PRs" section order last changed here or was taken from
+    /// the gist.
+    pub sections_changed_at: Option<DateTime<Utc>>,
 }
 
 /// The outcome of merging the gist into a device.
@@ -90,6 +98,14 @@ impl SyncDoc {
     fn merge(&mut self, other: &SyncDoc) {
         newest(&mut self.snoozes, &other.snoozes);
         newest(&mut self.team_channels, &other.team_channels);
+        if let Some(theirs) = &other.sections
+            && self
+                .sections
+                .as_ref()
+                .is_none_or(|ours| theirs.at >= ours.at)
+        {
+            self.sections = Some(theirs.clone());
+        }
     }
 
     fn forget_old(&mut self, now: DateTime<Utc>) {
@@ -146,6 +162,13 @@ fn local_doc(memory: &mut Memory, now: DateTime<Utc>) -> SyncDoc {
             at: *at,
         });
     }
+    if let Some(sections) = &memory.my_prs_sections {
+        let at = *memory.sync.sections_changed_at.get_or_insert(now);
+        doc.sections = Some(Stamped {
+            value: sections.clone(),
+            at,
+        });
+    }
     doc
 }
 
@@ -200,6 +223,19 @@ fn apply(memory: &mut Memory, merged: &SyncDoc, now: DateTime<Utc>) -> bool {
                 None => memory.team_channels.remove(team),
             };
             changed = true;
+        }
+    }
+    if let Some(entry) = &merged.sections {
+        let is_newer = memory
+            .sync
+            .sections_changed_at
+            .is_none_or(|own| entry.at > own);
+        if is_newer {
+            memory.sync.sections_changed_at = Some(entry.at);
+            if memory.my_prs_sections.as_ref() != Some(&entry.value) {
+                memory.my_prs_sections = Some(entry.value.clone());
+                changed = true;
+            }
         }
     }
     changed
@@ -516,6 +552,42 @@ mod tests {
         reconcile(&mut memory, Some(remote), at(NOW));
 
         assert!(memory.team_channels.is_empty());
+    }
+
+    #[test]
+    fn sections_sync_as_one_whole_list() {
+        use crate::sections::Section;
+
+        let mut a = Memory::default();
+        a.set_my_prs_sections(
+            vec![
+                SectionPref {
+                    section: Section::Merged,
+                    enabled: true,
+                },
+                SectionPref {
+                    section: Section::Draft,
+                    enabled: false,
+                },
+            ],
+            at(NOW),
+        );
+        let gist = reconcile(&mut a, None, at(NOW)).upload.unwrap();
+
+        let mut b = Memory::default();
+        let result = reconcile(&mut b, Some(gist.clone()), at(NOW));
+        assert!(result.changed);
+        assert_eq!(
+            b.my_prs_sections.as_ref().unwrap()[0],
+            a.my_prs_sections.as_ref().unwrap()[0]
+        );
+
+        // An older reorder on b loses to a's newer one already in the gist,
+        // which replaces it (so b's list does change, back to a's).
+        b.set_my_prs_sections(vec![], at("2026-10-27T09:00:00Z"));
+        let result = reconcile(&mut b, Some(gist), at(NOW));
+        assert!(result.changed);
+        assert_eq!(b.my_prs_sections, a.my_prs_sections);
     }
 
     #[test]

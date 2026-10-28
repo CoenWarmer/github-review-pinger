@@ -10,6 +10,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use crate::auth::TokenSource;
+use crate::sections::{self, SectionPref};
 use crate::sync::SyncMemory;
 
 #[derive(Debug, Default, Serialize, Deserialize)]
@@ -41,6 +42,11 @@ pub struct Memory {
     /// Which events play a sound.
     #[serde(default)]
     pub sound: SoundMemory,
+    /// Order and visibility of "My PRs" sections. `None` is today's default
+    /// order with everything but Merged shown; read through
+    /// [`Memory::my_prs_sections`], never directly.
+    #[serde(default)]
+    pub my_prs_sections: Option<Vec<SectionPref>>,
 }
 
 /// Which events play a sound. Opt-in, off by default.
@@ -154,5 +160,16 @@ impl Memory {
             None => self.team_channels.remove(&team),
         };
         self.sync.team_channels.insert(team, now);
+    }
+
+    /// The order and visibility of "My PRs" sections: what was saved,
+    /// completed with any section it's missing.
+    pub fn my_prs_sections(&self) -> Vec<SectionPref> {
+        sections::normalize(self.my_prs_sections.as_deref())
+    }
+
+    pub fn set_my_prs_sections(&mut self, sections: Vec<SectionPref>, now: DateTime<Utc>) {
+        self.my_prs_sections = Some(sections::normalize(Some(&sections)));
+        self.sync.sections_changed_at = Some(now);
     }
 }

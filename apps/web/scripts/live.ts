@@ -12,6 +12,7 @@ const queries = {
   search: graphql("search"),
   details: graphql("details") + graphql("pull_request"),
   mergeState: graphql("merge_state"),
+  mergedSearch: graphql("merged_search"),
 };
 
 initSync({
@@ -26,7 +27,7 @@ const pinger = new Pinger();
 const now = new Date().toISOString();
 
 let started = performance.now();
-const fetched = await github.fetchOpenPullRequests(pinger.reviewedSince(now));
+const fetched = await github.fetchOpenPullRequests(pinger.reviewedSince(now), true);
 console.log(
   `fetched for ${fetched.viewer}: ${fetched.pullRequests.length} own PRs, ` +
     `${fetched.reviewPullRequests.length} review PRs ` +

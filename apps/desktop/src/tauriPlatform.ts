@@ -37,6 +37,11 @@ export const tauriPlatform: Platform = {
     invoke("remove_team_channel", { team });
   },
 
+  setMyPrsSections: (sections) => {
+    invoke("set_my_prs_sections", { sections });
+  },
+  loadMoreMerged: () => invoke("load_more_merged"),
+
   saveToken: (token, sync) => invoke("save_token", { token, sync }),
   canSync: (token) => invoke<boolean>("token_can_sync", { token }),
   setSync: (enabled) => {

@@ -181,6 +181,19 @@ bottom:
    time.
 5. **Dormant**: collapsed, most recently active first, with an `idle` time.
 6. **Drafts**: collapsed and not counted.
+7. **Merged**: collapsed; off by default. Your own PRs merged in the last two
+   days, newest first, with a "Load more" button that fetches 5 further
+   (older) ones at a time.
+
+Which of these show, and in what order, is configurable in Settings: a
+drag-and-drop list with a checkbox per section. Order and visibility are
+synced like snoozes and Slack channels, as one whole list rather than
+per-section entries, so a reorder on one device doesn't interleave with a
+visibility change made earlier on another. Hiding a section only hides it:
+the tray count, notifications, and snoozing keep working off the full data
+regardless of what's shown. The fetch itself adjusts only at the extremes:
+the search for your own open PRs is skipped entirely when none of sections
+1–6 are enabled, and the Merged section's search only runs when it is.
 
 Each row shows: repo, title, `open 6d · quiet 2d`, and one chip per reviewer
 with their latest state. An approval or change request outranks a later
@@ -285,6 +298,8 @@ The third tab holds, top to bottom:
   When the team lookup was denied, a hint says to add the `read:org` scope
   (`gh auth refresh -s read:org`, or add it to the token) to see team details
   on the reviewer hover cards. It goes away once a lookup succeeds.
+- A **My PRs sections** list: every section, with a checkbox and a drag
+  handle, in the order they'd show.
 - **Slack channels**: every team with a configured channel, as the team name
   and its link, labeled "settings.json" or "saved". Saved channels (pasted
   into a team chip) can be clicked to change their link in place, and have a

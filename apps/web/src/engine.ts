@@ -4,14 +4,23 @@
 // passed in, so it runs under Node for tests.
 
 import type {
+  MergedPr,
   Problem,
   PullRequest,
   ReviewRequest,
+  SectionPref,
   Snapshot,
   SyncStatus,
   TeamChannel,
 } from "@review-pinger/app";
-import { FetchError, type Found, type Github, type Needs, type RawPullRequest } from "./github.ts";
+import {
+  FetchError,
+  type Found,
+  type Github,
+  type Needs,
+  type RawMergedPullRequest,
+  type RawPullRequest,
+} from "./github.ts";
 
 const TOKEN_KEY = "reviewPinger.token";
 const STATE_KEY = "reviewPinger.state";
@@ -21,6 +30,23 @@ const MAX_BACKOFF_MS = 600_000;
 const SYNC_DELAY_MS = 1_000;
 /// Gists are listed 100 at a time.
 const MAX_GIST_PAGES = 5;
+/// Fetched automatically with every poll, while the Merged section is on.
+const MERGED_PAGE_SIZE = 30;
+/// Fetched per "Load more" click.
+const MERGED_LOAD_MORE = 5;
+/// The six "My PRs" sections that come from the one open-PR fetch, as opposed
+/// to "merged", which needs its own.
+const OPEN_SECTIONS = new Set(["approved", "needsAction", "waiting", "snoozed", "dormant", "draft"]);
+
+/** Whether fetching your open PRs, and your merged PRs, can be skipped. */
+function sectionNeeds(sections: SectionPref[]): { open: boolean; merged: boolean } {
+  const enabled = (section: string) =>
+    sections.some((pref) => pref.section === section && pref.enabled);
+  return {
+    open: sections.some((pref) => OPEN_SECTIONS.has(pref.section) && pref.enabled),
+    merged: enabled("merged"),
+  };
+}
 
 /** What the engine needs to keep, like `localStorage`. */
 export interface KeyValue {
@@ -42,6 +68,9 @@ export interface PingerLike {
   directoryDenied(): boolean;
   setTeamChannel(team: string, link: string, now: string): void;
   removeTeamChannel(team: string, now: string): void;
+  myPrsSections(): string;
+  setMyPrsSections(sections: string, now: string): void;
+  mergedDerive(page: string, loadedMore: string, now: string): string;
   setNotificationsMuted(muted: boolean): void;
   notificationsMuted(): boolean;
   syncEnabled(): boolean;
@@ -97,6 +126,12 @@ export class Engine {
   private visited = new Set<string>();
   /** Ids of the viewer's own PRs, which are the only ones that need a merge state. */
   private ownIds = new Set<string>();
+  /** The Merged section's latest automatic fetch, and what "Load more" has
+   * fetched this session; neither persisted, both reset on reload. */
+  private mergedPage: RawMergedPullRequest[] = [];
+  private mergedLoadedMore: RawMergedPullRequest[] = [];
+  private mergedCursor: string | null = null;
+  private mergedHasMore = false;
   private polling: Promise<void> | null = null;
   /** Syncs run one after another. */
   private syncQueue: Promise<unknown> = Promise.resolve();
@@ -126,6 +161,9 @@ export class Engine {
       teamChannels: {},
       slackOpensIn: "app",
       sync: { enabled: false, available: null, lastSyncedAt: null, gistUrl: null, error: null },
+      myPrsSections: [],
+      mergedPullRequests: [],
+      mergedCanLoadMore: false,
     };
   }
 
@@ -187,6 +225,7 @@ export class Engine {
         enabled: this.pinger.syncEnabled(),
         gistUrl: this.pinger.syncGistUrl() ?? null,
       },
+      myPrsSections: JSON.parse(this.pinger.myPrsSections()) as SectionPref[],
     });
     if (this.token) await this.poll();
     else this.publish({ status: { kind: "error", problem: { code: "noToken" } } });
@@ -266,14 +305,30 @@ export class Engine {
     let delay = POLL_INTERVAL_MS;
     try {
       const now = this.nowIso();
+      // The decision uses sections as they stood before this poll's sync, if
+      // any; a section toggled on via sync just now takes one more poll.
+      const needs = sectionNeeds(JSON.parse(this.pinger.myPrsSections()) as SectionPref[]);
       // Synced alongside, so the lists are derived with the snoozes of other devices.
-      const [fetched] = await Promise.all([
-        github.fetchOpenPullRequests(this.pinger.reviewedSince(now)),
+      const [fetched, mergedPage] = await Promise.all([
+        github.fetchOpenPullRequests(this.pinger.reviewedSince(now), needs.open),
+        needs.merged ? github.fetchMergedPage(null, MERGED_PAGE_SIZE) : Promise.resolve(null),
         this.sync(),
       ]);
       this.ownIds = new Set(fetched.pullRequests.map((pr) => pr.id));
       const tz = this.deps.tzOffsetMinutes?.() ?? -new Date().getTimezoneOffset();
       const update: Update = JSON.parse(this.pinger.poll(JSON.stringify(fetched), now, tz));
+      if (mergedPage) {
+        this.mergedPage = mergedPage.items;
+        this.mergedCursor = mergedPage.endCursor;
+        this.mergedHasMore = mergedPage.hasNextPage;
+      }
+      const mergedPullRequests: MergedPr[] = JSON.parse(
+        this.pinger.mergedDerive(
+          JSON.stringify(this.mergedPage),
+          JSON.stringify(this.mergedLoadedMore),
+          now,
+        ),
+      );
       this.failures = 0;
       this.persist();
       this.publish({
@@ -282,6 +337,10 @@ export class Engine {
         viewer: fetched.viewer,
         fetchedAt: now,
         ssoPartial: fetched.ssoPartial,
+        // Re-read, so a section change synced in just now shows right away.
+        myPrsSections: JSON.parse(this.pinger.myPrsSections()) as SectionPref[],
+        mergedPullRequests,
+        mergedCanLoadMore: this.mergedHasMore,
       });
       this.applyUpdate(update);
       await this.refreshDirectory(github);
@@ -339,6 +398,39 @@ export class Engine {
     this.persist();
     this.rederive();
     this.syncSoon();
+  }
+
+  /** Saves the order and visibility of "My PRs" sections, and refreshes
+   * right away in case a section just turned on needs fetching. */
+  setMyPrsSections(sections: SectionPref[]) {
+    this.pinger.setMyPrsSections(JSON.stringify(sections), this.nowIso());
+    this.persist();
+    this.publish({ myPrsSections: JSON.parse(this.pinger.myPrsSections()) as SectionPref[] });
+    this.syncSoon();
+    void this.refresh();
+  }
+
+  /** Fetches further merged PRs, older than what's already shown. Errors are
+   * only logged: the button stays put, so trying again costs a click. */
+  async loadMoreMerged(): Promise<void> {
+    const github = this.github;
+    if (!github || !this.mergedHasMore) return;
+    try {
+      const page = await github.fetchMergedPage(this.mergedCursor, MERGED_LOAD_MORE);
+      this.mergedLoadedMore = [...this.mergedLoadedMore, ...page.items];
+      this.mergedCursor = page.endCursor;
+      this.mergedHasMore = page.hasNextPage;
+      const mergedPullRequests: MergedPr[] = JSON.parse(
+        this.pinger.mergedDerive(
+          JSON.stringify(this.mergedPage),
+          JSON.stringify(this.mergedLoadedMore),
+          this.nowIso(),
+        ),
+      );
+      this.publish({ mergedPullRequests, mergedCanLoadMore: this.mergedHasMore });
+    } catch (e) {
+      console.warn("Could not load more merged PRs", e);
+    }
   }
 
   /** Whether a token that isn't saved yet could sync, for the sign-in form. */

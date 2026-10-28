@@ -1,5 +1,8 @@
 pub use review_pinger_core::github::types;
-use review_pinger_core::github::{DETAILS_QUERY, MERGE_STATE_QUERY, MERGED_QUERY, SEARCH_QUERY};
+use review_pinger_core::github::{
+    DETAILS_QUERY, MERGE_STATE_QUERY, MERGED_QUERY, MERGED_SEARCH, MERGED_SEARCH_QUERY,
+    SEARCH_QUERY,
+};
 
 use std::collections::{HashMap, HashSet};
 use std::time::Duration;
@@ -12,7 +15,10 @@ use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 
 use crate::directory::{Directory, Found, Needs};
-use types::{CheckState, MergeStateStatus, Mergeable, PullRequest, ReviewDecision, ReviewState};
+use types::{
+    CheckState, MergeStateStatus, Mergeable, MergedPullRequest, PullRequest, ReviewDecision,
+    ReviewState,
+};
 
 const ENDPOINT: &str = "https://api.github.com/graphql";
 const AUTHORED: &str = "is:pr is:open author:@me archived:false";
@@ -62,12 +68,20 @@ pub async fn fetch_open_pull_requests(
     http: &reqwest::Client,
     token: &str,
     reviewed_since: NaiveDate,
+    include_authored: bool,
 ) -> Result<Fetched, FetchError> {
     let reviewed = format!(
         "is:pr is:open reviewed-by:@me -author:@me archived:false updated:>={reviewed_since}"
     );
+    let authored_search = async {
+        if include_authored {
+            search_ids(http, token, AUTHORED).await
+        } else {
+            Ok(SearchResult::default())
+        }
+    };
     let (authored, requested, reviewed) = future::try_join3(
-        search_ids(http, token, AUTHORED),
+        authored_search,
         search_ids(http, token, REVIEW_REQUESTED),
         search_ids(http, token, &reviewed),
     )
@@ -97,11 +111,58 @@ pub async fn fetch_open_pull_requests(
     add_merge_states(http, token, &mut pull_requests).await?;
 
     Ok(Fetched {
-        viewer: authored.viewer,
+        // The authored search may have been skipped; the other two always
+        // know who the viewer is.
+        viewer: if authored.viewer.is_empty() {
+            requested.viewer
+        } else {
+            authored.viewer
+        },
         pull_requests,
         review_pull_requests,
         sso_partial,
     })
+}
+
+/// One page of your merged PRs, newest first. `cursor` continues from a
+/// previous page's `end_cursor`; `None` starts from the top.
+pub async fn fetch_merged_page(
+    http: &reqwest::Client,
+    token: &str,
+    cursor: Option<String>,
+    count: u32,
+) -> Result<MergedPage, FetchError> {
+    let page: Response<MergedSearchData> = request(
+        http,
+        token,
+        MERGED_SEARCH_QUERY,
+        json!({ "q": MERGED_SEARCH, "count": count, "cursor": cursor }),
+    )
+    .await?;
+    let info = page.data.search.page_info;
+    Ok(MergedPage {
+        items: page.data.search.nodes.into_iter().flatten().collect(),
+        has_next_page: info.has_next_page,
+        end_cursor: info.end_cursor,
+    })
+}
+
+pub struct MergedPage {
+    pub items: Vec<MergedPullRequest>,
+    pub has_next_page: bool,
+    pub end_cursor: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct MergedSearchData {
+    search: MergedSearch,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct MergedSearch {
+    page_info: PageInfo,
+    nodes: Vec<Option<MergedPullRequest>>,
 }
 
 /// Fetches the details of specific pull requests, for refreshing a few
@@ -304,6 +365,7 @@ fn could_be_ready(pr: &PullRequest) -> bool {
         && pr.merge_queue_entry.is_none()
 }
 
+#[derive(Default)]
 struct SearchResult {
     viewer: String,
     ids: Vec<String>,
@@ -619,9 +681,13 @@ mod tests {
         let token = auth::resolve_token(None).expect("gh is logged in");
         let http = http_client();
         let since = (Utc::now() - chrono::Duration::days(30)).date_naive();
-        let fetched =
-            tauri::async_runtime::block_on(fetch_open_pull_requests(&http, &token.value, since))
-                .expect("fetch succeeds");
+        let fetched = tauri::async_runtime::block_on(fetch_open_pull_requests(
+            &http,
+            &token.value,
+            since,
+            true,
+        ))
+        .expect("fetch succeeds");
         let needs = prs::directory_needs(
             fetched
                 .pull_requests
@@ -655,6 +721,7 @@ mod tests {
             &http_client(),
             &token.value,
             since,
+            true,
         ))
         .expect("fetch succeeds");
         println!(
@@ -700,6 +767,41 @@ mod tests {
                 pr.checks_started,
                 reviewers.join(", ")
             );
+        }
+    }
+
+    #[test]
+    #[ignore = "calls the GitHub API with your gh token"]
+    fn live_merged() {
+        let token = auth::resolve_token(None).expect("gh is logged in");
+        let http = http_client();
+        let page = tauri::async_runtime::block_on(fetch_merged_page(&http, &token.value, None, 10))
+            .expect("fetch succeeds");
+        println!(
+            "{} merged PRs, has_next_page={}",
+            page.items.len(),
+            page.has_next_page
+        );
+        for pr in &page.items {
+            println!(
+                "{} {}#{} merged {}",
+                pr.title, pr.repository.name_with_owner, pr.number, pr.merged_at
+            );
+        }
+        if let Some(cursor) = page.end_cursor {
+            let next = tauri::async_runtime::block_on(fetch_merged_page(
+                &http,
+                &token.value,
+                Some(cursor),
+                5,
+            ))
+            .expect("second page succeeds");
+            println!("next page: {} items", next.items.len());
+            let overlap = next
+                .items
+                .iter()
+                .any(|a| page.items.iter().any(|b| a.id == b.id));
+            assert!(!overlap, "pages should not repeat the same PR");
         }
     }
 }

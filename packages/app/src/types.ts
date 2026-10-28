@@ -7,6 +7,25 @@ export type Action =
 
 export type Group = "approved" | "needsAction" | "waiting" | "snoozed" | "dormant" | "draft";
 
+/** A section of the "My PRs" tab, including the virtual "merged" one. */
+export type Section = Group | "merged";
+
+/** Whether a "My PRs" section shows, and where: order is the array order. */
+export interface SectionPref {
+  section: Section;
+  enabled: boolean;
+}
+
+/** A PR in the "Merged" section. */
+export interface MergedPr {
+  id: string;
+  number: number;
+  title: string;
+  url: string;
+  repo: string;
+  mergedAt: string;
+}
+
 export type ReviewGroup = "needsReview" | "waitingOnAuthor" | "snoozed" | "draft";
 
 export type ReviewerState = "changesRequested" | "approved" | "commented" | "pending";
@@ -153,4 +172,10 @@ export interface Snapshot {
   teamChannels: Record<string, TeamChannel>;
   slackOpensIn: "app" | "browser";
   sync: SyncStatus;
+  /** Order and visibility of "My PRs" sections. */
+  myPrsSections: SectionPref[];
+  /** Merged in the last couple of days, or further back via "Load more". */
+  mergedPullRequests: MergedPr[];
+  /** Whether "Load more" would find anything. */
+  mergedCanLoadMore: boolean;
 }

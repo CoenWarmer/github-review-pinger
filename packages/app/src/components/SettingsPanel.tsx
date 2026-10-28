@@ -8,7 +8,8 @@ import { Switch } from "@/components/ui/switch";
 import { TeamChannelForm } from "../slack";
 import { ago } from "../format";
 import { useNow } from "../hooks";
-import type { SyncStatus, TeamChannel, TokenSource } from "../types";
+import type { SectionPref, SyncStatus, TeamChannel, TokenSource } from "../types";
+import { MyPrsSections } from "./MyPrsSections";
 import { SYNC_ABOUT, SYNC_LABEL } from "./Setup";
 
 const AUTH_OPTIONS: { source: TokenSource; label: string }[] = [
@@ -25,6 +26,7 @@ export function SettingsPanel({
   teamLookupDenied,
   channels,
   sync,
+  myPrsSections,
 }: {
   /** Who is signed in. */
   account: string | null;
@@ -40,6 +42,8 @@ export function SettingsPanel({
   /** Slack channels by team. */
   channels: Record<string, TeamChannel>;
   sync: SyncStatus;
+  /** Order and visibility of "My PRs" sections. */
+  myPrsSections: SectionPref[];
 }) {
   const platform = usePlatform();
   const {
@@ -212,6 +216,10 @@ export function SettingsPanel({
           )}
         </Section>
       )}
+      <Section>
+        <Heading>My PRs sections</Heading>
+        <MyPrsSections sections={myPrsSections} />
+      </Section>
       <Section>
         <Heading>Sync</Heading>
         <SyncSetting sync={sync} />

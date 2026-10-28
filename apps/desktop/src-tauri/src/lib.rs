@@ -22,7 +22,8 @@ use poller::{Poller, Snapshot};
 
 // The pure logic lives in its own crate; these keep the old `crate::` paths working.
 pub use review_pinger_core::{
-    calendar, checks, directory, engine, memory, notify, prs, reviews, slack, sync,
+    calendar, checks, directory, engine, memory, merged, notify, prs, reviews, sections, slack,
+    sync,
 };
 
 const POPOVER: &str = "main";
@@ -114,6 +115,21 @@ fn set_notifications_muted(app: AppHandle, poller: State<Arc<Poller>>, muted: bo
 #[tauri::command]
 fn set_sound_on_merge(app: AppHandle, poller: State<Arc<Poller>>, enabled: bool) {
     poller.set_sound_on_merge(&app, enabled);
+}
+
+#[tauri::command]
+fn set_my_prs_sections(
+    app: AppHandle,
+    poller: State<Arc<Poller>>,
+    sections: Vec<sections::SectionPref>,
+) {
+    poller.set_my_prs_sections(&app, sections);
+}
+
+#[tauri::command]
+async fn load_more_merged(app: AppHandle, poller: State<'_, Arc<Poller>>) -> Result<(), ()> {
+    poller.load_more_merged(&app).await;
+    Ok(())
 }
 
 #[tauri::command]
@@ -243,6 +259,8 @@ pub fn run() {
             send_test_notification,
             set_notifications_muted,
             set_sound_on_merge,
+            set_my_prs_sections,
+            load_more_merged,
             set_team_channel,
             remove_team_channel,
             save_token,

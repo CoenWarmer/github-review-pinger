@@ -20,9 +20,11 @@ use crate::engine::{self, Fetched};
 use crate::gist;
 use crate::github::{self, FetchError};
 use crate::memory::Memory;
+use crate::merged::{self, MergedPrView};
 use crate::notify;
 use crate::prs::{self, PrView};
 use crate::reviews::ReviewView;
+use crate::sections::{self, SectionPref};
 use crate::settings::{self, Settings, SlackOpensIn};
 use crate::slack::{self, Channel};
 use crate::sound;
@@ -30,6 +32,10 @@ use crate::sync;
 
 const POLL_INTERVAL: Duration = Duration::from_secs(120);
 const MAX_BACKOFF: Duration = Duration::from_secs(600);
+/// Fetched automatically with every poll, while the Merged section is on.
+const MERGED_PAGE_SIZE: u32 = 30;
+/// Fetched per "Load more" click.
+const MERGED_LOAD_MORE: u32 = 5;
 pub const TRAY_ID: &str = "tray";
 
 #[derive(Debug, Clone, Serialize)]
@@ -59,6 +65,24 @@ pub struct Snapshot {
     pub sync: SyncStatus,
     /// Plays a sound when one of your own PRs is merged.
     pub sound_on_merge: bool,
+    /// Order and visibility of "My PRs" sections.
+    pub my_prs_sections: Vec<SectionPref>,
+    /// Merged in the last couple of days, or further back via "Load more".
+    pub merged_pull_requests: Vec<MergedPrView>,
+    /// Whether "Load more" would find anything.
+    pub merged_can_load_more: bool,
+}
+
+/// The automatic page and "Load more" extension of the Merged section, kept
+/// apart from `Poller::latest` since they paginate on their own. Not
+/// persisted: a restart starts over from the top.
+#[derive(Default)]
+struct MergedState {
+    page: Vec<github::types::MergedPullRequest>,
+    loaded_more: Vec<github::types::MergedPullRequest>,
+    /// Where the next "Load more" continues from.
+    cursor: Option<String>,
+    has_more: bool,
 }
 
 /// Sharing snoozes and Slack channels with other devices.
@@ -117,6 +141,8 @@ pub struct Poller {
     sync_wake: Notify,
     /// Keeps a poll and a change from syncing at the same time.
     sync_lock: tokio::sync::Mutex<()>,
+    /// The Merged section's automatic page and "Load more" extension.
+    merged: Mutex<MergedState>,
     http: reqwest::Client,
 }
 
@@ -333,6 +359,8 @@ impl Poller {
     /// Updates the snapshot from the last fetch, after snoozes or a single
     /// PR changed.
     fn rederive(&self, app: &AppHandle) {
+        let sections = self.memory.lock().unwrap().my_prs_sections();
+        self.update(app, |s| s.my_prs_sections = sections);
         let latest = self.latest.lock().unwrap();
         if let Some(fetched) = latest.as_ref() {
             let (views, review_views) = self.derive(app, fetched, Utc::now());
@@ -342,6 +370,57 @@ impl Poller {
                 s.review_requests = review_views;
                 s.team_lookup_denied = denied;
             });
+        }
+    }
+
+    /// Saves the order and visibility of "My PRs" sections, and refreshes
+    /// right away in case a section just turned on needs fetching.
+    pub fn set_my_prs_sections(&self, app: &AppHandle, prefs: Vec<SectionPref>) {
+        let effective = {
+            let mut memory = self.memory.lock().unwrap();
+            memory.set_my_prs_sections(prefs, Utc::now());
+            self.save(&memory);
+            memory.my_prs_sections()
+        };
+        self.update(app, |s| s.my_prs_sections = effective);
+        self.sync_wake.notify_one();
+        self.refresh();
+    }
+
+    /// Fetches further merged PRs, older than what's already shown. Errors
+    /// are only logged: the button stays put, so trying again costs a click.
+    pub async fn load_more_merged(&self, app: &AppHandle) {
+        let cursor = {
+            let state = self.merged.lock().unwrap();
+            if !state.has_more {
+                return;
+            }
+            state.cursor.clone()
+        };
+        let chosen = self.auth_source();
+        let Ok(Ok(token)) =
+            tauri::async_runtime::spawn_blocking(move || auth::resolve_token(chosen)).await
+        else {
+            return;
+        };
+        match github::fetch_merged_page(&self.http, &token.value, cursor, MERGED_LOAD_MORE).await {
+            Ok(page) => {
+                let (views, can_load_more) = {
+                    let mut state = self.merged.lock().unwrap();
+                    state.loaded_more.extend(page.items);
+                    state.cursor = page.end_cursor;
+                    state.has_more = page.has_next_page;
+                    (
+                        merged::derive(&state.page, &state.loaded_more, Utc::now()),
+                        state.has_more,
+                    )
+                };
+                self.update(app, |s| {
+                    s.merged_pull_requests = views;
+                    s.merged_can_load_more = can_load_more;
+                });
+            }
+            Err(e) => log::warn!("Could not load more merged PRs: {e:?}"),
         }
     }
 
@@ -423,6 +502,9 @@ pub fn start(app: &AppHandle) -> Arc<Poller> {
                 error: None,
             },
             sound_on_merge: memory.sound.pr_merged,
+            my_prs_sections: memory.my_prs_sections(),
+            merged_pull_requests: Vec::new(),
+            merged_can_load_more: false,
         }),
         latest: Mutex::new(None),
         memory: Mutex::new(memory),
@@ -433,6 +515,7 @@ pub fn start(app: &AppHandle) -> Arc<Poller> {
         wake: Notify::new(),
         sync_wake: Notify::new(),
         sync_lock: tokio::sync::Mutex::new(()),
+        merged: Mutex::new(MergedState::default()),
         http: github::http_client(),
     });
     tauri::async_runtime::spawn(run(app.clone(), poller.clone()));
@@ -601,7 +684,43 @@ async fn poll_once(app: &AppHandle, poller: &Poller) -> Result<(), Problem> {
     *poller.latest.lock().unwrap() = Some(fetched);
     refresh_directory(app, poller).await;
     check_merged(poller, vanished_own).await;
+    refresh_merged_section(app, poller, now).await;
     Ok(())
+}
+
+/// Refreshes the Merged section's automatic page, if it's on. Skipped, with
+/// no request at all, while it's off. Errors are only logged: the last good
+/// page (if any) stays shown.
+async fn refresh_merged_section(app: &AppHandle, poller: &Poller, now: DateTime<Utc>) {
+    let sections = poller.memory.lock().unwrap().my_prs_sections();
+    if !sections::needs(&sections).merged {
+        return;
+    }
+    let chosen = poller.auth_source();
+    let Ok(Ok(token)) =
+        tauri::async_runtime::spawn_blocking(move || auth::resolve_token(chosen)).await
+    else {
+        return;
+    };
+    match github::fetch_merged_page(&poller.http, &token.value, None, MERGED_PAGE_SIZE).await {
+        Ok(page) => {
+            let (views, can_load_more) = {
+                let mut state = poller.merged.lock().unwrap();
+                state.page = page.items;
+                state.cursor = page.end_cursor;
+                state.has_more = page.has_next_page;
+                (
+                    merged::derive(&state.page, &state.loaded_more, now),
+                    state.has_more,
+                )
+            };
+            poller.update(app, |s| {
+                s.merged_pull_requests = views;
+                s.merged_can_load_more = can_load_more;
+            });
+        }
+        Err(e) => log::warn!("Could not fetch merged PRs: {e:?}"),
+    }
 }
 
 /// Looks up whatever the hover cards still need to know about teams and
@@ -712,16 +831,25 @@ async fn fetch(
     token: &auth::Token,
     reviewed_since: NaiveDate,
 ) -> Result<Fetched, Problem> {
-    let fetched = github::fetch_open_pull_requests(&poller.http, &token.value, reviewed_since)
-        .await
-        .map_err(|e| match e {
-            FetchError::Unauthorized => Problem::TokenRejected {
-                source: token.source,
-            },
-            FetchError::RateLimited { reset_at } => Problem::RateLimited { reset_at },
-            FetchError::Network(message) => Problem::Network { message },
-            FetchError::Api(message) => Problem::Api { message },
-        })?;
+    let include_authored = {
+        let memory = poller.memory.lock().unwrap();
+        sections::needs(&memory.my_prs_sections()).open
+    };
+    let fetched = github::fetch_open_pull_requests(
+        &poller.http,
+        &token.value,
+        reviewed_since,
+        include_authored,
+    )
+    .await
+    .map_err(|e| match e {
+        FetchError::Unauthorized => Problem::TokenRejected {
+            source: token.source,
+        },
+        FetchError::RateLimited { reset_at } => Problem::RateLimited { reset_at },
+        FetchError::Network(message) => Problem::Network { message },
+        FetchError::Api(message) => Problem::Api { message },
+    })?;
 
     Ok(Fetched {
         viewer: fetched.viewer,

@@ -18,6 +18,8 @@ const MAX_MEMBER_PAGES = 5;
 
 const AUTHORED = "is:pr is:open author:@me archived:false";
 const REVIEW_REQUESTED = "is:pr is:open review-requested:@me -author:@me archived:false";
+/** Always this text, so "Load more" can keep paging through the same cursor sequence. */
+const MERGED_SEARCH = "is:pr is:merged author:@me archived:false sort:updated-desc";
 
 const MEMBERS_QUERY =
   "query($org: String!, $slug: String!, $after: String) { organization(login: $org) { team(slug: $slug) { members(first: 100, after: $after) { nodes { login } pageInfo { hasNextPage endCursor } } } } }";
@@ -28,6 +30,7 @@ export interface Queries {
   /** The details query followed by the pull request fragment it uses. */
   details: string;
   mergeState: string;
+  mergedSearch: string;
 }
 
 export type FailureKind = "unauthorized" | "rateLimited" | "network" | "api";
@@ -69,6 +72,23 @@ export interface Fetched {
   ssoPartial: boolean;
 }
 
+/** A merged PR as the lighter merged-PR search returns it. */
+export interface RawMergedPullRequest {
+  id: string;
+  number: number;
+  title: string;
+  url: string;
+  mergedAt: string;
+  repository: { nameWithOwner: string };
+}
+
+/** One page of merged PRs, newest first. */
+export interface MergedPage {
+  items: RawMergedPullRequest[];
+  hasNextPage: boolean;
+  endCursor: string | null;
+}
+
 /** What a team lookup found: lowercase member logins by `org/slug`. */
 export interface Found {
   teams: Record<string, string[]>;
@@ -81,8 +101,11 @@ export interface Needs {
 }
 
 export interface Github {
-  fetchOpenPullRequests(reviewedSince: string): Promise<Fetched>;
+  /** `includeAuthored` is false to skip the search for your own open PRs entirely. */
+  fetchOpenPullRequests(reviewedSince: string, includeAuthored: boolean): Promise<Fetched>;
   fetchDetails(ids: string[]): Promise<RawPullRequest[]>;
+  /** `cursor` continues from a previous page's `endCursor`; `null` starts from the top. */
+  fetchMergedPage(cursor: string | null, count: number): Promise<MergedPage>;
   addMergeStates(pullRequests: RawPullRequest[]): Promise<void>;
   fetchDirectory(needs: Needs): Promise<Found>;
   /** The token's scopes as GitHub lists them; `null` for tokens that have none, such as fine-grained ones. */
@@ -277,10 +300,11 @@ export function createGithub({
   }
 
   const github: Github = {
-    async fetchOpenPullRequests(reviewedSince) {
+    async fetchOpenPullRequests(reviewedSince, includeAuthored) {
       const reviewed = `is:pr is:open reviewed-by:@me -author:@me archived:false updated:>=${reviewedSince}`;
+      const emptySearch = { viewer: "", ids: [] as string[], ssoPartial: false };
       const [authored, requested, reviewedByMe] = await Promise.all([
-        searchIds(AUTHORED),
+        includeAuthored ? searchIds(AUTHORED) : Promise.resolve(emptySearch),
         searchIds(REVIEW_REQUESTED),
         searchIds(reviewed),
       ]);
@@ -296,7 +320,8 @@ export function createGithub({
 
       await github.addMergeStates(pullRequests);
       return {
-        viewer: authored.viewer,
+        // The authored search may have been skipped; the other two always know who the viewer is.
+        viewer: authored.viewer || requested.viewer,
         pullRequests,
         reviewPullRequests,
         ssoPartial: authored.ssoPartial || requested.ssoPartial || reviewedByMe.ssoPartial,
@@ -304,6 +329,25 @@ export function createGithub({
     },
 
     fetchDetails: (ids) => inBatches<RawPullRequest>(queries.details, ids),
+
+    async fetchMergedPage(cursor, count) {
+      interface Data {
+        search: {
+          pageInfo: { hasNextPage: boolean; endCursor: string | null };
+          nodes: (RawMergedPullRequest | null)[];
+        };
+      }
+      const reply: Reply<Data> = await request<Data>(queries.mergedSearch, {
+        q: MERGED_SEARCH,
+        count,
+        cursor,
+      });
+      return {
+        items: reply.data.search.nodes.filter((node): node is RawMergedPullRequest => node !== null),
+        hasNextPage: reply.data.search.pageInfo.hasNextPage,
+        endCursor: reply.data.search.pageInfo.endCursor,
+      };
+    },
 
     async addMergeStates(pullRequests) {
       const candidates = pullRequests.filter(couldBeReady).map((pr) => pr.id);

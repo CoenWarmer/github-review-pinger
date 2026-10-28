@@ -5,6 +5,19 @@ use chrono::{DateTime, Utc};
 use serde::Deserialize;
 use serde::de::IgnoredAny;
 
+/// A merged PR as the lighter merged-PR search returns it: just enough to
+/// list it, none of the open-PR fields that don't apply once it's merged.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MergedPullRequest {
+    pub id: String,
+    pub number: u64,
+    pub title: String,
+    pub url: String,
+    pub repository: Repository,
+    pub merged_at: DateTime<Utc>,
+}
+
 #[derive(Debug, Deserialize)]
 pub struct Nodes<T> {
     pub nodes: Vec<Option<T>>,
@@ -70,7 +83,7 @@ pub struct PullRequest {
     pub timeline_items: Nodes<TimelineItem>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Repository {
     pub name_with_owner: String,
