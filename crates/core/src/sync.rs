@@ -22,6 +22,11 @@ pub const DESCRIPTION: &str = "Review Pinger sync: snoozes and Slack channels";
 /// Entries this old, and no longer in effect, are dropped.
 const FORGET_AFTER_DAYS: i64 = 30;
 
+/// Where a gist can be read on GitHub, which redirects to the owner's copy.
+pub fn gist_url(id: &str) -> String {
+    format!("https://gist.github.com/{id}")
+}
+
 /// Whether a token can read and write gists, from the `X-OAuth-Scopes`
 /// header of any API response. Fine-grained tokens have no such header and
 /// can't use gists at all, so they never qualify.

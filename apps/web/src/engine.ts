@@ -50,6 +50,7 @@ export interface PingerLike {
   setSyncEnabled(enabled: boolean): void;
   syncGist(): string | undefined | null;
   setSyncGist(id: string | undefined | null): void;
+  syncGistUrl(): string | undefined | null;
   canSync(scopes: string | undefined | null): boolean;
   findSyncGist(list: string): string | undefined | null;
   syncReconcile(gist: string | undefined | null, now: string): string;
@@ -125,7 +126,7 @@ export class Engine {
       reviewRequests: [],
       teamChannels: {},
       slackOpensIn: "app",
-      sync: { enabled: false, available: null, lastSyncedAt: null, error: null },
+      sync: { enabled: false, available: null, lastSyncedAt: null, gistUrl: null, error: null },
     };
   }
 
@@ -182,7 +183,11 @@ export class Engine {
     this.publish({
       hasSavedToken: this.token !== null,
       notificationsMuted: this.pinger.notificationsMuted(),
-      sync: { ...this.snapshot.sync, enabled: this.pinger.syncEnabled() },
+      sync: {
+        ...this.snapshot.sync,
+        enabled: this.pinger.syncEnabled(),
+        gistUrl: this.pinger.syncGistUrl() ?? null,
+      },
     });
     if (this.token) await this.poll();
     else this.publish({ status: { kind: "error", problem: { code: "noToken" } } });
@@ -413,7 +418,11 @@ export class Engine {
         }
       }
       this.persist();
-      this.publishSync({ lastSyncedAt: now, error: null });
+      this.publishSync({
+        lastSyncedAt: now,
+        gistUrl: this.pinger.syncGistUrl() ?? null,
+        error: null,
+      });
       return result.changed;
     } catch (e) {
       console.warn("Could not sync", e);

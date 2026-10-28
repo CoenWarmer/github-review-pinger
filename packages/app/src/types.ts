@@ -124,6 +124,8 @@ export interface SyncStatus {
   /** The token can use gists; null until checked. */
   available: boolean | null;
   lastSyncedAt: string | null;
+  /** Where the gist is on GitHub, once there is one. */
+  gistUrl: string | null;
   /** What went wrong the last time. */
   error: string | null;
 }

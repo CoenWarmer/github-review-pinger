@@ -309,6 +309,7 @@ describe("syncing snoozes and channels", () => {
     assert.equal(sync.enabled, true);
     assert.equal(sync.error, null);
     assert.equal(Date.parse(sync.lastSyncedAt!), Date.parse(NOW));
+    assert.equal(sync.gistUrl, "https://gist.github.com/g1");
   });
 
   it("can't be turned on with a token that lacks the scope", async () => {

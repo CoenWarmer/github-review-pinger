@@ -188,6 +188,17 @@ function SyncSetting({ sync }: { sync: SyncStatus }) {
           {sync.enabled && sync.lastSyncedAt && ` Last synced ${ago(sync.lastSyncedAt, now)}.`}
         </p>
       )}
+      {sync.enabled && !unavailable && sync.gistUrl && (
+        <Button
+          type="button"
+          variant="link"
+          size="xs"
+          className="h-auto self-start p-0"
+          onClick={() => platform.openUrl(sync.gistUrl!)}
+        >
+          Open the gist on GitHub
+        </Button>
+      )}
       {sync.enabled && !unavailable && sync.error && (
         <p className="m-0 text-xs text-destructive">{sync.error}</p>
       )}

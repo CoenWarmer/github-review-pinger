@@ -66,6 +66,8 @@ pub struct SyncStatus {
     /// Whether the token can use gists; `None` until checked.
     pub available: Option<bool>,
     pub last_synced_at: Option<DateTime<Utc>>,
+    /// Where the gist is on GitHub, once there is one.
+    pub gist_url: Option<String>,
     /// What went wrong the last time, to show.
     pub error: Option<String>,
 }
@@ -234,12 +236,23 @@ impl Poller {
         }
         let result = self.sync_gist(token).await;
         let changed = *result.as_ref().unwrap_or(&false);
-        self.update(app, |s| match &result {
-            Ok(_) => {
-                s.sync.last_synced_at = Some(Utc::now());
-                s.sync.error = None;
+        let gist_url = self
+            .memory
+            .lock()
+            .unwrap()
+            .sync
+            .gist_id
+            .as_deref()
+            .map(sync::gist_url);
+        self.update(app, |s| {
+            s.sync.gist_url = gist_url;
+            match &result {
+                Ok(_) => {
+                    s.sync.last_synced_at = Some(Utc::now());
+                    s.sync.error = None;
+                }
+                Err(e) => s.sync.error = Some(e.clone()),
             }
-            Err(e) => s.sync.error = Some(e.clone()),
         });
         if changed {
             self.rederive(app);
@@ -396,6 +409,7 @@ pub fn start(app: &AppHandle) -> Arc<Poller> {
                 enabled: memory.sync.enabled,
                 available: None,
                 last_synced_at: None,
+                gist_url: memory.sync.gist_id.as_deref().map(sync::gist_url),
                 error: None,
             },
         }),

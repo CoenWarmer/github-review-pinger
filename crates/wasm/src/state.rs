@@ -264,6 +264,11 @@ impl PingerState {
         self.memory.sync.gist_id = id;
     }
 
+    /// Where the sync gist is on GitHub, once there is one.
+    pub fn sync_gist_url(&self) -> Option<String> {
+        self.memory.sync.gist_id.as_deref().map(sync::gist_url)
+    }
+
     /// Whether a token can use gists, from its `X-OAuth-Scopes` header.
     pub fn can_sync(&self, scopes: Option<String>) -> bool {
         sync::can_sync(scopes.as_deref())

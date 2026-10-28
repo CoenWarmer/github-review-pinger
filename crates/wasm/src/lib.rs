@@ -133,6 +133,12 @@ impl Pinger {
         self.0.sync_gist()
     }
 
+    /// Where the sync gist is on GitHub, once there is one.
+    #[wasm_bindgen(js_name = syncGistUrl)]
+    pub fn sync_gist_url(&self) -> Option<String> {
+        self.0.sync_gist_url()
+    }
+
     #[wasm_bindgen(js_name = setSyncGist)]
     pub fn set_sync_gist(&mut self, id: Option<String>) {
         self.0.set_sync_gist(id);
