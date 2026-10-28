@@ -114,9 +114,11 @@ pub fn vanished_own_prs(views: &[PrView], memory: &Memory) -> Vec<String> {
 /// the last poll: new responses from others, waiting PRs whose current quiet
 /// period has just exceeded `nudge_after` weekday time in `tz`, new review
 /// requests, and requested reviews waiting longer than `review_nudge_after`.
+#[allow(clippy::too_many_arguments)]
 pub fn diff<Tz: TimeZone>(
     views: &[PrView],
     reviews: &[ReviewView],
+    other_ids: &[String],
     memory: &mut Memory,
     now: DateTime<Utc>,
     nudge_after: Duration,
@@ -185,10 +187,15 @@ pub fn diff<Tz: TimeZone>(
         }
     }
 
+    // `other_ids` (e.g. custom-view PRs that aren't also yours or
+    // requested) only count here, so a snooze on one is eventually forgotten
+    // once it stops matching anything; they don't get events above, since
+    // views are informational and don't notify or count toward the tray.
     let open: HashSet<&str> = views
         .iter()
         .map(|v| v.id.as_str())
         .chain(reviews.iter().map(|v| v.id.as_str()))
+        .chain(other_ids.iter().map(String::as_str))
         .collect();
     // A snooze outlives a poll that misses its PR, which GitHub's search
     // sometimes does, so it isn't forgotten before it ends.
@@ -380,6 +387,7 @@ mod tests {
         diff(
             views,
             reviews,
+            &[],
             memory,
             at(now),
             Duration::hours(24),
@@ -440,6 +448,40 @@ mod tests {
     fn nothing_vanishes_on_the_very_first_poll() {
         let memory = Memory::default();
         assert!(vanished_own_prs(&[], &memory).is_empty());
+    }
+
+    #[test]
+    fn a_snooze_on_a_view_only_pr_is_kept_while_it_still_matches_and_dropped_once_it_doesnt() {
+        let mut memory = Memory::default();
+        memory.set_snooze("view-only", Some(at("2026-11-02T09:00:00Z")), at(TUESDAY));
+        let other_ids = vec!["view-only".to_string()];
+
+        let keep = diff(
+            &[],
+            &[],
+            &other_ids,
+            &mut memory,
+            at("2026-10-06T09:00:00Z"),
+            Duration::hours(24),
+            Duration::hours(24),
+            &Amsterdam,
+        );
+        assert!(keep.is_empty());
+        assert!(memory.pull_requests.contains_key("view-only"));
+        // No events for it either: views are informational, not notified.
+
+        // Past the snooze's own end, with nothing left to say it still matters.
+        diff(
+            &[],
+            &[],
+            &[],
+            &mut memory,
+            at("2026-11-03T09:00:00Z"),
+            Duration::hours(24),
+            Duration::hours(24),
+            &Amsterdam,
+        );
+        assert!(!memory.pull_requests.contains_key("view-only"));
     }
 
     #[test]

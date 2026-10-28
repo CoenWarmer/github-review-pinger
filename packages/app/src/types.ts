@@ -7,6 +7,33 @@ export type Action =
 
 export type Group = "approved" | "needsAction" | "waiting" | "snoozed" | "dormant" | "draft";
 
+/** A built-in section of the "My PRs" tab, including the virtual "merged" one. */
+export type Section = Group | "merged";
+
+/** Whether a "My PRs" section shows, and where: order is the array order. */
+export type SectionPref =
+  | { kind: "builtin"; section: Section; enabled: boolean }
+  | { kind: "view"; id: string; enabled: boolean };
+
+/** A PR in the "Merged" section, or in a custom view. */
+export interface MergedPr {
+  id: string;
+  number: number;
+  title: string;
+  url: string;
+  repo: string;
+  mergedAt: string;
+}
+
+/** A custom "My PRs" section backed by your own GitHub search query. */
+export interface View {
+  /** Stable regardless of renames, so the section order and sync don't break. */
+  id: string;
+  name: string;
+  /** GitHub issue-search qualifiers. `is:pr` is always added. */
+  query: string;
+}
+
 export type ReviewGroup = "needsReview" | "waitingOnAuthor" | "snoozed" | "draft";
 
 export type ReviewerState = "changesRequested" | "approved" | "commented" | "pending";
@@ -153,4 +180,15 @@ export interface Snapshot {
   teamChannels: Record<string, TeamChannel>;
   slackOpensIn: "app" | "browser";
   sync: SyncStatus;
+  /** Order and visibility of "My PRs" sections. */
+  myPrsSections: SectionPref[];
+  /** Merged in the last couple of days, or further back via "Load more". */
+  mergedPullRequests: MergedPr[];
+  /** Whether "Load more" would find anything. */
+  mergedCanLoadMore: boolean;
+  /** Your custom views: a name and a GitHub search query. */
+  views: View[];
+  /** Each view's matching PRs, by view id. Full PR detail, the same as the
+   * built-in sections, but shown as one flat list. */
+  viewPullRequests: Record<string, PullRequest[]>;
 }

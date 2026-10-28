@@ -18,6 +18,8 @@ const MAX_MEMBER_PAGES = 5;
 
 const AUTHORED = "is:pr is:open author:@me archived:false";
 const REVIEW_REQUESTED = "is:pr is:open review-requested:@me -author:@me archived:false";
+/** Always this text, so "Load more" can keep paging through the same cursor sequence. */
+const MERGED_SEARCH = "is:pr is:merged author:@me archived:false sort:updated-desc";
 
 const MEMBERS_QUERY =
   "query($org: String!, $slug: String!, $after: String) { organization(login: $org) { team(slug: $slug) { members(first: 100, after: $after) { nodes { login } pageInfo { hasNextPage endCursor } } } } }";
@@ -28,6 +30,7 @@ export interface Queries {
   /** The details query followed by the pull request fragment it uses. */
   details: string;
   mergeState: string;
+  mergedSearch: string;
 }
 
 export type FailureKind = "unauthorized" | "rateLimited" | "network" | "api";
@@ -65,8 +68,29 @@ export interface Fetched {
   pullRequests: RawPullRequest[];
   /** Open PRs by others that the viewer is asked to review or already reviewed. */
   reviewPullRequests: RawPullRequest[];
+  /** Each enabled custom view's matching PRs, by view id. A PR already in
+   * `pullRequests` or `reviewPullRequests` that also matches a view shows up
+   * in both. */
+  viewPullRequests: Record<string, RawPullRequest[]>;
   /** GitHub left out orgs whose SSO the token isn't authorized for. */
   ssoPartial: boolean;
+}
+
+/** A merged PR as the lighter merged-PR search returns it. */
+export interface RawMergedPullRequest {
+  id: string;
+  number: number;
+  title: string;
+  url: string;
+  mergedAt: string;
+  repository: { nameWithOwner: string };
+}
+
+/** One page of merged PRs, newest first. */
+export interface MergedPage {
+  items: RawMergedPullRequest[];
+  hasNextPage: boolean;
+  endCursor: string | null;
 }
 
 /** What a team lookup found: lowercase member logins by `org/slug`. */
@@ -81,8 +105,19 @@ export interface Needs {
 }
 
 export interface Github {
-  fetchOpenPullRequests(reviewedSince: string): Promise<Fetched>;
+  /**
+   * `includeAuthored` is false to skip the search for your own open PRs
+   * entirely. `views` is `[id, query]` pairs for enabled custom views, each
+   * already including `is:pr`.
+   */
+  fetchOpenPullRequests(
+    reviewedSince: string,
+    includeAuthored: boolean,
+    views: [string, string][],
+  ): Promise<Fetched>;
   fetchDetails(ids: string[]): Promise<RawPullRequest[]>;
+  /** `cursor` continues from a previous page's `endCursor`; `null` starts from the top. */
+  fetchMergedPage(cursor: string | null, count: number): Promise<MergedPage>;
   addMergeStates(pullRequests: RawPullRequest[]): Promise<void>;
   fetchDirectory(needs: Needs): Promise<Found>;
   /** The token's scopes as GitHub lists them; `null` for tokens that have none, such as fine-grained ones. */
@@ -277,33 +312,89 @@ export function createGithub({
   }
 
   const github: Github = {
-    async fetchOpenPullRequests(reviewedSince) {
+    async fetchOpenPullRequests(reviewedSince, includeAuthored, views) {
       const reviewed = `is:pr is:open reviewed-by:@me -author:@me archived:false updated:>=${reviewedSince}`;
-      const [authored, requested, reviewedByMe] = await Promise.all([
-        searchIds(AUTHORED),
+      const emptySearch = { viewer: "", ids: [] as string[], ssoPartial: false };
+      const [authored, requested, reviewedByMe, viewResults] = await Promise.all([
+        includeAuthored ? searchIds(AUTHORED) : Promise.resolve(emptySearch),
         searchIds(REVIEW_REQUESTED),
         searchIds(reviewed),
+        Promise.all(views.map(([, query]) => searchIds(query))),
       ]);
       const authoredIds = new Set(authored.ids);
       const requestedIds = new Set(requested.ids);
-      // A PR can be both requested and reviewed (a re-request), so dedupe.
-      const ids = [...new Set([...authored.ids, ...requested.ids, ...reviewedByMe.ids])];
+      const reviewedIds = new Set(reviewedByMe.ids);
+      const viewIds = views.map(([id], i) => [id, viewResults[i].ids] as const);
+
+      // A PR can be in several of these at once (requested and reviewed, or
+      // any of them and a view too), so dedupe for the one details fetch.
+      const ids = [
+        ...new Set([
+          ...authored.ids,
+          ...requested.ids,
+          ...reviewedByMe.ids,
+          ...viewIds.flatMap(([, ids]) => ids),
+        ]),
+      ];
 
       const all = await github.fetchDetails(ids);
-      const pullRequests = all.filter((pr) => authoredIds.has(pr.id));
-      const reviewPullRequests = all.filter((pr) => !authoredIds.has(pr.id));
+      const byId = new Map(all.map((pr) => [pr.id, pr]));
+
+      // Only your own PRs get the expensive merge state; done before
+      // anything clones from `byId`, so a PR that's also in a view carries it.
+      const pullRequests = authored.ids.flatMap((id) => byId.get(id) ?? []);
+      await github.addMergeStates(pullRequests);
+      for (const pr of pullRequests) byId.set(pr.id, pr);
+
+      const reviewPullRequests = [...byId.values()].filter(
+        (pr) => !authoredIds.has(pr.id) && (requestedIds.has(pr.id) || reviewedIds.has(pr.id)),
+      );
       for (const pr of reviewPullRequests) pr.reviewRequested = requestedIds.has(pr.id);
 
-      await github.addMergeStates(pullRequests);
+      const viewPullRequests: Record<string, RawPullRequest[]> = {};
+      for (const [id, ids] of viewIds) {
+        viewPullRequests[id] = ids.flatMap((prId) => {
+          const pr = byId.get(prId);
+          // Each view's own PRs need their own objects: a reviewRequested
+          // flag set for the Review tab shouldn't leak into a view's copy.
+          return pr ? [{ ...pr }] : [];
+        });
+      }
+
       return {
-        viewer: authored.viewer,
+        // The authored search may have been skipped; the other two always know who the viewer is.
+        viewer: authored.viewer || requested.viewer,
         pullRequests,
         reviewPullRequests,
-        ssoPartial: authored.ssoPartial || requested.ssoPartial || reviewedByMe.ssoPartial,
+        viewPullRequests,
+        ssoPartial:
+          authored.ssoPartial ||
+          requested.ssoPartial ||
+          reviewedByMe.ssoPartial ||
+          viewResults.some((r) => r.ssoPartial),
       };
     },
 
     fetchDetails: (ids) => inBatches<RawPullRequest>(queries.details, ids),
+
+    async fetchMergedPage(cursor, count) {
+      interface Data {
+        search: {
+          pageInfo: { hasNextPage: boolean; endCursor: string | null };
+          nodes: (RawMergedPullRequest | null)[];
+        };
+      }
+      const reply: Reply<Data> = await request<Data>(queries.mergedSearch, {
+        q: MERGED_SEARCH,
+        count,
+        cursor,
+      });
+      return {
+        items: reply.data.search.nodes.filter((node): node is RawMergedPullRequest => node !== null),
+        hasNextPage: reply.data.search.pageInfo.hasNextPage,
+        endCursor: reply.data.search.pageInfo.endCursor,
+      };
+    },
 
     async addMergeStates(pullRequests) {
       const candidates = pullRequests.filter(couldBeReady).map((pr) => pr.id);

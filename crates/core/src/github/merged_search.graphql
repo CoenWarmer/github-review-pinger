@@ -1,0 +1,24 @@
+# A page of your merged PRs, newest first, with just enough fields to list
+# them: no checks, reviews, or timeline, since none of that applies once a PR
+# is merged. One page at a time: the first page is fetched with every poll,
+# further pages only when "Load more" is clicked.
+query MergedPullRequests($q: String!, $count: Int!, $cursor: String) {
+  search(type: ISSUE, query: $q, first: $count, after: $cursor) {
+    pageInfo {
+      hasNextPage
+      endCursor
+    }
+    nodes {
+      ... on PullRequest {
+        id
+        number
+        title
+        url
+        mergedAt
+        repository {
+          nameWithOwner
+        }
+      }
+    }
+  }
+}

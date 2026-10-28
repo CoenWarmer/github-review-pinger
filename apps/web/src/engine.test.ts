@@ -9,6 +9,7 @@ import {
   type Fetched,
   type Found,
   type Github,
+  type RawMergedPullRequest,
   type RawPullRequest,
 } from "./github.ts";
 
@@ -61,6 +62,7 @@ class FakeGithub implements Github {
     viewer: "me",
     pullRequests: [pr("mine")],
     reviewPullRequests: [],
+    viewPullRequests: {},
     ssoPartial: false,
   };
   failure: Error | null = null;
@@ -70,10 +72,28 @@ class FakeGithub implements Github {
   details: RawPullRequest[] = [];
   directoryCalls = 0;
 
-  async fetchOpenPullRequests() {
+  includeAuthoredCalls: boolean[] = [];
+  mergedPages: { items: RawMergedPullRequest[]; hasNextPage: boolean; endCursor: string | null }[] = [
+    { items: [], hasNextPage: false, endCursor: null },
+  ];
+  mergedCalls: (string | null)[] = [];
+
+  viewCalls: [string, string][][] = [];
+
+  async fetchOpenPullRequests(
+    _reviewedSince: string,
+    includeAuthored: boolean,
+    views: [string, string][],
+  ) {
     this.polls++;
+    this.includeAuthoredCalls.push(includeAuthored);
+    this.viewCalls.push(views);
     if (this.failure) throw this.failure;
     return structuredClone(this.fetched);
+  }
+  async fetchMergedPage(cursor: string | null) {
+    this.mergedCalls.push(cursor);
+    return this.mergedPages[this.mergedCalls.length - 1] ?? this.mergedPages.at(-1)!;
   }
   async fetchDetails(ids: string[]) {
     this.detailCalls.push(ids);
@@ -443,5 +463,89 @@ describe("syncing snoozes and channels", () => {
     await settle();
 
     assert.equal(github.gists_.gist?.id, "g1");
+  });
+});
+
+describe("custom views", () => {
+  it("doesn't ask for anything until a view is added and enabled", async () => {
+    const { engine, github } = makeEngine();
+    await engine.start();
+    assert.deepEqual(github.viewCalls.at(-1), []);
+    assert.equal(engine.getSnapshot().views.length, 0);
+  });
+
+  it("adding a view shows it right away and asks for it on the next poll", async () => {
+    const { engine, github } = makeEngine();
+    await engine.start();
+    github.fetched.viewPullRequests = { placeholder: [] };
+
+    engine.addView("P1 bugs", "label:p1");
+    await settle();
+
+    const view = engine.getSnapshot().views[0];
+    assert.equal(view.name, "P1 bugs");
+    assert.equal(view.query, "label:p1");
+    assert.deepEqual(github.viewCalls.at(-1), [[view.id, "is:pr label:p1"]]);
+  });
+
+  it("a view's PRs show under its id, separate from your own and review PRs", async () => {
+    const { engine, github } = makeEngine();
+    await engine.start();
+    engine.addView("Backend", "label:backend");
+    await settle();
+    const id = engine.getSnapshot().views[0].id;
+    github.fetched.viewPullRequests = { [id]: [pr("matched")] };
+
+    await engine.refresh();
+
+    assert.deepEqual(
+      engine.getSnapshot().viewPullRequests[id]?.map((p) => p.id),
+      ["matched"],
+    );
+  });
+
+  it("renaming a view keeps its place and query", async () => {
+    const { engine } = makeEngine();
+    await engine.start();
+    engine.addView("P1", "label:p1");
+    await settle();
+    const id = engine.getSnapshot().views[0].id;
+
+    engine.updateView(id, "P1 bugs", "label:p1 is:open");
+
+    const view = engine.getSnapshot().views[0];
+    assert.equal(view.name, "P1 bugs");
+    assert.equal(view.query, "label:p1 is:open");
+  });
+
+  it("removing a view drops it from the list, the order, and its PRs", async () => {
+    const { engine } = makeEngine();
+    await engine.start();
+    engine.addView("P1", "label:p1");
+    await settle();
+    const id = engine.getSnapshot().views[0].id;
+
+    engine.removeView(id);
+
+    const snapshot = engine.getSnapshot();
+    assert.equal(snapshot.views.length, 0);
+    assert.equal(snapshot.viewPullRequests[id], undefined);
+    assert.ok(!snapshot.myPrsSections.some((pref) => pref.kind === "view"));
+  });
+
+  it("disabling a view's section stops asking for it", async () => {
+    const { engine, github } = makeEngine();
+    await engine.start();
+    engine.addView("P1", "label:p1");
+    await settle();
+    const sections = engine.getSnapshot().myPrsSections;
+    const viewPref = sections.find((pref) => pref.kind === "view")!;
+
+    engine.setMyPrsSections(
+      sections.map((pref) => (pref === viewPref ? { ...pref, enabled: false } : pref)),
+    );
+    await settle();
+
+    assert.deepEqual(github.viewCalls.at(-1), []);
   });
 });

@@ -19,19 +19,16 @@ import { SettingsPanel } from "./components/SettingsPanel";
 import { Setup, problemMessage } from "./components/Setup";
 import { elapsed } from "./format";
 import { useNow, useSnapshot } from "./hooks";
+import { MergedRow } from "./components/MergedRow";
 import { PlatformProvider, usePlatform, type Platform } from "./platform";
+import { SECTION_TITLES } from "./sections";
 import { SlackContext } from "./slack";
 import { SORT_OPTIONS, sortRows, useSectionSort, type SortKey } from "./sort";
-import type { Group, ReviewGroup, Snapshot } from "./types";
+import type { ReviewGroup, Section, Snapshot } from "./types";
 
-const SECTIONS: { group: Group; title: string }[] = [
-  { group: "approved", title: "Approved" },
-  { group: "needsAction", title: "Needs your action" },
-  { group: "waiting", title: "Waiting on others" },
-  { group: "snoozed", title: "Snoozed" },
-  { group: "dormant", title: "Dormant" },
-  { group: "draft", title: "Drafts" },
-];
+/** Sections with little left to act on, so they start collapsed. */
+/** Sections that start collapsed; every section can be toggled either way. */
+const STARTS_COLLAPSED: ReadonlySet<Section> = new Set(["snoozed", "dormant", "draft", "merged"]);
 
 const REVIEW_SECTIONS: { group: ReviewGroup; title: string }[] = [
   { group: "needsReview", title: "Needs your review" },
@@ -95,17 +92,18 @@ function Section<
   id,
   title,
   rows,
-  collapsible,
+  defaultOpen,
   render,
 }: {
   /** Names the section for remembering its sort, e.g. `mine:approved`. */
   id: string;
   title: string;
   rows: T[];
-  collapsible: boolean;
+  /** Every section can be collapsed; this is just whether it starts that way. */
+  defaultOpen: boolean;
   render: (row: T) => ReactNode;
 }) {
-  const [open, setOpen] = useState(!collapsible);
+  const [open, setOpen] = useState(defaultOpen);
   const [sort, setSort] = useSectionSort(id);
   if (rows.length === 0) return null;
 
@@ -119,18 +117,65 @@ function Section<
     <Collapsible asChild open={open} onOpenChange={setOpen}>
       <section>
         <h2 className="sticky top-0 z-10 m-0 flex items-center justify-between border-b bg-background px-3 py-1 text-[11px] font-semibold tracking-wide text-muted-foreground uppercase">
-          {collapsible ? (
-            <CollapsibleTrigger className="flex cursor-pointer items-center gap-1 border-0 bg-transparent p-0 font-[inherit] tracking-[inherit] uppercase">
-              {open ? <ChevronDown className="size-3" /> : <ChevronRight className="size-3" />}
-              {heading}
-            </CollapsibleTrigger>
-          ) : (
-            <span>{heading}</span>
-          )}
+          <CollapsibleTrigger className="flex cursor-pointer items-center gap-1 border-0 bg-transparent p-0 font-[inherit] tracking-[inherit] uppercase">
+            {open ? <ChevronDown className="size-3" /> : <ChevronRight className="size-3" />}
+            {heading}
+          </CollapsibleTrigger>
           <SortMenu value={sort} onChange={setSort} />
         </h2>
         <CollapsibleContent asChild>
           <ul className="m-0 list-none p-0">{sortRows(rows, sort).map(render)}</ul>
+        </CollapsibleContent>
+      </section>
+    </Collapsible>
+  );
+}
+
+function MergedSection({
+  rows,
+  canLoadMore,
+  now,
+}: {
+  rows: Snapshot["mergedPullRequests"];
+  canLoadMore: boolean;
+  now: number;
+}) {
+  const platform = usePlatform();
+  const [open, setOpen] = useState(false);
+  const [loading, setLoading] = useState(false);
+  if (rows.length === 0 && !canLoadMore) return null;
+
+  async function loadMore() {
+    setLoading(true);
+    try {
+      await platform.loadMoreMerged();
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <Collapsible asChild open={open} onOpenChange={setOpen}>
+      <section>
+        <h2 className="sticky top-0 z-10 m-0 flex items-center justify-between border-b bg-background px-3 py-1 text-[11px] font-semibold tracking-wide text-muted-foreground uppercase">
+          <CollapsibleTrigger className="flex cursor-pointer items-center gap-1 border-0 bg-transparent p-0 font-[inherit] tracking-[inherit] uppercase">
+            {open ? <ChevronDown className="size-3" /> : <ChevronRight className="size-3" />}
+            {SECTION_TITLES.merged} <span className="font-normal">{rows.length}</span>
+          </CollapsibleTrigger>
+        </h2>
+        <CollapsibleContent asChild>
+          <ul className="m-0 list-none p-0">
+            {rows.map((pr) => (
+              <MergedRow key={pr.id} pr={pr} now={now} />
+            ))}
+            {canLoadMore && (
+              <li className="px-3 py-2">
+                <Button type="button" variant="outline" size="xs" disabled={loading} onClick={loadMore}>
+                  {loading ? "Loading…" : "Load more"}
+                </Button>
+              </li>
+            )}
+          </ul>
         </CollapsibleContent>
       </section>
     </Collapsible>
@@ -237,21 +282,53 @@ function AppContent() {
               teamLookupDenied={snapshot.teamLookupDenied}
               channels={snapshot.teamChannels}
               sync={snapshot.sync}
+              myPrsSections={snapshot.myPrsSections}
+              views={snapshot.views}
             />
           ) : tab === "mine" ? (
-            prs.length === 0 ? (
+            prs.length === 0 &&
+            snapshot.mergedPullRequests.length === 0 &&
+            Object.values(snapshot.viewPullRequests).every((rows) => rows.length === 0) ? (
               <Empty>No open pull requests.</Empty>
             ) : (
-              SECTIONS.map(({ group, title }) => (
-                <Section
-                  key={group}
-                  id={`mine:${group}`}
-                  title={title}
-                  rows={prs.filter((pr) => pr.group === group)}
-                  collapsible={group === "snoozed" || group === "dormant" || group === "draft"}
-                  render={(pr) => <PrRow key={pr.id} pr={pr} now={now} />}
-                />
-              ))
+              snapshot.myPrsSections
+                .filter((pref) => pref.enabled)
+                .map((pref) => {
+                  if (pref.kind === "view") {
+                    const view = snapshot.views.find((v) => v.id === pref.id);
+                    if (!view) return null;
+                    return (
+                      <Section
+                        key={`view:${pref.id}`}
+                        id={`mine:view:${pref.id}`}
+                        title={view.name}
+                        rows={snapshot.viewPullRequests[pref.id] ?? []}
+                        defaultOpen={false}
+                        render={(pr) => <PrRow key={pr.id} pr={pr} now={now} />}
+                      />
+                    );
+                  }
+                  if (pref.section === "merged") {
+                    return (
+                      <MergedSection
+                        key="merged"
+                        rows={snapshot.mergedPullRequests}
+                        canLoadMore={snapshot.mergedCanLoadMore}
+                        now={now}
+                      />
+                    );
+                  }
+                  return (
+                    <Section
+                      key={pref.section}
+                      id={`mine:${pref.section}`}
+                      title={SECTION_TITLES[pref.section]}
+                      rows={prs.filter((pr) => pr.group === pref.section)}
+                      defaultOpen={!STARTS_COLLAPSED.has(pref.section)}
+                      render={(pr) => <PrRow key={pr.id} pr={pr} now={now} />}
+                    />
+                  );
+                })
             )
           ) : reviews.length === 0 ? (
             <Empty>No pull requests are waiting on your review.</Empty>
@@ -262,7 +339,7 @@ function AppContent() {
                 id={`reviews:${group}`}
                 title={title}
                 rows={reviews.filter((pr) => pr.group === group)}
-                collapsible={group === "snoozed" || group === "draft"}
+                defaultOpen={group !== "snoozed" && group !== "draft"}
                 render={(pr) => <ReviewRow key={pr.id} pr={pr} now={now} />}
               />
             ))

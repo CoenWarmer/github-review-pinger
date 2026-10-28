@@ -5,7 +5,20 @@ use chrono::{DateTime, Utc};
 use serde::Deserialize;
 use serde::de::IgnoredAny;
 
-#[derive(Debug, Deserialize)]
+/// A merged PR as the lighter merged-PR search returns it: just enough to
+/// list it, none of the open-PR fields that don't apply once it's merged.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MergedPullRequest {
+    pub id: String,
+    pub number: u64,
+    pub title: String,
+    pub url: String,
+    pub repository: Repository,
+    pub merged_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
 pub struct Nodes<T> {
     pub nodes: Vec<Option<T>>,
 }
@@ -22,7 +35,7 @@ impl<T> Default for Nodes<T> {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PullRequest {
     pub id: String,
@@ -70,7 +83,7 @@ pub struct PullRequest {
     pub timeline_items: Nodes<TimelineItem>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Repository {
     pub name_with_owner: String,
@@ -113,7 +126,7 @@ pub enum MergeStateStatus {
     Unknown,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MergeQueueEntry {
     pub position: Option<u32>,
@@ -122,35 +135,35 @@ pub struct MergeQueueEntry {
     pub enqueued_at: Option<DateTime<Utc>>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct CommitNode {
     pub commit: Commit,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct RecentCommitNode {
     pub commit: RecentCommit,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RecentCommit {
     pub committed_date: DateTime<Utc>,
     pub author: Option<CommitAuthor>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct CommitAuthor {
     /// `None` when the commit email isn't tied to a GitHub account.
     pub user: Option<CommitUser>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct CommitUser {
     pub login: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Commit {
     /// Tells pushes apart, so a new push starts a new timing of the checks.
@@ -161,7 +174,7 @@ pub struct Commit {
     pub status_check_rollup: Option<StatusCheckRollup>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct StatusCheckRollup {
     pub state: CheckState,
     #[serde(default)]
@@ -169,7 +182,7 @@ pub struct StatusCheckRollup {
 }
 
 /// One check on the head commit, reduced to what's needed for timing.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(tag = "__typename", rename_all_fields = "camelCase")]
 pub enum CheckContext {
     /// A GitHub Actions or other check run. Keeps its `started_at` once done.
@@ -209,13 +222,13 @@ pub enum CheckState {
     Other,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ReviewRequest {
     pub requested_reviewer: Option<RequestedReviewer>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(tag = "__typename")]
 pub enum RequestedReviewer {
     User {
@@ -237,7 +250,7 @@ pub enum RequestedReviewer {
     Other,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct Review {
     pub state: ReviewState,
     /// `None` for pending reviews, and not requested for `latestReviews`.
@@ -252,7 +265,7 @@ pub struct Review {
     pub comments: Option<Nodes<ReviewComment>>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct ReviewComment {
     pub url: String,
 }
@@ -269,14 +282,14 @@ pub enum ReviewState {
     Other,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct Actor {
     #[serde(rename = "__typename")]
     pub typename: String,
     pub login: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(tag = "__typename", rename_all_fields = "camelCase")]
 pub enum TimelineItem {
     ReadyForReviewEvent {
