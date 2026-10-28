@@ -4,6 +4,7 @@ mod gist;
 mod github;
 mod poller;
 mod settings;
+mod sound;
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -108,6 +109,11 @@ fn send_test_notification(app: AppHandle) {
 #[tauri::command]
 fn set_notifications_muted(app: AppHandle, poller: State<Arc<Poller>>, muted: bool) {
     poller.set_notifications_muted(&app, muted);
+}
+
+#[tauri::command]
+fn set_sound_on_merge(app: AppHandle, poller: State<Arc<Poller>>, enabled: bool) {
+    poller.set_sound_on_merge(&app, enabled);
 }
 
 #[tauri::command]
@@ -236,6 +242,7 @@ pub fn run() {
             card_show_popover,
             send_test_notification,
             set_notifications_muted,
+            set_sound_on_merge,
             set_team_channel,
             remove_team_channel,
             save_token,

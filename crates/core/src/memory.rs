@@ -38,6 +38,17 @@ pub struct Memory {
     /// Whether and how snoozes and channels are shared with other devices.
     #[serde(default)]
     pub sync: SyncMemory,
+    /// Which events play a sound.
+    #[serde(default)]
+    pub sound: SoundMemory,
+}
+
+/// Which events play a sound. Opt-in, off by default.
+#[derive(Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct SoundMemory {
+    /// One of your own PRs was merged.
+    pub pr_merged: bool,
 }
 
 /// How many durations are kept per repo.
@@ -60,6 +71,11 @@ pub struct PrMemory {
     /// The checks of the head commit being timed.
     #[serde(default)]
     pub checks_run: Option<ChecksRun>,
+    /// One of your own PRs, rather than one you were asked to review. Set by
+    /// `notify::diff`; tells `notify::vanished_own_prs` which disappearances
+    /// are worth checking for a merge.
+    #[serde(default)]
+    pub is_own: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -81,6 +97,7 @@ impl PrMemory {
             snoozed_until: None,
             requested_seen_until: None,
             checks_run: None,
+            is_own: false,
         }
     }
 }

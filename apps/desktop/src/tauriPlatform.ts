@@ -5,7 +5,7 @@ import type { Platform, Snapshot } from "@review-pinger/app";
 
 /** The desktop app: everything goes through the Rust shell. */
 export const tauriPlatform: Platform = {
-  features: { githubCli: true, autostart: true, notifications: true },
+  features: { githubCli: true, autostart: true, notifications: true, sound: true },
 
   getSnapshot: () => invoke<Snapshot>("get_snapshot"),
   onSnapshot: (callback) => {
@@ -54,5 +54,8 @@ export const tauriPlatform: Platform = {
   },
   sendTestNotification: () => {
     invoke("send_test_notification");
+  },
+  setSoundOnMerge: (enabled) => {
+    invoke("set_sound_on_merge", { enabled });
   },
 };

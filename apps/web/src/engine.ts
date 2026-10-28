@@ -117,6 +117,7 @@ export class Engine {
       authChoice: null,
       hasSavedToken: false,
       notificationsMuted: false,
+      soundOnMerge: false,
       teamLookupDenied: false,
       fetchedAt: null,
       ssoPartial: false,

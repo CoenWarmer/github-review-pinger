@@ -275,8 +275,9 @@ changes it); a user chip opens their last response, below.
 The third tab holds, top to bottom:
 
 - A **Startup** section with Launch at login (on by default in release builds).
-- A **Notifications** section: a mute switch for the cards and a "Send test
-  notification" button.
+- A **Notifications** section: a mute switch for the cards, a "Send test
+  notification" button, and a switch to play a sound when one of your own PRs
+  is merged.
 - An **Authentication** section: a GitHub CLI / Personal access token
   selector, who is signed in ("Signed in as CoenWarmer"), and the token form
   when the token is selected. With the CLI selected, a saved token is noted
@@ -344,6 +345,10 @@ waiting on you.
   offline), sends one "While you were away" summary instead of replaying.
 - The very first poll after install is silent: everything is marked seen and
   overdue PRs (including ones waiting on you) as nudged; the list itself shows what's pending.
+- Sound (desktop only, off by default): when enabled, one of your own PRs
+  dropping out of the open search is checked (`merged`, a cheap one-off
+  query) and a bundled sound plays if it merged. Not a card; doesn't apply to
+  PRs you reviewed, and never replays for a PR already gone from memory.
 
 ### Notification cards
 

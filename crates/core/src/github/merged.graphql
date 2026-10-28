@@ -1,0 +1,10 @@
+# Checked for your own PRs that drop out of the open search, to tell a merge
+# from a plain close. Cheap: no fields beyond the id and the flag.
+query Merged($ids: [ID!]!) {
+  nodes(ids: $ids) {
+    ... on PullRequest {
+      id
+      merged
+    }
+  }
+}

@@ -97,6 +97,19 @@ pub struct Notification {
     pub url: Option<String>,
 }
 
+/// Your own PRs that were tracked last poll and are no longer among `views`:
+/// merged or closed, GitHub's search no longer being asked. Call before
+/// `diff`, which would otherwise prune them from `memory` first.
+pub fn vanished_own_prs(views: &[PrView], memory: &Memory) -> Vec<String> {
+    let open: HashSet<&str> = views.iter().map(|v| v.id.as_str()).collect();
+    memory
+        .pull_requests
+        .iter()
+        .filter(|(id, pr)| pr.is_own && !open.contains(id.as_str()))
+        .map(|(id, _)| id.clone())
+        .collect()
+}
+
 /// Records `views` and `reviews` in `memory` and returns what changed since
 /// the last poll: new responses from others, waiting PRs whose current quiet
 /// period has just exceeded `nudge_after` weekday time in `tz`, new review
@@ -120,6 +133,7 @@ pub fn diff<Tz: TimeZone>(
             .pull_requests
             .entry(view.id.clone())
             .or_insert_with(|| PrMemory::new(baseline));
+        entry.is_own = true;
 
         for response in view.responses.iter().filter(|r| r.at > entry.seen_until) {
             events.push(Event::Response {
@@ -396,6 +410,37 @@ mod tests {
 
     // Tue 2026-10-06 10:00 local.
     const TUESDAY: &str = "2026-10-06T08:00:00Z";
+
+    #[test]
+    fn an_own_pr_that_drops_out_of_the_fetch_is_reported_as_vanished() {
+        let mut memory = Memory::default();
+        let views = [view("a", Group::NeedsAction, TUESDAY, vec![])];
+        run(&views, &mut memory, "2026-10-06T09:00:00Z");
+
+        // Merged or closed: gone from the next fetch.
+        assert_eq!(vanished_own_prs(&[], &memory), vec!["a".to_string()]);
+        // Still there: not vanished.
+        assert!(vanished_own_prs(&views, &memory).is_empty());
+    }
+
+    #[test]
+    fn a_review_requested_pr_dropping_out_is_not_an_own_pr_vanishing() {
+        let mut memory = Memory::default();
+        run_reviews(
+            &[],
+            &[review_view("r", ReviewGroup::NeedsReview, Some(TUESDAY))],
+            &mut memory,
+            "2026-10-06T09:00:00Z",
+        );
+
+        assert!(vanished_own_prs(&[], &memory).is_empty());
+    }
+
+    #[test]
+    fn nothing_vanishes_on_the_very_first_poll() {
+        let memory = Memory::default();
+        assert!(vanished_own_prs(&[], &memory).is_empty());
+    }
 
     #[test]
     fn first_poll_ever_treats_history_as_seen() {

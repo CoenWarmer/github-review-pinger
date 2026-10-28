@@ -12,3 +12,5 @@ pub const DETAILS_QUERY: &str = concat!(
 );
 /// Fetches the merge state, which is expensive, of a few PRs by id.
 pub const MERGE_STATE_QUERY: &str = include_str!("merge_state.graphql");
+/// Tells a merge from a plain close, for PRs that dropped out of the open search.
+pub const MERGED_QUERY: &str = include_str!("merged.graphql");
