@@ -8,7 +8,7 @@ import {
   type RawPullRequest,
 } from "./github.ts";
 
-const queries: Queries = { search: "SEARCH", details: "DETAILS", mergeState: "MERGE", mergedSearch: "MERGED" };
+const queries: Queries = { search: "SEARCH", details: "DETAILS", mergeState: "MERGE", mergedSearch: "MERGED", prSearch: "PRSEARCH" };
 
 type Handler = (body: {
   query: string;

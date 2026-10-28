@@ -1,5 +1,5 @@
 import { createContext, useContext, type ReactNode } from "react";
-import type { SectionPref, Snapshot, TokenSource } from "./types";
+import type { FoundPr, SectionPref, Snapshot, TokenSource } from "./types";
 
 /**
  * What the UI needs from whatever hosts it: the desktop app talks to its Rust
@@ -38,6 +38,12 @@ export interface Platform {
   setMyPrsSections(sections: SectionPref[]): void;
   /** Fetches further merged PRs, older than what's already shown. */
   loadMoreMerged(): Promise<void>;
+
+  /**
+   * Searches GitHub for PRs, in any state, matching the text (which may hold
+   * search qualifiers). Rejects with a message to show.
+   */
+  searchPullRequests(text: string): Promise<FoundPr[]>;
 
   /** Adds a custom view and shows it right away. */
   addView(name: string, query: string): void;

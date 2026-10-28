@@ -133,6 +133,14 @@ async fn load_more_merged(app: AppHandle, poller: State<'_, Arc<Poller>>) -> Res
 }
 
 #[tauri::command]
+async fn search_pull_requests(
+    text: String,
+    poller: State<'_, Arc<Poller>>,
+) -> Result<Vec<review_pinger_core::github::types::FoundPullRequest>, String> {
+    poller.search_pull_requests(&text).await
+}
+
+#[tauri::command]
 fn add_view(app: AppHandle, poller: State<Arc<Poller>>, name: String, query: String) {
     poller.add_view(&app, name, query);
 }
@@ -282,6 +290,7 @@ pub fn run() {
             set_sound_on_merge,
             set_my_prs_sections,
             load_more_merged,
+            search_pull_requests,
             add_view,
             update_view,
             remove_view,

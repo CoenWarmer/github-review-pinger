@@ -17,6 +17,7 @@ import type {
 import {
   FetchError,
   type Found,
+  type FoundPullRequest,
   type Github,
   type Needs,
   type RawMergedPullRequest,
@@ -496,6 +497,16 @@ export class Engine {
       this.publish({ mergedPullRequests, mergedCanLoadMore: this.mergedHasMore });
     } catch (e) {
       console.warn("Could not load more merged PRs", e);
+    }
+  }
+
+  /** Searches GitHub for the search box. Rejects with a message to show. */
+  async searchPullRequests(text: string): Promise<FoundPullRequest[]> {
+    if (!this.github) throw "There's no token to search with.";
+    try {
+      return await this.github.searchPullRequests(text);
+    } catch (e) {
+      throw e instanceof Error ? e.message : String(e);
     }
   }
 

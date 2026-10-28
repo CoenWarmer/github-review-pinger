@@ -41,6 +41,7 @@ export const tauriPlatform: Platform = {
     invoke("set_my_prs_sections", { sections });
   },
   loadMoreMerged: () => invoke("load_more_merged"),
+  searchPullRequests: (text) => invoke("search_pull_requests", { text }),
   addView: (name, query) => {
     invoke("add_view", { name, query });
   },

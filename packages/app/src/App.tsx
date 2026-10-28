@@ -1,6 +1,7 @@
 import { useState, type ReactNode } from "react";
 import { ArrowDownWideNarrow, ChevronDown, ChevronRight, RefreshCw, Settings } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import {
   DropdownMenu,
@@ -13,6 +14,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { cn } from "@/lib/utils";
 import { PrRow } from "./components/PrRow";
+import { SearchResults, matchesQuery } from "./components/SearchResults";
 import { ReviewRow } from "./components/ReviewRow";
 import { RingsLoader } from "./components/RingsLoader";
 import { SettingsPanel } from "./components/SettingsPanel";
@@ -211,6 +213,7 @@ function AppContent() {
   const snapshot = useSnapshot();
   const now = useNow();
   const [tab, setTab] = useState<Tab>("mine");
+  const [query, setQuery] = useState("");
 
   if (!snapshot || (snapshot.status.kind === "loading" && !snapshot.fetchedAt)) {
     return (
@@ -232,6 +235,43 @@ function AppContent() {
     ).length,
     reviews: reviews.filter((pr) => pr.group === "needsReview").length,
   };
+  const searching = tab !== "settings" && query.trim() !== "";
+  const searchRows = (): { count: number; rows: ReactNode } => {
+    if (tab === "reviews") {
+      const found = reviews.filter((pr) =>
+        matchesQuery(query, [
+          pr.title,
+          pr.repo,
+          pr.number,
+          pr.author,
+          ...pr.reviewers.map((r) => r.login),
+        ]),
+      );
+      return {
+        count: found.length,
+        rows: found.map((pr) => <ReviewRow key={pr.id} pr={pr} now={now} />),
+      };
+    }
+    // A PR in a custom view may also be one of yours: list it once.
+    const open = [...prs, ...Object.values(snapshot.viewPullRequests).flat()].filter(
+      (pr, i, all) => all.findIndex((other) => other.id === pr.id) === i,
+    );
+    const foundOpen = open.filter((pr) =>
+      matchesQuery(query, [pr.title, pr.repo, pr.number, ...pr.reviewers.map((r) => r.login)]),
+    );
+    const foundMerged = snapshot.mergedPullRequests.filter((pr) =>
+      matchesQuery(query, [pr.title, pr.repo, pr.number]),
+    );
+    return {
+      count: foundOpen.length + foundMerged.length,
+      rows: [
+        ...foundOpen.map((pr) => <PrRow key={pr.id} pr={pr} now={now} />),
+        ...foundMerged.map((pr) => <MergedRow key={pr.id} pr={pr} now={now} />),
+      ],
+    };
+  };
+  const search = searching ? searchRows() : null;
+
   return (
     <SlackContext.Provider
       value={{
@@ -271,8 +311,30 @@ function AppContent() {
             ))}
           </TabsList>
         </Tabs>
+        {tab !== "settings" && (
+          <div className="border-b px-3 py-1.5">
+            <Input
+              type="search"
+              aria-label="Filter pull requests"
+              placeholder="Filter pull requests…"
+              autoComplete="off"
+              spellCheck={false}
+              value={query}
+              onChange={(e) => setQuery(e.currentTarget.value)}
+              className="h-7 text-xs md:text-xs"
+            />
+          </div>
+        )}
         <ScrollArea className="min-h-0 flex-1">
-          {tab === "settings" ? (
+          {search ? (
+            <SearchResults
+              key={`${tab}:${query.trim()}`}
+              query={query}
+              count={search.count}
+              rows={search.rows}
+              now={now}
+            />
+          ) : tab === "settings" ? (
             <SettingsPanel
               account={snapshot.viewer}
               authSource={snapshot.authChoice ?? (snapshot.hasSavedToken ? "pat" : "gh")}

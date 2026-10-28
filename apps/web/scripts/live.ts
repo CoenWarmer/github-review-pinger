@@ -13,6 +13,7 @@ const queries = {
   details: graphql("details") + graphql("pull_request"),
   mergeState: graphql("merge_state"),
   mergedSearch: graphql("merged_search"),
+  prSearch: graphql("pr_search"),
 };
 
 initSync({

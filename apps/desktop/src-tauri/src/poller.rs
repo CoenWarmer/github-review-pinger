@@ -241,6 +241,26 @@ impl Poller {
         }
     }
 
+    /// Searches GitHub for PRs matching `text`, for the search box. Rejects
+    /// with a message to show.
+    pub async fn search_pull_requests(
+        &self,
+        text: &str,
+    ) -> Result<Vec<review_pinger_core::github::types::FoundPullRequest>, String> {
+        let chosen = self.auth_source();
+        let token = tauri::async_runtime::spawn_blocking(move || auth::resolve_token(chosen))
+            .await
+            .map_err(|e| e.to_string())?
+            .map_err(|_| "Could not get a GitHub token to search with.".to_string())?;
+        github::search_pull_requests(&self.http, &token.value, text)
+            .await
+            .map_err(|e| match e {
+                github::FetchError::RateLimited { .. } => "GitHub's rate limit was reached.".into(),
+                github::FetchError::Unauthorized => "GitHub rejected the token.".into(),
+                github::FetchError::Network(m) | github::FetchError::Api(m) => m,
+            })
+    }
+
     /// Whether a token pasted but not yet saved can use gists.
     pub async fn token_can_sync(&self, token: &str) -> bool {
         match gist::can_sync(&self.http, token).await {

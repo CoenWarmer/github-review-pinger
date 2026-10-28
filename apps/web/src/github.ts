@@ -31,6 +31,7 @@ export interface Queries {
   details: string;
   mergeState: string;
   mergedSearch: string;
+  prSearch: string;
 }
 
 export type FailureKind = "unauthorized" | "rateLimited" | "network" | "api";
@@ -93,6 +94,18 @@ export interface MergedPage {
   endCursor: string | null;
 }
 
+/** A PR found by "Search on GitHub", in any state. */
+export interface FoundPullRequest {
+  id: string;
+  number: number;
+  title: string;
+  url: string;
+  repo: string;
+  author: string | null;
+  state: "open" | "draft" | "merged" | "closed";
+  updatedAt: string;
+}
+
 /** What a team lookup found: lowercase member logins by `org/slug`. */
 export interface Found {
   teams: Record<string, string[]>;
@@ -118,6 +131,8 @@ export interface Github {
   fetchDetails(ids: string[]): Promise<RawPullRequest[]>;
   /** `cursor` continues from a previous page's `endCursor`; `null` starts from the top. */
   fetchMergedPage(cursor: string | null, count: number): Promise<MergedPage>;
+  /** The first page of PRs, in any state, matching the text and any qualifiers in it. */
+  searchPullRequests(text: string): Promise<FoundPullRequest[]>;
   addMergeStates(pullRequests: RawPullRequest[]): Promise<void>;
   fetchDirectory(needs: Needs): Promise<Found>;
   /** The token's scopes as GitHub lists them; `null` for tokens that have none, such as fine-grained ones. */
@@ -394,6 +409,36 @@ export function createGithub({
         hasNextPage: reply.data.search.pageInfo.hasNextPage,
         endCursor: reply.data.search.pageInfo.endCursor,
       };
+    },
+
+    async searchPullRequests(text) {
+      interface Node {
+        id: string;
+        number: number;
+        title: string;
+        url: string;
+        state: string;
+        isDraft: boolean;
+        updatedAt: string;
+        author: { login: string } | null;
+        repository: { nameWithOwner: string };
+      }
+      const reply = await request<{ search: { nodes: (Node | null)[] } }>(queries.prSearch, {
+        q: `is:pr ${text} sort:updated-desc`,
+        count: 20,
+      });
+      return reply.data.search.nodes
+        .filter((node): node is Node => node !== null)
+        .map((pr) => ({
+          id: pr.id,
+          number: pr.number,
+          title: pr.title,
+          url: pr.url,
+          repo: pr.repository.nameWithOwner,
+          author: pr.author?.login ?? null,
+          state: pr.state === "MERGED" ? "merged" : pr.state === "CLOSED" ? "closed" : pr.isDraft ? "draft" : "open",
+          updatedAt: pr.updatedAt,
+        }));
     },
 
     async addMergeStates(pullRequests) {

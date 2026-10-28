@@ -99,6 +99,9 @@ class FakeGithub implements Github {
     this.detailCalls.push(ids);
     return structuredClone(this.details);
   }
+  async searchPullRequests() {
+    return [];
+  }
   async addMergeStates() {}
   async fetchDirectory() {
     this.directoryCalls++;

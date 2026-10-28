@@ -1,0 +1,24 @@
+# The first page of PRs matching free-form search text, for "Search on GitHub":
+# just enough fields to list them, whatever their state.
+query SearchPullRequests($q: String!, $count: Int!) {
+  search(type: ISSUE, query: $q, first: $count) {
+    nodes {
+      ... on PullRequest {
+        id
+        number
+        title
+        url
+        state
+        isDraft
+        updatedAt
+        author {
+          __typename
+          login
+        }
+        repository {
+          nameWithOwner
+        }
+      }
+    }
+  }
+}
