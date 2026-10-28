@@ -5,6 +5,8 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { clockTime } from "../format";
+import { useSnapshot } from "../hooks";
+import { RingsLoader } from "./RingsLoader";
 import type { Problem } from "../types";
 
 export function problemMessage(problem: Problem, githubCli = true): string {
@@ -68,8 +70,11 @@ function useCanSync(token: string): boolean | null {
 export function TokenForm({
   hasSavedToken,
   offerSync = false,
+  onSaving,
 }: {
   hasSavedToken: boolean;
+  /** Told when a token starts and stops being saved, which can take a refresh. */
+  onSaving?: (saving: boolean) => void;
   /** Also asks whether to sync, which depends on what the token can do. */
   offerSync?: boolean;
 }) {
@@ -80,12 +85,15 @@ export function TokenForm({
   const canSync = useCanSync(token);
 
   async function save() {
+    onSaving?.(true);
     try {
       await platform.saveToken(token, offerSync && sync && canSync === true);
       setToken("");
       setError(null);
     } catch (e) {
       setError(String(e));
+    } finally {
+      onSaving?.(false);
     }
   }
 
@@ -177,8 +185,16 @@ const AUTH_PROBLEMS: Problem["code"][] = [
 export function Setup({ problem }: { problem: Problem }) {
   const platform = usePlatform();
   const isAuthProblem = AUTH_PROBLEMS.includes(problem.code);
+  const refreshing = useSnapshot()?.refreshing ?? false;
+  const [saving, setSaving] = useState(false);
   return (
     <section className="flex flex-col gap-3 p-4">
+      <div className="flex flex-col items-center gap-2 py-2 text-muted-foreground">
+        <RingsLoader size={120} />
+        {(refreshing || saving) && (
+          <p className="m-0">{saving ? "Checking your token…" : "Loading pull requests…"}</p>
+        )}
+      </div>
       <h2 className="m-0 text-[15px] font-semibold">
         {isAuthProblem ? "Connect to GitHub" : "Couldn't load pull requests"}
       </h2>
@@ -187,6 +203,7 @@ export function Setup({ problem }: { problem: Problem }) {
         <TokenForm
           hasSavedToken={problem.code === "tokenRejected" && problem.source === "pat"}
           offerSync
+          onSaving={setSaving}
         />
       )}
       {problem.code === "noSavedToken" && platform.features.githubCli && (
@@ -205,6 +222,7 @@ export function Setup({ problem }: { problem: Problem }) {
         variant="secondary"
         size="sm"
         className="self-start"
+        disabled={refreshing || saving}
         onClick={() => platform.refresh()}
       >
         Try again
