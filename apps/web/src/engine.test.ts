@@ -183,13 +183,14 @@ describe("the web engine", () => {
     await engine.start();
     engine.markVisited("mine");
     github.details = [pr("mine", { title: "Renamed" })];
+    github.fetched.pullRequests = [pr("mine", { title: "Renamed" })];
     engine.setVisible(true);
     await new Promise((resolve) => setTimeout(resolve, 20));
 
     assert.deepEqual(github.detailCalls, [["mine"]]);
     assert.equal(engine.getSnapshot().pullRequests[0].title, "Renamed");
-    // Fresh enough, so no full refresh.
-    assert.equal(github.polls, 1);
+    // Then the whole list, however fresh it is.
+    assert.equal(github.polls, 2);
   });
 
   it("saves a token and fetches with it, and forgets it again", async () => {

@@ -83,9 +83,8 @@ retried twice per request.
   Without it the lookup fails once per hour, quietly, and the cards show what
   they can; Settings says how to add the scope. Recent commits (author and
   date, last 20) are fetched with each PR to see who pushed.
-- Poll every 2 minutes; also refresh when the popover opens and data is older
-  than 30 s (wall-clock, so time asleep counts). Wait out rate limits until
-  the reset time; back off exponentially (up to 10 min) on network and API
+- Poll every 2 minutes; also refresh whenever the popover opens (unless a
+  refresh is already running). Wait out rate limits until the reset time; back off exponentially (up to 10 min) on network and API
   errors. On failure, keep showing the last good data with a banner.
 
 ## Derived state
@@ -408,7 +407,7 @@ lists. It differs from the desktop app only where a browser has to:
   ready), with the same retries and rate-limit handling. The GraphQL documents
   are the ones in `crates/core/src/github`.
 - **Polling**: every 2 minutes while the page is visible. Coming back to the
-  page refreshes the PRs you opened first, then everything if older than 30 s.
+  page refreshes the PRs you opened first, then everything.
 - **Storage**: snoozes, seen markers, learned check durations, saved Slack
   channels and the team directory are kept in `localStorage`, as the desktop
   app keeps `state.json`.

@@ -25,7 +25,6 @@ use crate::settings::{self, Settings, SlackOpensIn};
 use crate::slack::{self, Channel};
 
 const POLL_INTERVAL: Duration = Duration::from_secs(120);
-const STALE_AFTER: chrono::Duration = chrono::Duration::seconds(30);
 const MAX_BACKOFF: Duration = Duration::from_secs(600);
 pub const TRAY_ID: &str = "tray";
 
@@ -105,12 +104,9 @@ impl Poller {
         self.wake.notify_one();
     }
 
-    pub fn refresh_if_stale(&self) {
-        let snapshot = self.snapshot.lock().unwrap();
-        let stale = snapshot
-            .fetched_at
-            .is_none_or(|at| Utc::now() - at > STALE_AFTER);
-        if stale && !snapshot.refreshing {
+    /// Refreshes when the popover opens, unless a refresh is already running.
+    pub fn refresh_on_open(&self) {
+        if !self.snapshot.lock().unwrap().refreshing {
             self.wake.notify_one();
         }
     }
@@ -293,17 +289,17 @@ pub fn start(app: &AppHandle) -> Arc<Poller> {
 
 /// Called when the popover opens. PRs the user visited on GitHub since last
 /// time are refreshed alone first, so what they changed shows up quickly,
-/// and then the whole list is refreshed if it's stale.
+/// and then the whole list is refreshed.
 pub fn on_popover_open(app: &AppHandle, poller: Arc<Poller>) {
     let visited: Vec<String> = poller.visited.lock().unwrap().drain().collect();
     if visited.is_empty() {
-        poller.refresh_if_stale();
+        poller.refresh_on_open();
         return;
     }
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
         refresh_visited(&app, &poller, visited).await;
-        poller.refresh_if_stale();
+        poller.refresh_on_open();
     });
 }
 
