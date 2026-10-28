@@ -170,7 +170,7 @@ function AppContent() {
   if (!snapshot || (snapshot.status.kind === "loading" && !snapshot.fetchedAt)) {
     return (
       <div className="flex h-full flex-col items-center justify-center gap-3 text-muted-foreground">
-        <RingsLoader />
+        <RingsLoader loading />
         <p className="m-0">Loading pull requests…</p>
       </div>
     );

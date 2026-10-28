@@ -122,10 +122,11 @@ export function TokenForm({
       >
         Personal access token (classic, with the repo scope
         {platform.features.githubCli ? "" : "; add read:org for team details"}
-        {offerSync ? ", and gist to sync" : ""}). Your data never leaves your
-        browser or Github account.
+        {offerSync ? ", and gist to sync" : ""}). Your data never leaves
+        your&nbsp;
+        {platform.features.githubCli ? "machine" : "browser"} or Github account.
       </Label>
-      <div className="flex gap-1.5">
+      <div className="flex gap-1.5 mt-1.5">
         <Input
           id="token"
           type="password"
@@ -134,7 +135,7 @@ export function TokenForm({
           value={token}
           onChange={(e) => setToken(e.currentTarget.value)}
           placeholder="ghp_…"
-          className="h-8 min-w-0 flex-1"
+          className="flex-1 h-8 min-w-0"
         />
         <Button
           type="submit"
@@ -146,7 +147,7 @@ export function TokenForm({
         </Button>
       </div>
       {offerSync && (
-        <div className="mt-1 flex flex-col gap-1">
+        <div className="flex mt-2 flex-col gap-1">
           <div className="flex items-center gap-2">
             <Switch
               id="sync-on-sign-in"
@@ -194,7 +195,7 @@ export function Setup({ problem }: { problem: Problem }) {
   return (
     <section className="flex flex-col gap-3 p-4">
       <div className="flex flex-col items-center gap-2 py-2 text-muted-foreground">
-        <RingsLoader size={120} />
+        <RingsLoader size={120} loading={refreshing || saving} />
         {(refreshing || saving) && (
           <p className="m-0">
             {saving ? "Checking your token…" : "Loading pull requests…"}
@@ -227,16 +228,6 @@ export function Setup({ problem }: { problem: Problem }) {
           Use the GitHub CLI instead
         </Button>
       )}
-      <Button
-        type="button"
-        variant="secondary"
-        size="sm"
-        className="self-start"
-        disabled={refreshing || saving}
-        onClick={() => platform.refresh()}
-      >
-        Try again
-      </Button>
     </section>
   );
 }

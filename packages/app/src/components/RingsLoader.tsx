@@ -91,26 +91,40 @@ function ringPath(ring: number, time: number) {
   return `${d}Z`;
 }
 
-export function RingsLoader({ size = 208 }: { size?: number }) {
+/** The rings morph while `loading`, and hold still otherwise. */
+export function RingsLoader({
+  size = 208,
+  loading = true,
+}: {
+  size?: number;
+  loading?: boolean;
+}) {
   const paths = useRef<(SVGPathElement | null)[]>([]);
+  /** Seconds of morphing so far, so the rings resume where they stopped. */
+  const elapsed = useRef(0);
 
   useEffect(() => {
-    const draw = (seconds: number) =>
-      paths.current.forEach((path, ring) => path?.setAttribute("d", ringPath(ring, seconds)));
-    draw(0);
-    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+    const draw = () =>
+      paths.current.forEach((path, ring) =>
+        path?.setAttribute("d", ringPath(ring, elapsed.current)),
+      );
+    draw();
+    if (!loading || window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
 
+    let last: number | null = null;
     let frame = requestAnimationFrame(function step(now) {
-      draw(now / 1000);
+      if (last !== null) elapsed.current += (now - last) / 1000;
+      last = now;
+      draw();
       frame = requestAnimationFrame(step);
     });
     return () => cancelAnimationFrame(frame);
-  }, []);
+  }, [loading]);
 
   return (
     <svg
       role="img"
-      aria-label="Loading"
+      aria-label={loading ? "Loading" : "Review Pinger"}
       width={size}
       height={size}
       viewBox={`${-VIEW} ${-VIEW} ${VIEW * 2} ${VIEW * 2}`}
