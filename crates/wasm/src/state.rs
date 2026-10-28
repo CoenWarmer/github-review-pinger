@@ -379,6 +379,20 @@ mod tests {
     }
 
     #[test]
+    fn a_snooze_survives_a_poll_that_misses_the_pr() {
+        let mut pinger = PingerState::new(None);
+        pinger.set_snooze("mine", Some(5), NOW).unwrap();
+        let group = |out: String| update(&out)["pullRequests"][0]["group"].clone();
+        let with = fetch(vec![pr("mine", json!({}))], vec![]);
+
+        assert_eq!(group(pinger.poll(&with, NOW, 120).unwrap()), "snoozed");
+        // GitHub's search sometimes leaves a PR out for a poll.
+        pinger.poll(&fetch(vec![], vec![]), NOW, 120).unwrap();
+
+        assert_eq!(group(pinger.poll(&with, NOW, 120).unwrap()), "snoozed");
+    }
+
+    #[test]
     fn nothing_is_derived_before_the_first_poll() {
         assert_eq!(PingerState::new(None).derived(NOW).unwrap(), None);
     }

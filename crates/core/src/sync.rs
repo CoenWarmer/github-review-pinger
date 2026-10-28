@@ -154,16 +154,17 @@ fn local_doc(memory: &mut Memory, now: DateTime<Utc>) -> SyncDoc {
 fn apply(memory: &mut Memory, merged: &SyncDoc, now: DateTime<Utc>) -> bool {
     let mut changed = false;
     for (id, entry) in &merged.snoozes {
-        if memory
-            .sync
-            .snoozes
-            .get(id)
-            .is_some_and(|own| entry.at <= *own)
-        {
+        let own = memory.sync.snoozes.get(id).copied();
+        let current = memory.pull_requests.get(id).and_then(|pr| pr.snoozed_until);
+        // A snooze this device lost after recording it, because its PR dropped
+        // out of a poll, comes back while it still runs.
+        let lost = own == Some(entry.at)
+            && current.is_none()
+            && entry.value.is_some_and(|until| until > now);
+        if own.is_some_and(|own| entry.at <= own) && !lost {
             continue;
         }
         memory.sync.snoozes.insert(id.clone(), entry.at);
-        let current = memory.pull_requests.get(id).and_then(|pr| pr.snoozed_until);
         if current == entry.value {
             continue;
         }
@@ -428,6 +429,21 @@ mod tests {
 
         let result = reconcile(&mut memory, Some(remote), at("2026-10-29T12:00:00Z"));
 
+        assert_eq!(result.upload, None);
+    }
+
+    #[test]
+    fn a_snooze_lost_here_comes_back_from_the_gist() {
+        let mut memory = Memory::default();
+        snoozed("pr1", "2026-11-02T09:00:00Z", &mut memory);
+        let remote = reconcile(&mut memory, None, at(NOW)).upload.unwrap();
+        // Forgotten after a poll missed the PR, though the change is recorded.
+        memory.pull_requests.clear();
+
+        let result = reconcile(&mut memory, Some(remote), at("2026-10-28T12:05:00Z"));
+
+        assert!(result.changed);
+        assert!(memory.snoozes().contains_key("pr1"));
         assert_eq!(result.upload, None);
     }
 

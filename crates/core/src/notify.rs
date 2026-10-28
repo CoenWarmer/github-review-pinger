@@ -176,9 +176,11 @@ pub fn diff<Tz: TimeZone>(
         .map(|v| v.id.as_str())
         .chain(reviews.iter().map(|v| v.id.as_str()))
         .collect();
-    memory
-        .pull_requests
-        .retain(|id, _| open.contains(id.as_str()));
+    // A snooze outlives a poll that misses its PR, which GitHub's search
+    // sometimes does, so it isn't forgotten before it ends.
+    memory.pull_requests.retain(|id, pr| {
+        open.contains(id.as_str()) || pr.snoozed_until.is_some_and(|until| until > now)
+    });
     memory.last_poll_at = Some(now);
     events
 }
