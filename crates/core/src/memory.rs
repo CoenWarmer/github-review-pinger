@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize};
 use crate::auth::TokenSource;
 use crate::sections::{self, SectionPref};
 use crate::sync::SyncMemory;
+use crate::views::View;
 
 #[derive(Debug, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -47,6 +48,9 @@ pub struct Memory {
     /// [`Memory::my_prs_sections`], never directly.
     #[serde(default)]
     pub my_prs_sections: Option<Vec<SectionPref>>,
+    /// Custom "My PRs" sections backed by your own GitHub search queries.
+    #[serde(default)]
+    pub views: Vec<View>,
 }
 
 /// Which events play a sound. Opt-in, off by default.
@@ -165,11 +169,42 @@ impl Memory {
     /// The order and visibility of "My PRs" sections: what was saved,
     /// completed with any section it's missing.
     pub fn my_prs_sections(&self) -> Vec<SectionPref> {
-        sections::normalize(self.my_prs_sections.as_deref())
+        sections::normalize(self.my_prs_sections.as_deref(), &self.views)
     }
 
     pub fn set_my_prs_sections(&mut self, sections: Vec<SectionPref>, now: DateTime<Utc>) {
-        self.my_prs_sections = Some(sections::normalize(Some(&sections)));
+        self.my_prs_sections = Some(sections::normalize(Some(&sections), &self.views));
         self.sync.sections_changed_at = Some(now);
+    }
+
+    /// Adds a custom view and returns it, so the caller can show it right away.
+    pub fn add_view(&mut self, name: String, query: String, now: DateTime<Utc>) -> &View {
+        let id = format!("v{}", now.timestamp_nanos_opt().unwrap_or_default());
+        self.views.push(View {
+            id: id.clone(),
+            name,
+            query,
+        });
+        self.sync.views.insert(id, now);
+        self.views.last().expect("just pushed")
+    }
+
+    pub fn update_view(&mut self, id: &str, name: String, query: String, now: DateTime<Utc>) {
+        if let Some(view) = self.views.iter_mut().find(|v| v.id == id) {
+            view.name = name;
+            view.query = query;
+        }
+        self.sync.views.insert(id.to_string(), now);
+    }
+
+    /// Removes a view, and its entry in the section order, if any.
+    pub fn remove_view(&mut self, id: &str, now: DateTime<Utc>) {
+        self.views.retain(|v| v.id != id);
+        if let Some(sections) = &mut self.my_prs_sections {
+            sections.retain(|pref| {
+                !matches!(&pref.kind, crate::sections::SectionKind::View { id: vid } if vid == id)
+            });
+        }
+        self.sync.views.insert(id.to_string(), now);
     }
 }

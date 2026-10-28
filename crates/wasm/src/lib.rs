@@ -176,6 +176,33 @@ impl Pinger {
         js(self.0.set_my_prs_sections(sections, now))
     }
 
+    /// Your custom views, as JSON.
+    pub fn views(&self) -> Result<String, JsError> {
+        js(self.0.views())
+    }
+
+    /// Adds a view and returns it, as JSON, so the caller can show it right away.
+    #[wasm_bindgen(js_name = addView)]
+    pub fn add_view(&mut self, name: &str, query: &str, now: &str) -> Result<String, JsError> {
+        js(self.0.add_view(name, query, now))
+    }
+
+    #[wasm_bindgen(js_name = updateView)]
+    pub fn update_view(
+        &mut self,
+        id: &str,
+        name: &str,
+        query: &str,
+        now: &str,
+    ) -> Result<(), JsError> {
+        js(self.0.update_view(id, name, query, now))
+    }
+
+    #[wasm_bindgen(js_name = removeView)]
+    pub fn remove_view(&mut self, id: &str, now: &str) -> Result<(), JsError> {
+        js(self.0.remove_view(id, now))
+    }
+
     /// The Merged section: `page` (the latest fetch) and `loadedMore` (what
     /// "Load more" has fetched this session) are JSON arrays of raw GraphQL
     /// nodes. Returns the PRs merged within the window plus loaded more,

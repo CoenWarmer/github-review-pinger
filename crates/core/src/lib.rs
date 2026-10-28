@@ -18,3 +18,4 @@ pub mod sections;
 pub mod settings;
 pub mod slack;
 pub mod sync;
+pub mod views;

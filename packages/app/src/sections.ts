@@ -1,4 +1,4 @@
-import type { Section } from "./types";
+import type { Section, View } from "./types";
 
 /** What each "My PRs" section is called, in both the tab and Settings. */
 export const SECTION_TITLES: Record<Section, string> = {
@@ -10,3 +10,9 @@ export const SECTION_TITLES: Record<Section, string> = {
   draft: "Drafts",
   merged: "Merged",
 };
+
+/** The text to actually search: `is:pr`, then whatever the view asks for. */
+export function viewSearch(view: View): string {
+  const query = view.query.trim();
+  return query ? `is:pr ${query}` : "is:pr";
+}

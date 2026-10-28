@@ -12,6 +12,7 @@ import type {
   Snapshot,
   SyncStatus,
   TeamChannel,
+  View,
 } from "@review-pinger/app";
 import {
   FetchError,
@@ -39,13 +40,22 @@ const MERGED_LOAD_MORE = 5;
 const OPEN_SECTIONS = new Set(["approved", "needsAction", "waiting", "snoozed", "dormant", "draft"]);
 
 /** Whether fetching your open PRs, and your merged PRs, can be skipped. */
-function sectionNeeds(sections: SectionPref[]): { open: boolean; merged: boolean } {
-  const enabled = (section: string) =>
-    sections.some((pref) => pref.section === section && pref.enabled);
+function sectionNeeds(sections: SectionPref[]): { open: boolean; merged: boolean; viewIds: string[] } {
+  const builtinEnabled = (section: string) =>
+    sections.some((pref) => pref.kind === "builtin" && pref.section === section && pref.enabled);
   return {
-    open: sections.some((pref) => OPEN_SECTIONS.has(pref.section) && pref.enabled),
-    merged: enabled("merged"),
+    open: sections.some(
+      (pref) => pref.kind === "builtin" && OPEN_SECTIONS.has(pref.section) && pref.enabled,
+    ),
+    merged: builtinEnabled("merged"),
+    viewIds: sections.flatMap((pref) => (pref.kind === "view" && pref.enabled ? [pref.id] : [])),
   };
+}
+
+/** The text to actually search: `is:pr`, then whatever the view asks for. */
+function viewSearch(view: View): string {
+  const query = view.query.trim();
+  return query ? `is:pr ${query}` : "is:pr";
 }
 
 /** What the engine needs to keep, like `localStorage`. */
@@ -71,6 +81,10 @@ export interface PingerLike {
   myPrsSections(): string;
   setMyPrsSections(sections: string, now: string): void;
   mergedDerive(page: string, loadedMore: string, now: string): string;
+  views(): string;
+  addView(name: string, query: string, now: string): string;
+  updateView(id: string, name: string, query: string, now: string): void;
+  removeView(id: string, now: string): void;
   setNotificationsMuted(muted: boolean): void;
   notificationsMuted(): boolean;
   syncEnabled(): boolean;
@@ -99,6 +113,8 @@ interface Update {
   pullRequests: PullRequest[];
   reviewRequests: ReviewRequest[];
   teamChannels: Record<string, TeamChannel>;
+  /** Each custom view's matching PRs, by view id. */
+  views: Record<string, PullRequest[]>;
 }
 
 function problemOf(error: unknown): Problem {
@@ -164,6 +180,8 @@ export class Engine {
       myPrsSections: [],
       mergedPullRequests: [],
       mergedCanLoadMore: false,
+      views: [],
+      viewPullRequests: {},
     };
   }
 
@@ -200,6 +218,7 @@ export class Engine {
       pullRequests: update.pullRequests,
       reviewRequests: update.reviewRequests,
       teamChannels: update.teamChannels,
+      viewPullRequests: update.views,
       teamLookupDenied: this.pinger.directoryDenied(),
     });
   }
@@ -208,6 +227,12 @@ export class Engine {
   private rederive() {
     const raw = this.pinger.derived(this.nowIso());
     if (raw) this.applyUpdate(JSON.parse(raw));
+    // Not part of Update: the view definitions themselves (name, query),
+    // as opposed to each view's matching PRs, which `applyUpdate` just set.
+    this.publish({
+      views: JSON.parse(this.pinger.views()) as View[],
+      myPrsSections: JSON.parse(this.pinger.myPrsSections()) as SectionPref[],
+    });
   }
 
   /** Loads what was kept, then starts polling if there's a token. */
@@ -226,6 +251,7 @@ export class Engine {
         gistUrl: this.pinger.syncGistUrl() ?? null,
       },
       myPrsSections: JSON.parse(this.pinger.myPrsSections()) as SectionPref[],
+      views: JSON.parse(this.pinger.views()) as View[],
     });
     if (this.token) await this.poll();
     else this.publish({ status: { kind: "error", problem: { code: "noToken" } } });
@@ -305,12 +331,17 @@ export class Engine {
     let delay = POLL_INTERVAL_MS;
     try {
       const now = this.nowIso();
-      // The decision uses sections as they stood before this poll's sync, if
-      // any; a section toggled on via sync just now takes one more poll.
+      // The decision uses sections and views as they stood before this poll's
+      // sync, if any; a change synced in just now takes one more poll.
       const needs = sectionNeeds(JSON.parse(this.pinger.myPrsSections()) as SectionPref[]);
+      const allViews = JSON.parse(this.pinger.views()) as View[];
+      const views: [string, string][] = needs.viewIds.flatMap((id) => {
+        const view = allViews.find((v) => v.id === id);
+        return view ? [[id, viewSearch(view)] as [string, string]] : [];
+      });
       // Synced alongside, so the lists are derived with the snoozes of other devices.
       const [fetched, mergedPage] = await Promise.all([
-        github.fetchOpenPullRequests(this.pinger.reviewedSince(now), needs.open),
+        github.fetchOpenPullRequests(this.pinger.reviewedSince(now), needs.open, views),
         needs.merged ? github.fetchMergedPage(null, MERGED_PAGE_SIZE) : Promise.resolve(null),
         this.sync(),
       ]);
@@ -337,8 +368,9 @@ export class Engine {
         viewer: fetched.viewer,
         fetchedAt: now,
         ssoPartial: fetched.ssoPartial,
-        // Re-read, so a section change synced in just now shows right away.
+        // Re-read, so a section or view change synced in just now shows right away.
         myPrsSections: JSON.parse(this.pinger.myPrsSections()) as SectionPref[],
+        views: JSON.parse(this.pinger.views()) as View[],
         mergedPullRequests,
         mergedCanLoadMore: this.mergedHasMore,
       });
@@ -408,6 +440,40 @@ export class Engine {
     this.publish({ myPrsSections: JSON.parse(this.pinger.myPrsSections()) as SectionPref[] });
     this.syncSoon();
     void this.refresh();
+  }
+
+  /** Adds a view and refreshes right away, so it shows without waiting for
+   * the next poll. */
+  addView(name: string, query: string) {
+    this.pinger.addView(name, query, this.nowIso());
+    this.persist();
+    this.publish({
+      views: JSON.parse(this.pinger.views()) as View[],
+      myPrsSections: JSON.parse(this.pinger.myPrsSections()) as SectionPref[],
+    });
+    this.syncSoon();
+    void this.refresh();
+  }
+
+  updateView(id: string, name: string, query: string) {
+    this.pinger.updateView(id, name, query, this.nowIso());
+    this.persist();
+    this.publish({ views: JSON.parse(this.pinger.views()) as View[] });
+    this.syncSoon();
+    void this.refresh();
+  }
+
+  removeView(id: string) {
+    this.pinger.removeView(id, this.nowIso());
+    this.persist();
+    const viewPullRequests = { ...this.snapshot.viewPullRequests };
+    delete viewPullRequests[id];
+    this.publish({
+      views: JSON.parse(this.pinger.views()) as View[],
+      myPrsSections: JSON.parse(this.pinger.myPrsSections()) as SectionPref[],
+      viewPullRequests,
+    });
+    this.syncSoon();
   }
 
   /** Fetches further merged PRs, older than what's already shown. Errors are

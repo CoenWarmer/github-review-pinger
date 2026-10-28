@@ -2,6 +2,8 @@
 //! about, and patching single pull requests into the last fetch. The desktop
 //! and web apps do their own fetching and call this.
 
+use std::collections::HashMap;
+
 use chrono::{DateTime, Duration, TimeZone, Utc};
 
 use crate::auth::TokenSource;
@@ -25,6 +27,9 @@ pub struct Fetched {
     pub sso_partial: bool,
     pub pull_requests: Vec<PullRequest>,
     pub review_pull_requests: Vec<PullRequest>,
+    /// Each enabled custom view's matching PRs, by view id. Empty for a view
+    /// that's off, so nothing is fetched for it.
+    pub view_pull_requests: HashMap<String, Vec<PullRequest>>,
 }
 
 pub fn dormant_after(settings: &Settings) -> Duration {
@@ -57,6 +62,38 @@ pub fn derive(
     )
 }
 
+/// Each custom view's PRs, derived the same way as your own (actions,
+/// checks, reviewers), but shown as one flat list, not split by group.
+/// Informational only: unlike `derive`'s lists, these don't feed
+/// notifications or the tray count (see `notify::diff`'s `other_ids`).
+pub fn derive_views(
+    fetched: &Fetched,
+    settings: &Settings,
+    memory: &Memory,
+    directory: &Directory,
+    now: DateTime<Utc>,
+) -> HashMap<String, Vec<PrView>> {
+    let snoozed = memory.snoozes();
+    let estimates = checks::estimates(memory, &settings.check_durations);
+    let rules = prs::Rules {
+        directory,
+        ignored_logins: &settings.ignored_logins,
+        dormant_after: dormant_after(settings),
+        snoozed: &snoozed,
+    };
+    fetched
+        .view_pull_requests
+        .iter()
+        .map(|(id, pull_requests)| {
+            let mut views = prs::derive(pull_requests, &fetched.viewer, &rules, now);
+            for view in &mut views {
+                view.checks_estimate_secs = estimates.get(&view.repo).copied();
+            }
+            (id.clone(), views)
+        })
+        .collect()
+}
+
 /// Records a full poll in `memory` and returns what to notify about. The
 /// first poll after launch, or after a gap, summarizes instead of replaying,
 /// and the very first one after install is silent.
@@ -64,6 +101,7 @@ pub fn derive(
 pub fn record_poll<Tz: TimeZone>(
     views: &[PrView],
     review_views: &[ReviewView],
+    other_ids: &[String],
     pull_requests: &[PullRequest],
     settings: &Settings,
     memory: &mut Memory,
@@ -79,6 +117,7 @@ pub fn record_poll<Tz: TimeZone>(
     let events = notify::diff(
         views,
         review_views,
+        other_ids,
         memory,
         now,
         Duration::hours(settings.nudge_after_hours.into()),
@@ -174,7 +213,33 @@ mod tests {
                 "theirs",
                 serde_json::json!({ "reviewRequested": true }),
             )],
+            view_pull_requests: HashMap::new(),
         }
+    }
+
+    #[test]
+    fn each_views_prs_are_derived_the_same_way_as_your_own() {
+        let mut fetched = fetched();
+        fetched.view_pull_requests.insert(
+            "v1".to_string(),
+            vec![pr(
+                "matched",
+                serde_json::json!({ "author": { "__typename": "User", "login": "ana" } }),
+            )],
+        );
+        let settings = Settings::default();
+        let memory = Memory::default();
+        let directory = Directory::default();
+        let now: DateTime<Utc> = "2026-10-28T12:00:00Z".parse().unwrap();
+
+        let views = derive_views(&fetched, &settings, &memory, &directory, now);
+
+        assert_eq!(views.len(), 1);
+        assert_eq!(views["v1"][0].id, "matched");
+        // A view with nothing enabled, or nothing fetched, derives nothing.
+        assert!(derive_views(&fetched, &settings, &memory, &directory, now).contains_key("v1"));
+        fetched.view_pull_requests.clear();
+        assert!(derive_views(&fetched, &settings, &memory, &directory, now).is_empty());
     }
 
     #[test]
@@ -245,12 +310,14 @@ mod tests {
             sso_partial: false,
             pull_requests: vec![pr],
             review_pull_requests: Vec::new(),
+            view_pull_requests: HashMap::new(),
         };
         let settings = Settings::default();
         let (views, review_views) = derive(&fetched, &settings, memory, &Directory::default(), now);
         record_poll(
             &views,
             &review_views,
+            &[],
             &fetched.pull_requests,
             &settings,
             memory,

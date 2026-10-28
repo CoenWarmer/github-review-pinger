@@ -39,6 +39,11 @@ export interface Platform {
   /** Fetches further merged PRs, older than what's already shown. */
   loadMoreMerged(): Promise<void>;
 
+  /** Adds a custom view and shows it right away. */
+  addView(name: string, query: string): void;
+  updateView(id: string, name: string, query: string): void;
+  removeView(id: string): void;
+
   /**
    * Rejects with a message to show when the token can't be saved. `sync`
    * turns on syncing with it.

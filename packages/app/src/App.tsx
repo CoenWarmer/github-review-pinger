@@ -285,22 +285,42 @@ function AppContent() {
               channels={snapshot.teamChannels}
               sync={snapshot.sync}
               myPrsSections={snapshot.myPrsSections}
+              views={snapshot.views}
             />
           ) : tab === "mine" ? (
-            prs.length === 0 && snapshot.mergedPullRequests.length === 0 ? (
+            prs.length === 0 &&
+            snapshot.mergedPullRequests.length === 0 &&
+            Object.values(snapshot.viewPullRequests).every((rows) => rows.length === 0) ? (
               <Empty>No open pull requests.</Empty>
             ) : (
               snapshot.myPrsSections
                 .filter((pref) => pref.enabled)
-                .map((pref) =>
-                  pref.section === "merged" ? (
-                    <MergedSection
-                      key="merged"
-                      rows={snapshot.mergedPullRequests}
-                      canLoadMore={snapshot.mergedCanLoadMore}
-                      now={now}
-                    />
-                  ) : (
+                .map((pref) => {
+                  if (pref.kind === "view") {
+                    const view = snapshot.views.find((v) => v.id === pref.id);
+                    if (!view) return null;
+                    return (
+                      <Section
+                        key={`view:${pref.id}`}
+                        id={`mine:view:${pref.id}`}
+                        title={view.name}
+                        rows={snapshot.viewPullRequests[pref.id] ?? []}
+                        collapsible
+                        render={(pr) => <PrRow key={pr.id} pr={pr} now={now} />}
+                      />
+                    );
+                  }
+                  if (pref.section === "merged") {
+                    return (
+                      <MergedSection
+                        key="merged"
+                        rows={snapshot.mergedPullRequests}
+                        canLoadMore={snapshot.mergedCanLoadMore}
+                        now={now}
+                      />
+                    );
+                  }
+                  return (
                     <Section
                       key={pref.section}
                       id={`mine:${pref.section}`}
@@ -309,8 +329,8 @@ function AppContent() {
                       collapsible={COLLAPSIBLE.has(pref.section)}
                       render={(pr) => <PrRow key={pr.id} pr={pr} now={now} />}
                     />
-                  ),
-                )
+                  );
+                })
             )
           ) : reviews.length === 0 ? (
             <Empty>No pull requests are waiting on your review.</Empty>

@@ -162,7 +162,7 @@ describe("fetching pull requests", () => {
         done1: { id: "done1" },
       },
     );
-    const fetched = await github(handler).fetchOpenPullRequests("2026-09-01", true);
+    const fetched = await github(handler).fetchOpenPullRequests("2026-09-01", true, []);
 
     assert.equal(fetched.viewer, "me");
     assert.deepEqual(fetched.pullRequests.map((pr) => pr.id).sort(), ["own1", "own2"]);
@@ -203,7 +203,7 @@ describe("fetching pull requests", () => {
       },
       { own1: { id: "own1" }, req1: { id: "req1" } },
     );
-    const fetched = await github(handler).fetchOpenPullRequests("2026-09-01", false);
+    const fetched = await github(handler).fetchOpenPullRequests("2026-09-01", false, []);
 
     assert.equal(fetched.viewer, "me");
     assert.deepEqual(fetched.pullRequests, []);

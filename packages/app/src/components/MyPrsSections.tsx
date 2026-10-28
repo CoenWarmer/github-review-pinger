@@ -13,37 +13,49 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
 import { usePlatform } from "../platform";
 import { SECTION_TITLES } from "../sections";
-import type { Section, SectionPref } from "../types";
+import type { SectionPref, View } from "../types";
+
+/** A stable id for dnd-kit and React keys: a built-in's own name, or `view:<id>`. */
+function key(pref: SectionPref): string {
+  return pref.kind === "builtin" ? pref.section : `view:${pref.id}`;
+}
+
+function title(pref: SectionPref, views: View[]): string {
+  if (pref.kind === "builtin") return SECTION_TITLES[pref.section];
+  return views.find((view) => view.id === pref.id)?.name ?? "(deleted view)";
+}
 
 /** The order and visibility of "My PRs" sections, dragged to reorder. */
-export function MyPrsSections({ sections }: { sections: SectionPref[] }) {
+export function MyPrsSections({ sections, views }: { sections: SectionPref[]; views: View[] }) {
   const platform = usePlatform();
   // A plain click still works; dragging needs to move the pointer first.
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 4 } }));
 
-  function toggle(section: Section, enabled: boolean) {
+  function toggle(target: SectionPref, enabled: boolean) {
     platform.setMyPrsSections(
-      sections.map((pref) => (pref.section === section ? { ...pref, enabled } : pref)),
+      sections.map((pref) => (key(pref) === key(target) ? { ...pref, enabled } : pref)),
     );
   }
 
   function onDragEnd({ active, over }: DragEndEvent) {
     if (!over || active.id === over.id) return;
-    const from = sections.findIndex((pref) => pref.section === active.id);
-    const to = sections.findIndex((pref) => pref.section === over.id);
+    const from = sections.findIndex((pref) => key(pref) === active.id);
+    const to = sections.findIndex((pref) => key(pref) === over.id);
     if (from === -1 || to === -1) return;
     platform.setMyPrsSections(arrayMove(sections, from, to));
   }
 
   return (
     <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={onDragEnd}>
-      <SortableContext
-        items={sections.map((pref) => pref.section)}
-        strategy={verticalListSortingStrategy}
-      >
+      <SortableContext items={sections.map(key)} strategy={verticalListSortingStrategy}>
         <ul className="m-0 list-none p-0">
           {sections.map((pref) => (
-            <Row key={pref.section} pref={pref} onToggle={(enabled) => toggle(pref.section, enabled)} />
+            <Row
+              key={key(pref)}
+              pref={pref}
+              title={title(pref, views)}
+              onToggle={(enabled) => toggle(pref, enabled)}
+            />
           ))}
         </ul>
       </SortableContext>
@@ -51,17 +63,29 @@ export function MyPrsSections({ sections }: { sections: SectionPref[] }) {
   );
 }
 
-function Row({ pref, onToggle }: { pref: SectionPref; onToggle: (enabled: boolean) => void }) {
+function Row({
+  pref,
+  title,
+  onToggle,
+}: {
+  pref: SectionPref;
+  title: string;
+  onToggle: (enabled: boolean) => void;
+}) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
-    id: pref.section,
+    id: key(pref),
   });
-  const title = SECTION_TITLES[pref.section];
+  const id = `section-${key(pref)}`;
 
   return (
     <li
       ref={setNodeRef}
       style={{ transform: CSS.Transform.toString(transform), transition }}
-      className={isDragging ? "relative z-10 flex items-center gap-2 bg-background py-1.5" : "flex items-center gap-2 border-b py-1.5 last:border-b-0"}
+      className={
+        isDragging
+          ? "relative z-10 flex items-center gap-2 bg-background py-1.5"
+          : "flex items-center gap-2 border-b py-1.5 last:border-b-0"
+      }
     >
       <button
         type="button"
@@ -72,12 +96,8 @@ function Row({ pref, onToggle }: { pref: SectionPref; onToggle: (enabled: boolea
       >
         <GripVertical className="size-4" />
       </button>
-      <Checkbox
-        id={`section-${pref.section}`}
-        checked={pref.enabled}
-        onCheckedChange={(checked) => onToggle(checked === true)}
-      />
-      <Label htmlFor={`section-${pref.section}`} className="font-normal">
+      <Checkbox id={id} checked={pref.enabled} onCheckedChange={(checked) => onToggle(checked === true)} />
+      <Label htmlFor={id} className="truncate font-normal">
         {title}
       </Label>
     </li>

@@ -8,9 +8,10 @@ import { Switch } from "@/components/ui/switch";
 import { TeamChannelForm } from "../slack";
 import { ago } from "../format";
 import { useNow } from "../hooks";
-import type { SectionPref, SyncStatus, TeamChannel, TokenSource } from "../types";
+import type { SectionPref, SyncStatus, TeamChannel, TokenSource, View } from "../types";
 import { MyPrsSections } from "./MyPrsSections";
 import { SYNC_ABOUT, SYNC_LABEL } from "./Setup";
+import { ViewsSettings } from "./ViewsSettings";
 
 const AUTH_OPTIONS: { source: TokenSource; label: string }[] = [
   { source: "gh", label: "GitHub CLI" },
@@ -27,6 +28,7 @@ export function SettingsPanel({
   channels,
   sync,
   myPrsSections,
+  views,
 }: {
   /** Who is signed in. */
   account: string | null;
@@ -44,6 +46,8 @@ export function SettingsPanel({
   sync: SyncStatus;
   /** Order and visibility of "My PRs" sections. */
   myPrsSections: SectionPref[];
+  /** Your custom views. */
+  views: View[];
 }) {
   const platform = usePlatform();
   const {
@@ -218,7 +222,11 @@ export function SettingsPanel({
       )}
       <Section>
         <Heading>My PRs sections</Heading>
-        <MyPrsSections sections={myPrsSections} />
+        <MyPrsSections sections={myPrsSections} views={views} />
+      </Section>
+      <Section>
+        <Heading>Views</Heading>
+        <ViewsSettings views={views} />
       </Section>
       <Section>
         <Heading>Sync</Heading>

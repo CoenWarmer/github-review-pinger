@@ -16,6 +16,7 @@ use serde_json::{Value, json};
 use crate::memory::{Memory, PrMemory};
 use crate::sections::SectionPref;
 use crate::slack;
+use crate::views::View;
 
 pub const FILE_NAME: &str = "review-pinger-sync.json";
 pub const DESCRIPTION: &str = "Review Pinger sync: snoozes and Slack channels";
@@ -55,6 +56,17 @@ pub struct SyncDoc {
     /// since reordering is a single change, not many independent ones.
     #[serde(default)]
     pub sections: Option<Stamped<Vec<SectionPref>>>,
+    /// Custom views by id; `None` once removed.
+    #[serde(default)]
+    pub views: BTreeMap<String, Stamped<Option<ViewDoc>>>,
+}
+
+/// A custom view's definition, as it crosses the gist: the id is the map key.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ViewDoc {
+    pub name: String,
+    pub query: String,
 }
 
 /// What a device remembers about syncing.
@@ -70,6 +82,8 @@ pub struct SyncMemory {
     /// When the "My PRs" section order last changed here or was taken from
     /// the gist.
     pub sections_changed_at: Option<DateTime<Utc>>,
+    /// When each view last changed here or was taken from the gist.
+    pub views: HashMap<String, DateTime<Utc>>,
 }
 
 /// The outcome of merging the gist into a device.
@@ -98,6 +112,7 @@ impl SyncDoc {
     fn merge(&mut self, other: &SyncDoc) {
         newest(&mut self.snoozes, &other.snoozes);
         newest(&mut self.team_channels, &other.team_channels);
+        newest(&mut self.views, &other.views);
         if let Some(theirs) = &other.sections
             && self
                 .sections
@@ -113,6 +128,8 @@ impl SyncDoc {
         self.snoozes
             .retain(|_, entry| entry.at > cutoff || entry.value.is_some_and(|until| until > now));
         self.team_channels
+            .retain(|_, entry| entry.at > cutoff || entry.value.is_some());
+        self.views
             .retain(|_, entry| entry.at > cutoff || entry.value.is_some());
     }
 }
@@ -167,6 +184,25 @@ fn local_doc(memory: &mut Memory, now: DateTime<Utc>) -> SyncDoc {
         doc.sections = Some(Stamped {
             value: sections.clone(),
             at,
+        });
+    }
+    for view in &memory.views {
+        let at = *memory.sync.views.entry(view.id.clone()).or_insert(now);
+        doc.views.insert(
+            view.id.clone(),
+            Stamped {
+                value: Some(ViewDoc {
+                    name: view.name.clone(),
+                    query: view.query.clone(),
+                }),
+                at,
+            },
+        );
+    }
+    for (id, at) in &memory.sync.views {
+        doc.views.entry(id.clone()).or_insert(Stamped {
+            value: None,
+            at: *at,
         });
     }
     doc
@@ -238,6 +274,35 @@ fn apply(memory: &mut Memory, merged: &SyncDoc, now: DateTime<Utc>) -> bool {
             }
         }
     }
+    for (id, entry) in &merged.views {
+        if memory
+            .sync
+            .views
+            .get(id)
+            .is_some_and(|own| entry.at <= *own)
+        {
+            continue;
+        }
+        memory.sync.views.insert(id.clone(), entry.at);
+        let current = memory.views.iter().find(|v| &v.id == id);
+        let same = current.map(|v| (v.name.as_str(), v.query.as_str()))
+            == entry
+                .value
+                .as_ref()
+                .map(|v| (v.name.as_str(), v.query.as_str()));
+        if same {
+            continue;
+        }
+        memory.views.retain(|v| &v.id != id);
+        if let Some(doc) = &entry.value {
+            memory.views.push(View {
+                id: id.clone(),
+                name: doc.name.clone(),
+                query: doc.query.clone(),
+            });
+        }
+        changed = true;
+    }
     changed
 }
 
@@ -257,6 +322,10 @@ pub fn reconcile(memory: &mut Memory, remote: Option<SyncDoc>, now: DateTime<Utc
         .sync
         .team_channels
         .retain(|team, _| merged.team_channels.contains_key(team));
+    memory
+        .sync
+        .views
+        .retain(|id, _| merged.views.contains_key(id));
 
     let changed = apply(memory, &merged, now);
     let current = remote.is_some_and(|doc| doc == merged);
@@ -554,6 +623,13 @@ mod tests {
         assert!(memory.team_channels.is_empty());
     }
 
+    fn builtin(section: crate::sections::Section, enabled: bool) -> SectionPref {
+        SectionPref {
+            kind: crate::sections::SectionKind::Builtin { section },
+            enabled,
+        }
+    }
+
     #[test]
     fn sections_sync_as_one_whole_list() {
         use crate::sections::Section;
@@ -561,14 +637,8 @@ mod tests {
         let mut a = Memory::default();
         a.set_my_prs_sections(
             vec![
-                SectionPref {
-                    section: Section::Merged,
-                    enabled: true,
-                },
-                SectionPref {
-                    section: Section::Draft,
-                    enabled: false,
-                },
+                builtin(Section::Merged, true),
+                builtin(Section::Draft, false),
             ],
             at(NOW),
         );
@@ -588,6 +658,71 @@ mod tests {
         let result = reconcile(&mut b, Some(gist), at(NOW));
         assert!(result.changed);
         assert_eq!(b.my_prs_sections, a.my_prs_sections);
+    }
+
+    #[test]
+    fn a_new_device_takes_views_from_the_gist() {
+        let mut a = Memory::default();
+        a.add_view("P1 bugs".to_string(), "label:p1".to_string(), at(NOW));
+        let gist = reconcile(&mut a, None, at(NOW)).upload.unwrap();
+
+        let mut b = Memory::default();
+        let result = reconcile(&mut b, Some(gist), at(NOW));
+
+        assert!(result.changed);
+        assert_eq!(b.views.len(), 1);
+        assert_eq!(b.views[0].name, "P1 bugs");
+        assert_eq!(b.views[0].query, "label:p1");
+    }
+
+    #[test]
+    fn renaming_a_view_reaches_other_devices() {
+        let mut a = Memory::default();
+        let id = a
+            .add_view("P1".to_string(), "label:p1".to_string(), at(NOW))
+            .id
+            .clone();
+        let gist = reconcile(&mut a, None, at(NOW)).upload.unwrap();
+        let mut b = Memory::default();
+        reconcile(&mut b, Some(gist), at(NOW));
+
+        a.update_view(
+            &id,
+            "P1 bugs".to_string(),
+            "label:p1 is:open".to_string(),
+            at("2026-10-28T13:00:00Z"),
+        );
+        let gist = reconcile(&mut a, None, at("2026-10-28T13:00:00Z"))
+            .upload
+            .unwrap();
+        let result = reconcile(&mut b, Some(gist), at("2026-10-28T14:00:00Z"));
+
+        assert!(result.changed);
+        assert_eq!(b.views[0].name, "P1 bugs");
+        assert_eq!(b.views[0].query, "label:p1 is:open");
+    }
+
+    #[test]
+    fn deleting_a_view_removes_it_and_its_place_in_the_order_everywhere() {
+        let mut a = Memory::default();
+        let id = a
+            .add_view("P1".to_string(), "label:p1".to_string(), at(NOW))
+            .id
+            .clone();
+        let gist = reconcile(&mut a, None, at(NOW)).upload.unwrap();
+        let mut b = Memory::default();
+        reconcile(&mut b, Some(gist), at(NOW));
+        assert_eq!(b.my_prs_sections().len(), 8); // 7 built in, plus the view
+
+        a.remove_view(&id, at("2026-10-28T13:00:00Z"));
+        let gist = reconcile(&mut a, None, at("2026-10-28T13:00:00Z"))
+            .upload
+            .unwrap();
+        let result = reconcile(&mut b, Some(gist), at("2026-10-28T14:00:00Z"));
+
+        assert!(result.changed);
+        assert!(b.views.is_empty());
+        assert_eq!(b.my_prs_sections().len(), 7);
     }
 
     #[test]

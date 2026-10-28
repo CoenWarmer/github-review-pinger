@@ -23,7 +23,7 @@ use poller::{Poller, Snapshot};
 // The pure logic lives in its own crate; these keep the old `crate::` paths working.
 pub use review_pinger_core::{
     calendar, checks, directory, engine, memory, merged, notify, prs, reviews, sections, slack,
-    sync,
+    sync, views,
 };
 
 const POPOVER: &str = "main";
@@ -130,6 +130,27 @@ fn set_my_prs_sections(
 async fn load_more_merged(app: AppHandle, poller: State<'_, Arc<Poller>>) -> Result<(), ()> {
     poller.load_more_merged(&app).await;
     Ok(())
+}
+
+#[tauri::command]
+fn add_view(app: AppHandle, poller: State<Arc<Poller>>, name: String, query: String) {
+    poller.add_view(&app, name, query);
+}
+
+#[tauri::command]
+fn update_view(
+    app: AppHandle,
+    poller: State<Arc<Poller>>,
+    id: String,
+    name: String,
+    query: String,
+) {
+    poller.update_view(&app, &id, name, query);
+}
+
+#[tauri::command]
+fn remove_view(app: AppHandle, poller: State<Arc<Poller>>, id: String) {
+    poller.remove_view(&app, &id);
 }
 
 #[tauri::command]
@@ -261,6 +282,9 @@ pub fn run() {
             set_sound_on_merge,
             set_my_prs_sections,
             load_more_merged,
+            add_view,
+            update_view,
+            remove_view,
             set_team_channel,
             remove_team_channel,
             save_token,

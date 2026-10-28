@@ -1,5 +1,6 @@
 export { App } from "./App";
 export type { Platform } from "./platform";
+export { SECTION_TITLES, viewSearch } from "./sections";
 export type {
   CardNotification,
   MergedPr,
@@ -12,4 +13,5 @@ export type {
   SyncStatus,
   TeamChannel,
   TokenSource,
+  View,
 } from "./types";

@@ -39,6 +39,9 @@ struct FetchedInput {
     sso_partial: bool,
     pull_requests: Vec<PullRequest>,
     review_pull_requests: Vec<PullRequest>,
+    /// Each enabled custom view's matching PRs, by view id.
+    #[serde(default)]
+    view_pull_requests: HashMap<String, Vec<PullRequest>>,
 }
 
 /// What the lists look like after a poll or a change.
@@ -50,6 +53,8 @@ struct Update {
     /// New since the last poll. Empty after anything but a poll.
     notifications: Vec<Notification>,
     team_channels: HashMap<String, Channel>,
+    /// Each custom view's matching PRs, by view id.
+    views: HashMap<String, Vec<PrView>>,
 }
 
 pub struct PingerState {
@@ -130,13 +135,23 @@ impl PingerState {
             sso_partial: input.sso_partial,
             pull_requests: input.pull_requests,
             review_pull_requests: input.review_pull_requests,
+            view_pull_requests: input.view_pull_requests,
         };
         let (pull_requests, review_requests) =
             engine::derive(&fetched, &self.settings, &self.memory, &self.directory, now);
+        let views =
+            engine::derive_views(&fetched, &self.settings, &self.memory, &self.directory, now);
+        let other_ids: Vec<String> = fetched
+            .view_pull_requests
+            .values()
+            .flatten()
+            .map(|pr| pr.id.clone())
+            .collect();
         let first_poll = std::mem::replace(&mut self.first_poll, false);
         let notifications = engine::record_poll(
             &pull_requests,
             &review_requests,
+            &other_ids,
             &fetched.pull_requests,
             &self.settings,
             &mut self.memory,
@@ -150,6 +165,7 @@ impl PingerState {
             review_requests,
             notifications,
             team_channels: self.channels(),
+            views,
         })
     }
 
@@ -159,18 +175,17 @@ impl PingerState {
         let Some(fetched) = &self.latest else {
             return Ok(None);
         };
-        let (pull_requests, review_requests) = engine::derive(
-            fetched,
-            &self.settings,
-            &self.memory,
-            &self.directory,
-            time(now)?,
-        );
+        let now = time(now)?;
+        let (pull_requests, review_requests) =
+            engine::derive(fetched, &self.settings, &self.memory, &self.directory, now);
+        let views =
+            engine::derive_views(fetched, &self.settings, &self.memory, &self.directory, now);
         json(&Update {
             pull_requests,
             review_requests,
             notifications: Vec::new(),
             team_channels: self.channels(),
+            views,
         })
         .map(Some)
     }
@@ -313,6 +328,36 @@ impl PingerState {
         let sections: Vec<SectionPref> =
             serde_json::from_str(sections).map_err(|e| e.to_string())?;
         self.memory.set_my_prs_sections(sections, time(now)?);
+        Ok(())
+    }
+
+    /// Your custom views, as JSON.
+    pub fn views(&self) -> Result<String, String> {
+        json(&self.memory.views)
+    }
+
+    /// Adds a view and returns it, so the caller can show it right away.
+    pub fn add_view(&mut self, name: &str, query: &str, now: &str) -> Result<String, String> {
+        let view = self
+            .memory
+            .add_view(name.to_string(), query.to_string(), time(now)?);
+        json(view)
+    }
+
+    pub fn update_view(
+        &mut self,
+        id: &str,
+        name: &str,
+        query: &str,
+        now: &str,
+    ) -> Result<(), String> {
+        self.memory
+            .update_view(id, name.to_string(), query.to_string(), time(now)?);
+        Ok(())
+    }
+
+    pub fn remove_view(&mut self, id: &str, now: &str) -> Result<(), String> {
+        self.memory.remove_view(id, time(now)?);
         Ok(())
     }
 
@@ -489,7 +534,7 @@ mod tests {
 
         pinger
             .set_my_prs_sections(
-                r#"[{"section":"merged","enabled":true},{"section":"draft","enabled":false}]"#,
+                r#"[{"kind":"builtin","section":"merged","enabled":true},{"kind":"builtin","section":"draft","enabled":false}]"#,
                 NOW,
             )
             .unwrap();
@@ -500,6 +545,30 @@ mod tests {
         assert_eq!(sections[1]["section"], "draft");
         assert_eq!(sections[1]["enabled"], false);
         // Everything else, not mentioned, keeps today's default.
+        assert_eq!(sections.as_array().unwrap().len(), 7);
+    }
+
+    #[test]
+    fn a_view_is_added_appears_in_the_order_and_can_be_removed() {
+        let mut pinger = PingerState::new(None);
+        let created: Value =
+            serde_json::from_str(&pinger.add_view("P1 bugs", "label:p1", NOW).unwrap()).unwrap();
+        let id = created["id"].as_str().unwrap().to_string();
+        assert_eq!(created["name"], "P1 bugs");
+
+        let sections: Value = serde_json::from_str(&pinger.my_prs_sections().unwrap()).unwrap();
+        assert_eq!(sections.as_array().unwrap().len(), 8);
+        let view_pref = sections
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|p| p["kind"] == "view")
+            .expect("the new view is in the order");
+        assert_eq!(view_pref["id"], id);
+        assert_eq!(view_pref["enabled"], true);
+
+        pinger.remove_view(&id, NOW).unwrap();
+        let sections: Value = serde_json::from_str(&pinger.my_prs_sections().unwrap()).unwrap();
         assert_eq!(sections.as_array().unwrap().len(), 7);
     }
 

@@ -29,6 +29,7 @@ use crate::settings::{self, Settings, SlackOpensIn};
 use crate::slack::{self, Channel};
 use crate::sound;
 use crate::sync;
+use crate::views::View;
 
 const POLL_INTERVAL: Duration = Duration::from_secs(120);
 const MAX_BACKOFF: Duration = Duration::from_secs(600);
@@ -71,6 +72,10 @@ pub struct Snapshot {
     pub merged_pull_requests: Vec<MergedPrView>,
     /// Whether "Load more" would find anything.
     pub merged_can_load_more: bool,
+    /// Your custom views: a name and a GitHub search query.
+    pub views: Vec<View>,
+    /// Each view's matching PRs, by view id.
+    pub view_pull_requests: HashMap<String, Vec<PrView>>,
 }
 
 /// The automatic page and "Load more" extension of the Merged section, kept
@@ -359,15 +364,24 @@ impl Poller {
     /// Updates the snapshot from the last fetch, after snoozes or a single
     /// PR changed.
     fn rederive(&self, app: &AppHandle) {
-        let sections = self.memory.lock().unwrap().my_prs_sections();
-        self.update(app, |s| s.my_prs_sections = sections);
+        let (sections, views) = {
+            let memory = self.memory.lock().unwrap();
+            (memory.my_prs_sections(), memory.views.clone())
+        };
+        self.update(app, |s| {
+            s.my_prs_sections = sections;
+            s.views = views;
+        });
         let latest = self.latest.lock().unwrap();
         if let Some(fetched) = latest.as_ref() {
-            let (views, review_views) = self.derive(app, fetched, Utc::now());
+            let now = Utc::now();
+            let (views, review_views) = self.derive(app, fetched, now);
+            let view_pull_requests = self.derive_views(app, fetched, now);
             let denied = self.directory.lock().unwrap().is_denied();
             self.update(app, |s| {
                 s.pull_requests = views;
                 s.review_requests = review_views;
+                s.view_pull_requests = view_pull_requests;
                 s.team_lookup_denied = denied;
             });
         }
@@ -385,6 +399,63 @@ impl Poller {
         self.update(app, |s| s.my_prs_sections = effective);
         self.sync_wake.notify_one();
         self.refresh();
+    }
+
+    /// Adds a view and refreshes right away, so it shows without waiting for
+    /// the next poll.
+    pub fn add_view(&self, app: &AppHandle, name: String, query: String) {
+        let (views, sections) = {
+            let mut memory = self.memory.lock().unwrap();
+            memory.add_view(name, query, Utc::now());
+            self.save(&memory);
+            (memory.views.clone(), memory.my_prs_sections())
+        };
+        self.update(app, |s| {
+            s.views = views;
+            s.my_prs_sections = sections;
+        });
+        self.sync_wake.notify_one();
+        self.refresh();
+    }
+
+    pub fn update_view(&self, app: &AppHandle, id: &str, name: String, query: String) {
+        let views = {
+            let mut memory = self.memory.lock().unwrap();
+            memory.update_view(id, name, query, Utc::now());
+            self.save(&memory);
+            memory.views.clone()
+        };
+        self.update(app, |s| s.views = views);
+        self.sync_wake.notify_one();
+        self.refresh();
+    }
+
+    pub fn remove_view(&self, app: &AppHandle, id: &str) {
+        let (views, sections) = {
+            let mut memory = self.memory.lock().unwrap();
+            memory.remove_view(id, Utc::now());
+            self.save(&memory);
+            (memory.views.clone(), memory.my_prs_sections())
+        };
+        self.update(app, |s| {
+            s.views = views;
+            s.my_prs_sections = sections;
+            s.view_pull_requests.remove(id);
+        });
+        self.sync_wake.notify_one();
+    }
+
+    /// Each custom view's PRs, derived the same way as your own.
+    fn derive_views(
+        &self,
+        app: &AppHandle,
+        fetched: &Fetched,
+        now: DateTime<Utc>,
+    ) -> HashMap<String, Vec<PrView>> {
+        let settings = settings::load(app);
+        let memory = self.memory.lock().unwrap();
+        let directory = self.directory.lock().unwrap();
+        engine::derive_views(fetched, &settings, &memory, &directory, now)
     }
 
     /// Fetches further merged PRs, older than what's already shown. Errors
@@ -505,6 +576,8 @@ pub fn start(app: &AppHandle) -> Arc<Poller> {
             my_prs_sections: memory.my_prs_sections(),
             merged_pull_requests: Vec::new(),
             merged_can_load_more: false,
+            views: memory.views.clone(),
+            view_pull_requests: HashMap::new(),
         }),
         latest: Mutex::new(None),
         memory: Mutex::new(memory),
@@ -641,15 +714,25 @@ async fn poll_once(app: &AppHandle, poller: &Poller) -> Result<(), Problem> {
 
     let now = Utc::now();
     let (views, review_views) = poller.derive(app, &fetched, now);
+    let view_pull_requests = poller.derive_views(app, &fetched, now);
     let channels = poller.channels(&settings, &poller.memory.lock().unwrap());
     // Computed before `record_poll` prunes PRs no longer open.
     let vanished_own = notify::vanished_own_prs(&views, &poller.memory.lock().unwrap());
+    // Views are informational: they don't notify or count toward the tray,
+    // but a snoozed view-only PR still needs pruning once it stops matching.
+    let other_ids: Vec<String> = fetched
+        .view_pull_requests
+        .values()
+        .flatten()
+        .map(|pr| pr.id.clone())
+        .collect();
     let notifications = {
         let mut memory = poller.memory.lock().unwrap();
         let first_poll = poller.first_poll.swap(false, Ordering::Relaxed);
         let notifications = engine::record_poll(
             &views,
             &review_views,
+            &other_ids,
             &fetched.pull_requests,
             &settings,
             &mut memory,
@@ -678,6 +761,7 @@ async fn poll_once(app: &AppHandle, poller: &Poller) -> Result<(), Problem> {
         s.sso_partial = fetched.sso_partial;
         s.pull_requests = views;
         s.review_requests = review_views;
+        s.view_pull_requests = view_pull_requests;
         s.team_channels = channels;
         s.slack_opens_in = settings.slack_opens_in;
     });
@@ -831,15 +915,23 @@ async fn fetch(
     token: &auth::Token,
     reviewed_since: NaiveDate,
 ) -> Result<Fetched, Problem> {
-    let include_authored = {
+    let (include_authored, view_queries) = {
         let memory = poller.memory.lock().unwrap();
-        sections::needs(&memory.my_prs_sections()).open
+        let needs = sections::needs(&memory.my_prs_sections());
+        let queries: Vec<(String, String)> = needs
+            .view_ids
+            .iter()
+            .filter_map(|id| memory.views.iter().find(|v| &v.id == id))
+            .map(|view| (view.id.clone(), view.search()))
+            .collect();
+        (needs.open, queries)
     };
     let fetched = github::fetch_open_pull_requests(
         &poller.http,
         &token.value,
         reviewed_since,
         include_authored,
+        &view_queries,
     )
     .await
     .map_err(|e| match e {
@@ -857,6 +949,7 @@ async fn fetch(
         sso_partial: fetched.sso_partial,
         pull_requests: fetched.pull_requests,
         review_pull_requests: fetched.review_pull_requests,
+        view_pull_requests: fetched.view_pull_requests,
     })
 }
 
