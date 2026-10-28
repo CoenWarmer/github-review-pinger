@@ -2,8 +2,8 @@
 //! values GitHub adds don't break deserialization.
 
 use chrono::{DateTime, Utc};
-use serde::{Deserialize, Serialize};
 use serde::de::IgnoredAny;
+use serde::{Deserialize, Serialize};
 
 /// A merged PR as the lighter merged-PR search returns it: just enough to
 /// list it, none of the open-PR fields that don't apply once it's merged.

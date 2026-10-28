@@ -16,8 +16,8 @@ use serde_json::{Value, json};
 
 use crate::directory::{Directory, Found, Needs};
 use types::{
-    CheckState, MergeStateStatus, Mergeable, MergedPullRequest, PullRequest, ReviewDecision,
-    ReviewState, FoundPullRequest, SearchedPullRequest,
+    CheckState, FoundPullRequest, MergeStateStatus, Mergeable, MergedPullRequest, PullRequest,
+    ReviewDecision, ReviewState, SearchedPullRequest,
 };
 
 const ENDPOINT: &str = "https://api.github.com/graphql";
@@ -233,7 +233,14 @@ pub async fn search_pull_requests(
         json!({ "q": format!("is:pr {text} sort:updated-desc"), "count": 20 }),
     )
     .await?;
-    Ok(page.data.search.nodes.into_iter().flatten().map(Into::into).collect())
+    Ok(page
+        .data
+        .search
+        .nodes
+        .into_iter()
+        .flatten()
+        .map(Into::into)
+        .collect())
 }
 
 #[derive(Deserialize)]
