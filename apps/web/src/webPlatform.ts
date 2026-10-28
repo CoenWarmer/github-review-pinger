@@ -55,6 +55,7 @@ export function createWebPlatform(engine: Engine): Platform {
 
     getAutostart: async () => false,
     setAutostart: async () => {},
+    setTheme: (theme) => engine.setTheme(theme),
     setNotificationsMuted: (muted) => engine.setNotificationsMuted(muted),
     sendTestNotification: () => {},
     setSoundOnMerge: () => {},

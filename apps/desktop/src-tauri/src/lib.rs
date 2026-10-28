@@ -113,6 +113,11 @@ fn set_notifications_muted(app: AppHandle, poller: State<Arc<Poller>>, muted: bo
 }
 
 #[tauri::command]
+fn set_theme(app: AppHandle, poller: State<Arc<Poller>>, theme: crate::memory::Theme) {
+    poller.set_theme(&app, theme);
+}
+
+#[tauri::command]
 fn set_sound_on_merge(app: AppHandle, poller: State<Arc<Poller>>, enabled: bool) {
     poller.set_sound_on_merge(&app, enabled);
 }
@@ -287,6 +292,7 @@ pub fn run() {
             card_show_popover,
             send_test_notification,
             set_notifications_muted,
+            set_theme,
             set_sound_on_merge,
             set_my_prs_sections,
             load_more_merged,

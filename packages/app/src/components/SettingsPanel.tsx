@@ -8,7 +8,7 @@ import { Switch } from "@/components/ui/switch";
 import { TeamChannelForm } from "../slack";
 import { ago } from "../format";
 import { useNow } from "../hooks";
-import type { SectionPref, SyncStatus, TeamChannel, TokenSource, View } from "../types";
+import type { SectionPref, SyncStatus, TeamChannel, Theme, TokenSource, View } from "../types";
 import { MyPrsSections } from "./MyPrsSections";
 import { SYNC_ABOUT, SYNC_LABEL } from "./Setup";
 import { ViewsSettings } from "./ViewsSettings";
@@ -22,6 +22,7 @@ export function SettingsPanel({
   account,
   authSource,
   hasSavedToken,
+  theme,
   notificationsMuted,
   soundOnMerge,
   teamLookupDenied,
@@ -36,6 +37,7 @@ export function SettingsPanel({
   authSource: TokenSource;
   hasSavedToken: boolean;
   /** Notification cards are muted. */
+  theme: Theme;
   notificationsMuted: boolean;
   /** Plays a sound when one of your own PRs is merged. */
   soundOnMerge: boolean;
@@ -171,6 +173,25 @@ export function SettingsPanel({
         )}
       </Section>
 
+      <Section>
+        <Heading>Appearance</Heading>
+        <div className="flex gap-1.5" role="radiogroup" aria-label="Theme">
+          {THEMES.map(({ id, label }) => (
+            <Button
+              key={id}
+              type="button"
+              role="radio"
+              aria-checked={theme === id}
+              variant={theme === id ? "secondary" : "outline"}
+              size="xs"
+              onClick={() => platform.setTheme(id)}
+            >
+              {label}
+            </Button>
+          ))}
+        </div>
+      </Section>
+
       {(notifications || sound) && (
         <Section>
           <Heading>Notifications</Heading>
@@ -236,6 +257,12 @@ export function SettingsPanel({
     </div>
   );
 }
+
+const THEMES: { id: Theme; label: string }[] = [
+  { id: "system", label: "System" },
+  { id: "light", label: "Light" },
+  { id: "dark", label: "Dark" },
+];
 
 function SyncSetting({ sync }: { sync: SyncStatus }) {
   const platform = usePlatform();

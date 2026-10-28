@@ -19,7 +19,7 @@ use crate::directory::Directory;
 use crate::engine::{self, Fetched};
 use crate::gist;
 use crate::github::{self, FetchError};
-use crate::memory::Memory;
+use crate::memory::{Memory, Theme};
 use crate::merged::{self, MergedPrView};
 use crate::notify;
 use crate::prs::{self, PrView};
@@ -52,6 +52,7 @@ pub struct Snapshot {
     pub has_saved_token: bool,
     /// Notification cards are muted.
     pub notifications_muted: bool,
+    pub theme: Theme,
     /// The team lookup was refused for lack of the `read:org` scope.
     pub team_lookup_denied: bool,
     /// Wall-clock time, so staleness survives the machine sleeping.
@@ -361,6 +362,16 @@ impl Poller {
         self.update(app, |s| s.notifications_muted = muted);
     }
 
+    /// Switches between the light, dark and system appearance.
+    pub fn set_theme(&self, app: &AppHandle, theme: Theme) {
+        {
+            let mut memory = self.memory.lock().unwrap();
+            memory.theme = theme;
+            self.save(&memory);
+        }
+        self.update(app, |s| s.theme = theme);
+    }
+
     /// Turns the "PR merged" sound on or off.
     pub fn set_sound_on_merge(&self, app: &AppHandle, enabled: bool) {
         {
@@ -578,6 +589,7 @@ pub fn start(app: &AppHandle) -> Arc<Poller> {
             auth_choice: None,
             has_saved_token: false,
             notifications_muted: memory.notifications_muted,
+            theme: memory.theme,
             team_lookup_denied: false,
             fetched_at: None,
             sso_partial: false,

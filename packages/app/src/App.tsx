@@ -20,7 +20,7 @@ import { RingsLoader } from "./components/RingsLoader";
 import { SettingsPanel } from "./components/SettingsPanel";
 import { Setup, problemMessage } from "./components/Setup";
 import { elapsed } from "./format";
-import { useNow, useSnapshot } from "./hooks";
+import { useApplyTheme, useNow, useSnapshot } from "./hooks";
 import { MergedRow } from "./components/MergedRow";
 import { PlatformProvider, usePlatform, type Platform } from "./platform";
 import { SECTION_TITLES } from "./sections";
@@ -214,6 +214,7 @@ function AppContent() {
   const now = useNow();
   const [tab, setTab] = useState<Tab>("mine");
   const [query, setQuery] = useState("");
+  useApplyTheme(snapshot?.theme);
 
   if (!snapshot || (snapshot.status.kind === "loading" && !snapshot.fetchedAt)) {
     return (
@@ -339,6 +340,7 @@ function AppContent() {
               account={snapshot.viewer}
               authSource={snapshot.authChoice ?? (snapshot.hasSavedToken ? "pat" : "gh")}
               hasSavedToken={snapshot.hasSavedToken}
+              theme={snapshot.theme}
               notificationsMuted={snapshot.notificationsMuted}
               soundOnMerge={snapshot.soundOnMerge}
               teamLookupDenied={snapshot.teamLookupDenied}

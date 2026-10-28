@@ -11,7 +11,7 @@ use review_pinger_core::directory::{Directory, Found, Needs};
 use review_pinger_core::engine::{self, Fetched};
 use review_pinger_core::github::types::MergedPullRequest;
 use review_pinger_core::github::types::PullRequest;
-use review_pinger_core::memory::Memory;
+use review_pinger_core::memory::{Memory, Theme};
 use review_pinger_core::merged;
 use review_pinger_core::notify::Notification;
 use review_pinger_core::prs::{self, PrView};
@@ -259,6 +259,14 @@ impl PingerState {
 
     pub fn set_notifications_muted(&mut self, muted: bool) {
         self.memory.notifications_muted = muted;
+    }
+
+    pub fn set_theme(&mut self, theme: &str) {
+        self.memory.theme = Theme::parse(theme);
+    }
+
+    pub fn theme(&self) -> &'static str {
+        self.memory.theme.as_str()
     }
 
     pub fn notifications_muted(&self) -> bool {

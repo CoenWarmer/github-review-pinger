@@ -64,6 +64,9 @@ export const tauriPlatform: Platform = {
 
   getAutostart: () => invoke<boolean>("get_autostart"),
   setAutostart: (enabled) => invoke("set_autostart", { enabled }),
+  setTheme: (theme) => {
+    invoke("set_theme", { theme });
+  },
   setNotificationsMuted: (muted) => {
     invoke("set_notifications_muted", { muted });
   },

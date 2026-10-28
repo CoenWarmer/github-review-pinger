@@ -1,5 +1,5 @@
 import { createContext, useContext, type ReactNode } from "react";
-import type { FoundPr, SectionPref, Snapshot, TokenSource } from "./types";
+import type { FoundPr, SectionPref, Snapshot, Theme, TokenSource } from "./types";
 
 /**
  * What the UI needs from whatever hosts it: the desktop app talks to its Rust
@@ -64,6 +64,8 @@ export interface Platform {
 
   getAutostart(): Promise<boolean>;
   setAutostart(enabled: boolean): Promise<void>;
+  /** Saves the appearance on this device. */
+  setTheme(theme: Theme): void;
   setNotificationsMuted(muted: boolean): void;
   sendTestNotification(): void;
   setSoundOnMerge(enabled: boolean): void;

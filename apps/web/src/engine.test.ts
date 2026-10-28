@@ -182,6 +182,19 @@ describe("the web engine", () => {
     assert.ok(JSON.parse(storage.data.get("reviewPinger.state")!).memory.pullRequests.mine);
   });
 
+  it("follows the system theme until one is chosen, then remembers it", async () => {
+    const { engine, storage } = makeEngine();
+    await engine.start();
+    assert.equal(engine.getSnapshot().theme, "system");
+
+    engine.setTheme("dark");
+    assert.equal(engine.getSnapshot().theme, "dark");
+
+    const { engine: next } = makeEngine({ storage });
+    await next.start();
+    assert.equal(next.getSnapshot().theme, "dark");
+  });
+
   it("keeps showing the last data when a refresh fails, and says why", async () => {
     const { engine, github } = makeEngine();
     await engine.start();

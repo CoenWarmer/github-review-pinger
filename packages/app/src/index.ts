@@ -1,4 +1,5 @@
 export { App } from "./App";
+export { useApplyTheme } from "./hooks";
 export type { Platform } from "./platform";
 export { SECTION_TITLES, viewSearch } from "./sections";
 export type {
@@ -13,6 +14,7 @@ export type {
   Snapshot,
   SyncStatus,
   TeamChannel,
+  Theme,
   TokenSource,
   View,
 } from "./types";

@@ -12,6 +12,7 @@ import type {
   Snapshot,
   SyncStatus,
   TeamChannel,
+  Theme,
   View,
 } from "@review-pinger/app";
 import {
@@ -88,6 +89,8 @@ export interface PingerLike {
   removeView(id: string, now: string): void;
   setNotificationsMuted(muted: boolean): void;
   notificationsMuted(): boolean;
+  setTheme(theme: string): void;
+  theme(): string;
   syncEnabled(): boolean;
   setSyncEnabled(enabled: boolean): void;
   syncGist(): string | undefined | null;
@@ -169,6 +172,7 @@ export class Engine {
       authChoice: null,
       hasSavedToken: false,
       notificationsMuted: false,
+      theme: "system",
       soundOnMerge: false,
       teamLookupDenied: false,
       fetchedAt: null,
@@ -246,6 +250,7 @@ export class Engine {
     this.publish({
       hasSavedToken: this.token !== null,
       notificationsMuted: this.pinger.notificationsMuted(),
+      theme: this.pinger.theme() as Theme,
       sync: {
         ...this.snapshot.sync,
         enabled: this.pinger.syncEnabled(),
@@ -596,6 +601,12 @@ export class Engine {
       this.persist();
       return false;
     }
+  }
+
+  setTheme(theme: Theme) {
+    this.pinger.setTheme(theme);
+    this.persist();
+    this.publish({ theme });
   }
 
   setNotificationsMuted(muted: boolean) {
