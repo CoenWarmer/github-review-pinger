@@ -6,6 +6,9 @@ import type { FoundPr, SectionPref, Snapshot, Theme, TokenSource } from "./types
  * shell, the web app to the PR logic running in the browser.
  */
 export interface Platform {
+  /** The app's version, to show in Settings. */
+  version: string;
+
   /** What this host can do, so the UI leaves out controls that wouldn't work. */
   features: {
     /** The token can come from the GitHub CLI as well as a pasted one. */

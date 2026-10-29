@@ -19,6 +19,8 @@ async function rejectWithMessage<T>(run: () => T | Promise<T>): Promise<T> {
 /** The browser: everything runs in the page, so this just forwards to the engine. */
 export function createWebPlatform(engine: Engine): Platform {
   return {
+    version: __APP_VERSION__,
+
     // No GitHub CLI or login items in a browser, and notifications only work in
     // the open page, so they're left out for now.
     features: { githubCli: false, autostart: false, notifications: false, sound: false },
