@@ -19,6 +19,7 @@ import type {
 import { MyPrsSections } from "./MyPrsSections";
 import { SYNC_ABOUT, SYNC_LABEL } from "./Setup";
 import { ViewsSettings } from "./ViewsSettings";
+import { Credits } from "./Credits";
 
 const AUTH_OPTIONS: { source: TokenSource; label: string }[] = [
   { source: "gh", label: "GitHub CLI" },
@@ -261,9 +262,7 @@ export function SettingsPanel({
         <SyncSetting sync={sync} />
       </Section>
       <SlackChannels channels={channels} />
-      <p className="m-0 px-3 py-3 text-center text-xs text-muted-foreground">
-        Review Pinger v{platform.version}
-      </p>
+      <Credits platform={platform} />
     </div>
   );
 }

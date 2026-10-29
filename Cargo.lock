@@ -1606,7 +1606,7 @@ dependencies = [
 
 [[package]]
 name = "github-review-pinger"
-version = "0.5.1"
+version = "0.6.0"
 dependencies = [
  "chrono",
  "chrono-tz",
@@ -3630,7 +3630,7 @@ dependencies = [
 
 [[package]]
 name = "review-pinger-core"
-version = "0.5.1"
+version = "0.6.0"
 dependencies = [
  "chrono",
  "chrono-tz",
@@ -3641,7 +3641,7 @@ dependencies = [
 
 [[package]]
 name = "review-pinger-wasm"
-version = "0.5.1"
+version = "0.6.0"
 dependencies = [
  "chrono",
  "review-pinger-core",

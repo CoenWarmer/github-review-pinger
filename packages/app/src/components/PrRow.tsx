@@ -8,6 +8,7 @@ import { usePlatform } from "../platform";
 import { checksProgress, dayAndTime, elapsed, queueProgress, remaining } from "../format";
 import { TeamChannelForm, TeamChip } from "../slack";
 import type { Action, PullRequest, Reviewer, ReviewerState } from "../types";
+import { PrContextMenu } from "./PrContextMenu";
 
 /** Opens a PR on GitHub, and has it refreshed first the next time the list shows. */
 export function useVisitPr() {
@@ -218,50 +219,52 @@ export function PrRow({ pr, now }: { pr: PullRequest; now: number }) {
     : [];
 
   return (
-    <li className="group relative border-b hover:bg-accent/50 focus-within:bg-accent/50">
-      <button
-        type="button"
-        className="flex w-full cursor-pointer flex-col gap-[3px] border-0 bg-transparent px-3 py-3 text-left outline-none"
-        onClick={() => visitPr(pr)}
-      >
-        <span className="truncate font-medium">{pr.title}</span>
-        <span className="text-xs text-muted-foreground tabular-nums mb-1.5">
-          {pr.repo}#{pr.number} · open {elapsed(pr.openSince, now)} · quiet{" "}
-          {elapsed(pr.quietSince, now)}
-          {pr.group === "dormant" && ` · idle ${elapsed(pr.lastActivity, now)}`}
-          {pr.snoozedUntil && ` · until ${dayAndTime(pr.snoozedUntil)}`}
-        </span>
-        {((showActions && pr.actions.length > 0) ||
-          notes.length > 0 ||
-          pr.reviewers.length > 0) && (
-          <span className="flex flex-wrap gap-1.5">
-            {showActions &&
-              pr.actions.map((action) => (
-                <Badge key={action} variant={ACTION_VARIANTS[action]} className={BADGE_SIZE}>
-                  {ACTION_LABELS[action]}
+    <PrContextMenu url={pr.url}>
+      <li className="group relative border-b hover:bg-accent/50 focus-within:bg-accent/50">
+        <button
+          type="button"
+          className="flex w-full cursor-pointer flex-col gap-[3px] border-0 bg-transparent px-3 py-3 text-left outline-none"
+          onClick={() => visitPr(pr)}
+        >
+          <span className="truncate font-medium">{pr.title}</span>
+          <span className="text-xs text-muted-foreground tabular-nums mb-1.5">
+            {pr.repo}#{pr.number} · open {elapsed(pr.openSince, now)} · quiet{" "}
+            {elapsed(pr.quietSince, now)}
+            {pr.group === "dormant" && ` · idle ${elapsed(pr.lastActivity, now)}`}
+            {pr.snoozedUntil && ` · until ${dayAndTime(pr.snoozedUntil)}`}
+          </span>
+          {((showActions && pr.actions.length > 0) ||
+            notes.length > 0 ||
+            pr.reviewers.length > 0) && (
+            <span className="flex flex-wrap gap-1.5">
+              {showActions &&
+                pr.actions.map((action) => (
+                  <Badge key={action} variant={ACTION_VARIANTS[action]} className={BADGE_SIZE}>
+                    {ACTION_LABELS[action]}
+                  </Badge>
+                ))}
+              {notes.map(({ key, label, variant, style, title }) => (
+                <Badge key={key} variant={variant} className={BADGE_SIZE} style={style} title={title}>
+                  {label}
                 </Badge>
               ))}
-            {notes.map(({ key, label, variant, style, title }) => (
-              <Badge key={key} variant={variant} className={BADGE_SIZE} style={style} title={title}>
-                {label}
-              </Badge>
-            ))}
-            {pr.reviewers.map((reviewer) => (
-              <ReviewerChip
-                key={reviewer.login}
-                reviewer={reviewer}
-                prId={pr.id}
-                prUrl={pr.url}
-                now={now}
-                onAsk={setAskingTeam}
-              />
-            ))}
-          </span>
-        )}
-      </button>
-      {askingTeam && <TeamChannelForm team={askingTeam} onDone={() => setAskingTeam(null)} />}
-      {pr.group !== "draft" && <RowActions pr={pr} />}
-    </li>
+              {pr.reviewers.map((reviewer) => (
+                <ReviewerChip
+                  key={reviewer.login}
+                  reviewer={reviewer}
+                  prId={pr.id}
+                  prUrl={pr.url}
+                  now={now}
+                  onAsk={setAskingTeam}
+                />
+              ))}
+            </span>
+          )}
+        </button>
+        {askingTeam && <TeamChannelForm team={askingTeam} onDone={() => setAskingTeam(null)} />}
+        {pr.group !== "draft" && <RowActions pr={pr} />}
+      </li>
+    </PrContextMenu>
   );
 }
 

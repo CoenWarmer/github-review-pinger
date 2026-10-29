@@ -6,8 +6,6 @@ import { Input } from "@/components/ui/input";
 import { Card, CardContent } from "@/components/ui/card";
 import {
   ChartContainer,
-  ChartTooltip,
-  ChartTooltipContent,
   type ChartConfig,
 } from "@/components/ui/chart";
 import {
@@ -18,6 +16,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { usePlatform } from "../platform";
+import { RingsLoader } from "./RingsLoader";
 import {
   STATS_DAYS,
   averageApproval,
@@ -32,7 +31,13 @@ import {
   type Change,
   type Tone,
 } from "../stats";
-import type { CiStats, PullRequest, ReviewStatsData, StatsData } from "../types";
+import type {
+  CiStats,
+  PullRequest,
+  ReviewStatsData,
+  StatsData,
+} from "../types";
+import { Credits } from "./Credits";
 
 const TEAM_KEY = "reviewPinger.statsTeam";
 /** Teams up to this size are counted member by member, which the median needs. */
@@ -112,7 +117,11 @@ const TEXT_TONE: Record<Tone, string> = {
   neutral: "text-muted-foreground",
 };
 /** What a screen reader is told, since it can't see the colour. */
-const TONE_WORDS: Record<Tone, string> = { good: ", better", bad: ", worse", neutral: "" };
+const TONE_WORDS: Record<Tone, string> = {
+  good: ", better",
+  bad: ", worse",
+  neutral: "",
+};
 
 /** The per-member bars: the team's neutral, lighter, since they're derived from the team's bar. */
 const PER_MEMBER_FILL =
@@ -162,7 +171,9 @@ function teamBars(
   const tenth = (n: number) => Math.round(n * 10) / 10;
   // More merged PRs, and more reviews, are better.
   const moved = (now: number, was: number | null | undefined) =>
-    was === null || was === undefined ? null : change(now, was, { better: "up" });
+    was === null || was === undefined
+      ? null
+      : change(now, was, { better: "up" });
   return [
     {
       who: "You (all repos)",
@@ -199,7 +210,9 @@ function teamBars(
             change:
               averageBefore === null
                 ? null
-                : change(tenth(average), tenth(averageBefore), { better: "up" }),
+                : change(tenth(average), tenth(averageBefore), {
+                    better: "up",
+                  }),
           },
         ]
       : []),
@@ -281,11 +294,19 @@ const BarsChart = memo(function BarsChart({
   /** Leave room beside the bars for each one's change, which loads after them. */
   reserveChangeSpace: boolean;
 }) {
-  const config = useMemo(() => ({ value: { label: unit } }) satisfies ChartConfig, [unit]);
+  const config = useMemo(
+    () => ({ value: { label: unit } }) satisfies ChartConfig,
+    [unit],
+  );
   // Room beside the longest bar for its value and, once loaded, its change.
   // Held while the change is still loading, so it doesn't shift the bars when it arrives.
   const margin = useMemo(
-    () => ({ top: 0, right: reserveChangeSpace ? 110 : 32, bottom: 0, left: 0 }),
+    () => ({
+      top: 0,
+      right: reserveChangeSpace ? 110 : 32,
+      bottom: 0,
+      left: 0,
+    }),
     [reserveChangeSpace],
   );
   const label = useCallback(
@@ -312,7 +333,6 @@ const BarsChart = memo(function BarsChart({
             tick={{ fontSize: 11 }}
             interval={0}
           />
-          <ChartTooltip cursor={false} content={<ChartTooltipContent hideLabel />} />
           <Bar dataKey="value" radius={[0, 4, 4, 0]} isAnimationActive={false}>
             {bars.map((bar) => (
               <Cell key={bar.who} fill={bar.fill} />
@@ -330,7 +350,8 @@ const BarsChart = memo(function BarsChart({
               <th scope="row">{bar.who}</th>
               <td>
                 {bar.value}
-                {bar.change && `, ${bar.change.text}${TONE_WORDS[bar.change.tone]}`}
+                {bar.change &&
+                  `, ${bar.change.text}${TONE_WORDS[bar.change.tone]}`}
               </td>
             </tr>
           ))}
@@ -371,11 +392,21 @@ function ValueLabel({
       tabIndex={bar.change ? 0 : undefined}
       aria-label={`${bar.who}: ${bar.value}${bar.change ? `, ${bar.change.text}${TONE_WORDS[bar.change.tone]}` : ""}`}
     >
-      <rect x={0} y={top - 6} width={10000} height={Number(height) + 12} fill="transparent" />
+      <rect
+        x={0}
+        y={top - 6}
+        width={10000}
+        height={Number(height) + 12}
+        fill="transparent"
+      />
       <text
         x={Number(x) + Number(width) + 6}
         y={top + Number(height) / 2}
-        dominantBaseline="central"
+        // The baseline sits 0.36em under the bar's centre, which puts the digits
+        // (no descenders, so not the whole text box) in the middle of the bar.
+        // `dominant-baseline` centres the box and leaves them about 4px high,
+        // and isn't the same in every browser, where `dy` is.
+        dy="0.36em"
         fontSize={11}
       >
         <tspan className="fill-foreground">{bar.value}</tspan>
@@ -584,11 +615,14 @@ export function StatsSettings({
         </p>
       )}
 
-      <section aria-label={`PRs merged in the last ${STATS_DAYS} days`}>
+      <section
+        aria-label={`PRs merged in the last ${STATS_DAYS} days`}
+        className="mb-2"
+      >
         <h4 className="m-0 mb-1 text-xs font-medium">
           PRs merged, last {STATS_DAYS} days
         </h4>
-        {stats.kind === "loading" && <Placeholder>Loading…</Placeholder>}
+        {stats.kind === "loading" && <ChartLoading bars={team ? 5 : 1} />}
         {stats.kind === "error" && (
           <Placeholder error>{stats.message}</Placeholder>
         )}
@@ -612,8 +646,6 @@ export function StatsSettings({
                 {data.teamMemberMerged === null &&
                   data.teamMemberCount > MEMBER_COUNT_CAP &&
                   ` The median is shown for teams of up to ${MEMBER_COUNT_CAP} members.`}
-                {before &&
-                  ` Hover a bar to see how it changed since the ${STATS_DAYS} days before: green is better, red worse. The median has none.`}
               </Note>
             )}
             {team && data.teamMembersCapped && (
@@ -626,11 +658,14 @@ export function StatsSettings({
         )}
       </section>
 
-      <section aria-label={`Reviews done in the last ${STATS_DAYS} days`}>
+      <section
+        aria-label={`Reviews done in the last ${STATS_DAYS} days`}
+        className="mb-2"
+      >
         <h4 className="m-0 mb-1 text-xs font-medium">
           Reviews done, last {STATS_DAYS} days
         </h4>
-        {reviews.kind === "loading" && <Placeholder>Loading…</Placeholder>}
+        {reviews.kind === "loading" && <ChartLoading bars={team ? 5 : 1} />}
         {reviews.kind === "error" && (
           <Placeholder error>{reviews.message}</Placeholder>
         )}
@@ -679,7 +714,7 @@ export function StatsSettings({
           previous={before ? averageApproval(before.sample, viewer) : null}
           format={duration}
           better="down"
-          hint="request to last approval"
+          hint="from first review request to last review approval"
           basis="merged PR"
           loading={stats.kind === "loading"}
         />
@@ -689,7 +724,7 @@ export function StatsSettings({
           previous={before ? averageReadyToMerged(before.sample) : null}
           format={duration}
           better="down"
-          hint="ready for review to merge"
+          hint="from ready for review to merged"
           basis="merged PR"
           loading={stats.kind === "loading"}
         />
@@ -703,8 +738,14 @@ export function StatsSettings({
           <>
             <Tile
               label="CI builds"
-              value={ciValue(ciNow, ci.kind === "loading", (c) => String(c.builds))}
-              detail={ciNow?.kind === "ok" ? `on your PRs in ${buildkitePipeline}` : " "}
+              value={ciValue(ciNow, ci.kind === "loading", (c) =>
+                String(c.builds),
+              )}
+              detail={
+                ciNow?.kind === "ok"
+                  ? `on your PRs in ${buildkitePipeline}`
+                  : " "
+              }
               moved={
                 ciNow?.kind === "ok" && ciBefore
                   ? change(ciNow.builds, ciBefore.builds)
@@ -716,28 +757,35 @@ export function StatsSettings({
       </div>
       {hasCi && <PipelineSetting value={buildkitePipeline} />}
       {hasCi && ciNow && ciNow.kind !== "ok" && <CiHelp stats={ciNow} />}
-      <p className="m-0 -mt-2 text-[11px] leading-snug text-muted-foreground">
-        Avg time to first review runs from a merged PR's first review request to
-        the first review by someone else (any review), and Avg time to get
-        approval to the last approval still in effect when it merged, so every
-        approver is waited for, code owners included (GitHub doesn't record who
-        a merged PR's code owners were, so an approval from someone not required
-        counts too). Both are over your latest 100 merged PRs. Code
-        owners are the pending requests GitHub made from CODEOWNERS, on open PRs
-        that aren't drafts. Avg time to deliver PR is the time from a merged PR first
-        being ready for review (when it was opened, or first marked ready if it
-        began as a draft) to its merge, which is what delivered means here: the
-        reviews, CI and merge queue together.
-        {hasCi &&
-          ciNow?.kind === "ok" &&
-          ` CI builds are the ones on PRs you authored, created in the last ${STATS_DAYS} days (found by branch, since a bot creates them, not you).`}
-      </p>
+      {/* The end of the tab, in every app, not only where the CI tiles are. */}
+      <div className="mt-5 mb-2 border-t p-2">
+        <Credits platform={platform} />
+      </div>
     </div>
   );
 }
 
 function Note({ children }: { children: React.ReactNode }) {
   return <p className="m-0 mt-1 text-xs text-muted-foreground">{children}</p>;
+}
+
+/**
+ * The rings with "Fetching data…" under them, centred where the chart will be,
+ * with about the height it will have (a bar is 32 px, plus the margins; a team
+ * has up to five bars, no team just yours, and never less than the loader
+ * needs) so the page doesn't jump much when the numbers arrive.
+ */
+function ChartLoading({ bars }: { bars: number }) {
+  return (
+    <div
+      role="status"
+      className="flex flex-col items-center justify-center gap-1"
+      style={{ height: Math.max(36 + bars * 32, 132) }}
+    >
+      <RingsLoader size={120} />
+      <span className="text-xs text-muted-foreground">Fetching data…</span>
+    </div>
+  );
 }
 
 function Placeholder({
@@ -782,7 +830,10 @@ function PipelineSetting({ value }: { value: string }) {
   return (
     <div className="-mt-1 flex flex-col gap-1">
       <div className="flex items-center gap-2">
-        <label htmlFor="buildkite-pipeline" className="shrink-0 text-xs text-muted-foreground">
+        <label
+          htmlFor="buildkite-pipeline"
+          className="shrink-0 text-xs text-muted-foreground"
+        >
           Buildkite pipeline
         </label>
         <Input
@@ -810,8 +861,7 @@ function PipelineSetting({ value }: { value: string }) {
         )}
       </div>
       <p className="m-0 text-[11px] leading-snug text-muted-foreground">
-        CI builds are counted in this pipeline only, and the setting syncs with your other
-        devices.
+        CI builds are counted in this pipeline only.
       </p>
       {error && <p className="m-0 text-xs text-destructive">{error}</p>}
     </div>
@@ -832,14 +882,18 @@ function Tile({
 }) {
   return (
     <Card className="gap-1 rounded-lg py-2 shadow-none">
-      <CardContent className="flex flex-col gap-0.5 px-2.5">
-        <span className="text-[11px] leading-tight text-muted-foreground">{label}</span>
-        <span className="text-lg leading-tight font-semibold">{value}</span>
-        <span className="text-[11px] leading-tight whitespace-pre-line text-muted-foreground">
+      <CardContent className="flex flex-col gap-1 px-2.5">
+        <span className="text-[11px] font-semibold leading-tight text-muted-foreground mb-1">
+          {label}
+        </span>
+        <span className="text-lg leading-none font-semibold">{value}</span>
+        <span className="text-[11px] leading-tight whitespace-pre-line text-muted-foreground mb-1">
           {detail}
         </span>
         {moved && (
-          <span className={cn("text-[11px] leading-tight", TEXT_TONE[moved.tone])}>
+          <span
+            className={cn("text-[11px] leading-tight", TEXT_TONE[moved.tone])}
+          >
             {moved.text}
           </span>
         )}
@@ -863,29 +917,35 @@ function CiHelp({ stats }: { stats: Exclude<CiStats, { kind: "ok" }> }) {
   const platform = usePlatform();
   const code = "rounded bg-muted px-1 py-0.5 font-mono text-[11px]";
   if (stats.kind === "error") {
-    return <p className="m-0 -mt-2 text-xs text-destructive">{stats.message}</p>;
+    return (
+      <p className="m-0 -mt-2 text-xs text-destructive">{stats.message}</p>
+    );
   }
   return (
     <p className="m-0 -mt-2 text-xs leading-snug text-muted-foreground">
       {stats.kind === "notInstalled" ? (
         <>
-          CI build stats come from the Buildkite CLI, which isn't installed. Install it
-          with <code className={code}>brew install buildkite/buildkite/bk@3</code>, then
-          log in with <code className={code}>bk auth login</code>.{" "}
+          CI build stats come from the Buildkite CLI, which isn't installed.
+          Install it with{" "}
+          <code className={code}>brew install buildkite/buildkite/bk@3</code>,
+          then log in with <code className={code}>bk auth login</code>.{" "}
           <Button
             type="button"
             variant="link"
             size="xs"
             className="h-auto p-0"
-            onClick={() => platform.openUrl("https://buildkite.com/docs/platform/cli")}
+            onClick={() =>
+              platform.openUrl("https://buildkite.com/docs/platform/cli")
+            }
           >
             Installation guide
           </Button>
         </>
       ) : (
         <>
-          The Buildkite CLI isn't logged in. Run <code className={code}>bk auth login</code>{" "}
-          in a terminal, then reopen Settings.
+          The Buildkite CLI isn't logged in. Run{" "}
+          <code className={code}>bk auth login</code> in a terminal, then reopen
+          Settings.
         </>
       )}
     </p>
@@ -928,14 +988,18 @@ function Figure({
     <Tile
       label={label}
       value={
-        loading || !value ? "…" : value.average === null ? "–" : format(value.average)
+        loading || !value
+          ? "…"
+          : value.average === null
+            ? "–"
+            : format(value.average)
       }
       detail={
         loading || !value
           ? " "
-          : [hint, `${value.count} ${basis}${value.count === 1 ? "" : "s"}`]
+          : [`${value.count} ${basis}${value.count === 1 ? "" : "s"}`, hint]
               .filter(Boolean)
-              .join("\n")
+              .join("\n\n")
       }
       moved={moved}
     />

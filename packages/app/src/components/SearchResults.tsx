@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 import { ago } from "../format";
 import { usePlatform } from "../platform";
 import type { FoundPr } from "../types";
+import { PrContextMenu } from "./PrContextMenu";
 
 /** Whether every word in `query` appears somewhere in the text of `fields`. */
 export function matchesQuery(query: string, fields: (string | number | null | undefined)[]) {
@@ -28,27 +29,29 @@ const STATE_VARIANTS = {
 function FoundRow({ pr, now }: { pr: FoundPr; now: number }) {
   const platform = usePlatform();
   return (
-    <li className="group relative border-b hover:bg-accent/50 focus-within:bg-accent/50">
-      <button
-        type="button"
-        className="flex w-full cursor-pointer flex-col gap-[3px] border-0 bg-transparent px-3 py-3 text-left outline-none"
-        onClick={() => platform.openUrl(pr.url)}
-      >
-        <span className="truncate font-medium">{pr.title}</span>
-        <span className="flex items-center gap-1.5 text-xs text-muted-foreground tabular-nums">
-          <Badge
-            variant={STATE_VARIANTS[pr.state]}
-            className="gap-[3px] px-1.5 py-0 text-[11px] leading-[18px] font-semibold"
-          >
-            {pr.state}
-          </Badge>
-          <span className="truncate">
-            {pr.repo}#{pr.number}
-            {pr.author && ` · ${pr.author}`} · updated {ago(pr.updatedAt, now)}
+    <PrContextMenu url={pr.url}>
+      <li className="group relative border-b hover:bg-accent/50 focus-within:bg-accent/50">
+        <button
+          type="button"
+          className="flex w-full cursor-pointer flex-col gap-[3px] border-0 bg-transparent px-3 py-3 text-left outline-none"
+          onClick={() => platform.openUrl(pr.url)}
+        >
+          <span className="truncate font-medium">{pr.title}</span>
+          <span className="flex items-center gap-1.5 text-xs text-muted-foreground tabular-nums">
+            <Badge
+              variant={STATE_VARIANTS[pr.state]}
+              className="gap-[3px] px-1.5 py-0 text-[11px] leading-[18px] font-semibold"
+            >
+              {pr.state}
+            </Badge>
+            <span className="truncate">
+              {pr.repo}#{pr.number}
+              {pr.author && ` · ${pr.author}`} · updated {ago(pr.updatedAt, now)}
+            </span>
           </span>
-        </span>
-      </button>
-    </li>
+        </button>
+      </li>
+    </PrContextMenu>
   );
 }
 
