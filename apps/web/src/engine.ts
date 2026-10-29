@@ -20,6 +20,7 @@ import {
   type Fetched,
   type Found,
   type FoundPullRequest,
+  type ReviewStatsData,
   type StatsData,
   type Github,
   type Needs,
@@ -565,6 +566,18 @@ export class Engine {
     const since = new Date(this.now().getTime() - days * 86_400_000).toISOString().slice(0, 10);
     try {
       return await this.github.fetchStats(team, since);
+    } catch (e) {
+      throw e instanceof Error ? e.message : String(e);
+    }
+  }
+
+  /** The reviews submitted in the last `days`. Rejects with a message to show. */
+  async loadReviewStats(team: string | null, days: number): Promise<ReviewStatsData> {
+    if (!this.github) throw "There's no token to load statistics with.";
+    const to = this.now();
+    const from = new Date(to.getTime() - days * 86_400_000);
+    try {
+      return await this.github.fetchReviewStats(team, from.toISOString(), to.toISOString());
     } catch (e) {
       throw e instanceof Error ? e.message : String(e);
     }

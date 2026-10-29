@@ -1,5 +1,13 @@
 import { createContext, useContext, type ReactNode } from "react";
-import type { FoundPr, SectionPref, Snapshot, StatsData, Theme, TokenSource } from "./types";
+import type {
+  FoundPr,
+  ReviewStatsData,
+  SectionPref,
+  Snapshot,
+  StatsData,
+  Theme,
+  TokenSource,
+} from "./types";
 
 /**
  * What the UI needs from whatever hosts it: the desktop app talks to its Rust
@@ -55,6 +63,12 @@ export interface Platform {
    * is given. Rejects with a message to show.
    */
   loadStats(team: string | null, days: number): Promise<StatsData>;
+  /**
+   * The reviews submitted over the last `days`: yours, and each member's of
+   * a team (`org/slug`) when one is given and it's small enough. Rejects with
+   * a message to show.
+   */
+  loadReviewStats(team: string | null, days: number): Promise<ReviewStatsData>;
 
   /** Adds a custom view and shows it right away. */
   addView(name: string, query: string): void;

@@ -5,6 +5,7 @@ export { SECTION_TITLES, viewSearch } from "./sections";
 export type {
   CardNotification,
   FoundPr,
+  ReviewStatsData,
   StatsData,
   MergedPr,
   Problem,

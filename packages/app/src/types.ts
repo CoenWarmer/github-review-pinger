@@ -57,6 +57,20 @@ export interface StatsData {
   sample: { requestedAt: string | null; reviews: { by: string | null; at: string }[] }[];
 }
 
+/** What the review chart is drawn from, over a window of days. */
+export interface ReviewStatsData {
+  /** Reviews you submitted, in any repo. */
+  reviewsByMe: number;
+  /** Reviews you submitted in the chosen team's organization, the scope the
+   * team's counts are in; null with no team. */
+  reviewsByMeInTeamOrg: number | null;
+  /** How many members of the team were looked up; 0 with no team. */
+  teamMemberCount: number;
+  /** What each member reviewed in the org, in no particular order, for a
+   * team small enough to count member by member; null otherwise. */
+  teamMemberReviews: number[] | null;
+}
+
 /** How the UI looks: a fixed appearance, or whatever the system uses. */
 export type Theme = "system" | "light" | "dark";
 

@@ -509,3 +509,99 @@ describe("statistics", () => {
     assert.deepEqual(await gh.fetchMyTeams(), ["elastic/kibana-core", "elastic/ops"]);
   });
 });
+
+describe("review statistics", () => {
+  const WINDOW = ["2026-09-29T00:00:00.000Z", "2026-10-29T00:00:00.000Z"] as const;
+
+  /** A fake GitHub for a team of `logins`; `members` answers the per-member lookups. */
+  function reviewGithub(
+    logins: string[],
+    members: (batch: string) => Record<string, unknown>,
+    seen: { query: string; variables: Record<string, unknown> }[] = [],
+  ) {
+    const page = (nodes: string[], more: boolean) => ({
+      nodes: nodes.map((login) => ({ login })),
+      pageInfo: { hasNextPage: more, endCursor: more ? "next" : null },
+    });
+    return github(({ query, variables }) => {
+      seen.push({ query, variables });
+      if (query.includes("organization(login: $org) { id }")) return reply({ organization: { id: "ORG1" } });
+      if (query.includes("members(first: 100")) {
+        const big = logins.length > 100;
+        return variables.after
+          ? reply({ organization: { team: { members: page(logins.slice(100), false) } } })
+          : reply({ t0: { team: { members: page(logins.slice(0, 100), big) } } });
+      }
+      if (query.includes("u0:")) return reply(members(query));
+      // Your own count, in all repos or in the org.
+      return reply({
+        viewer: { contributionsCollection: { totalPullRequestReviewContributions: variables.org ? 30 : 37 } },
+      });
+    });
+  }
+
+  it("counts your reviews, in all repos and in the team's org, and each member's", async () => {
+    const seen: { query: string; variables: Record<string, unknown> }[] = [];
+    const gh = reviewGithub(
+      ["ana", "bo"],
+      () => ({ u0: { c: { totalPullRequestReviewContributions: 5 } }, u1: { c: { totalPullRequestReviewContributions: 9 } } }),
+      seen,
+    );
+    const stats = await gh.fetchReviewStats("o/core", ...WINDOW);
+    assert.deepEqual(stats, {
+      reviewsByMe: 37,
+      reviewsByMeInTeamOrg: 30,
+      teamMemberCount: 2,
+      teamMemberReviews: [5, 9],
+    });
+    // The window and the org id go to GitHub as variables.
+    const own = seen.filter((s) => s.query.includes("viewer {"));
+    assert.ok(own.some((s) => s.variables.org === null && s.variables.from === WINDOW[0] && s.variables.to === WINDOW[1]));
+    assert.ok(own.some((s) => s.variables.org === "ORG1"));
+    assert.ok(seen.some((s) => s.query.includes('user(login: "ana")') && s.query.includes('user(login: "bo")')));
+  });
+
+  it("leaves a login GitHub doesn't know out, rather than counting it as zero", async () => {
+    const gh = reviewGithub(["ana", "gone"], () => ({
+      u0: { c: { totalPullRequestReviewContributions: 4 } },
+      u1: null,
+    }));
+    const stats = await gh.fetchReviewStats("o/core", ...WINDOW);
+    assert.deepEqual(stats.teamMemberReviews, [4]);
+    assert.equal(stats.teamMemberCount, 2);
+  });
+
+  it("is just your own count without a team", async () => {
+    const seen: { query: string; variables: Record<string, unknown> }[] = [];
+    const gh = reviewGithub([], () => ({}), seen);
+    assert.deepEqual(await gh.fetchReviewStats(null, ...WINDOW), {
+      reviewsByMe: 37,
+      reviewsByMeInTeamOrg: null,
+      teamMemberCount: 0,
+      teamMemberReviews: null,
+    });
+    assert.equal(seen.length, 1);
+  });
+
+  it("counts no member for a team over the cap, as GitHub counts these per person", async () => {
+    const logins = Array.from({ length: 151 }, (_, i) => `member-${String(i).padStart(3, "0")}`);
+    const seen: { query: string; variables: Record<string, unknown> }[] = [];
+    const gh = reviewGithub(logins, () => ({}), seen);
+    const stats = await gh.fetchReviewStats("o/big", ...WINDOW);
+    assert.equal(stats.teamMemberCount, 151);
+    assert.equal(stats.teamMemberReviews, null);
+    assert.equal(stats.reviewsByMeInTeamOrg, 30);
+    assert.ok(!seen.some((s) => s.query.includes("u0:")));
+  });
+
+  it("says what a missing scope blocks", async () => {
+    const gh = github(({ query }) =>
+      query.includes("members(first: 100")
+        ? new Response(JSON.stringify({ data: {}, errors: [{ type: "INSUFFICIENT_SCOPES", message: "needs read:org" }] }), { status: 200 })
+        : query.includes("organization(login: $org) { id }")
+          ? reply({ organization: { id: "ORG1" } })
+          : reply({ viewer: { contributionsCollection: { totalPullRequestReviewContributions: 1 } } }),
+    );
+    await assert.rejects(gh.fetchReviewStats("o/core", ...WINDOW), /read:org/);
+  });
+});

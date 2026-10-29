@@ -160,6 +160,15 @@ async fn load_stats(
 }
 
 #[tauri::command]
+async fn load_review_stats(
+    team: Option<String>,
+    days: i64,
+    poller: State<'_, Arc<Poller>>,
+) -> Result<github::ReviewStatsData, String> {
+    poller.review_stats(team, days).await
+}
+
+#[tauri::command]
 fn add_view(app: AppHandle, poller: State<Arc<Poller>>, name: String, query: String) {
     poller.add_view(&app, name, query);
 }
@@ -313,6 +322,7 @@ pub fn run() {
             search_pull_requests,
             my_teams,
             load_stats,
+            load_review_stats,
             add_view,
             update_view,
             remove_view,

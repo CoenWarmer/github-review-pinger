@@ -581,6 +581,168 @@ struct StatsLogin {
     login: String,
 }
 
+/// What the review chart is drawn from: reviews people submitted in a window,
+/// as GitHub counts them in its contribution data.
+#[derive(Debug, Default, serde::Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ReviewStatsData {
+    /// Reviews you submitted, in any repo.
+    pub reviews_by_me: u64,
+    /// Reviews you submitted in the chosen team's organization, the scope the
+    /// team's counts are in; `None` with no team.
+    pub reviews_by_me_in_team_org: Option<u64>,
+    /// How many members of the team were looked up; 0 with no team.
+    pub team_member_count: usize,
+    /// What each member reviewed in the org, in no particular order, for a
+    /// team small enough to count member by member; `None` otherwise.
+    pub team_member_reviews: Option<Vec<u64>>,
+}
+
+const REVIEW_COUNT_QUERY: &str = "query($from: DateTime!, $to: DateTime!, $org: ID) { viewer { contributionsCollection(from: $from, to: $to, organizationID: $org) { totalPullRequestReviewContributions } } }";
+
+/// The reviews submitted in the last window: yours, and when a team is
+/// chosen (`org/slug`, which needs `read:org`) what each of its members
+/// reviewed in that organization. Teams over `MEMBER_COUNT_CAP` members get no
+/// member counts: GitHub counts these per person, so there is no cheaper way.
+pub async fn fetch_review_stats(
+    http: &reqwest::Client,
+    token: &str,
+    team: Option<&str>,
+    from: DateTime<Utc>,
+    to: DateTime<Utc>,
+) -> Result<ReviewStatsData, FetchError> {
+    let variables = |org: Option<&str>| json!({ "from": from, "to": to, "org": org });
+    let count_of = |reply: &Response<Value>| {
+        reply.data["viewer"]["contributionsCollection"]["totalPullRequestReviewContributions"]
+            .as_u64()
+            .unwrap_or(0)
+    };
+    let mine = async {
+        let reply: Response<Value> =
+            request(http, token, REVIEW_COUNT_QUERY, variables(None)).await?;
+        Ok::<_, FetchError>(count_of(&reply))
+    };
+    let team_part = async {
+        let Some(team) = team else {
+            return Ok((None, 0, None));
+        };
+        let Some((org, slug)) = team.split_once('/') else {
+            return Err(FetchError::Api(format!("Not a team: {team}")));
+        };
+        let needs = Needs {
+            teams: [(org.to_string(), slug.to_string())].into(),
+        };
+        let (found, org_id) = future::try_join(fetch_directory(http, token, &needs), async {
+            let reply: Response<Value> = request(
+                http,
+                token,
+                "query($org: String!) { organization(login: $org) { id } }",
+                json!({ "org": org }),
+            )
+            .await?;
+            reply.data["organization"]["id"]
+                .as_str()
+                .map(str::to_string)
+                .ok_or_else(|| FetchError::Api(format!("Could not find {org}.")))
+        })
+        .await?;
+        if found.denied {
+            return Err(FetchError::Api(
+                "Counting a team's reviews needs the read:org scope.".into(),
+            ));
+        }
+        let mut logins: Vec<String> = found
+            .teams
+            .get(&Directory::key(org, slug))
+            .map(|members| members.iter().cloned().collect())
+            .unwrap_or_default();
+        logins.sort();
+        let in_org = async {
+            let reply: Response<Value> =
+                request(http, token, REVIEW_COUNT_QUERY, variables(Some(&org_id))).await?;
+            Ok::<_, FetchError>(count_of(&reply))
+        };
+        let members = async {
+            if logins.len() > MEMBER_COUNT_CAP {
+                return Ok::<_, FetchError>(None);
+            }
+            Ok(Some(
+                member_reviews(http, token, &org_id, from, to, &logins).await?,
+            ))
+        };
+        let (mine_in_org, counts) = future::try_join(in_org, members).await?;
+        Ok((Some(mine_in_org), logins.len(), counts))
+    };
+    let (reviews_by_me, (reviews_by_me_in_team_org, team_member_count, team_member_reviews)) =
+        future::try_join(mine, team_part).await?;
+    Ok(ReviewStatsData {
+        reviews_by_me,
+        reviews_by_me_in_team_org,
+        team_member_count,
+        team_member_reviews,
+    })
+}
+
+/// What each of `logins` reviewed in the organization `org_id`, in no
+/// particular order: one aliased lookup per member, several to a request.
+/// A login GitHub doesn't know is left out rather than counted as zero.
+async fn member_reviews(
+    http: &reqwest::Client,
+    token: &str,
+    org_id: &str,
+    from: DateTime<Utc>,
+    to: DateTime<Utc>,
+    logins: &[String],
+) -> Result<Vec<u64>, FetchError> {
+    // Owned queries keep the stream's closure free of borrowed arguments,
+    // which a Send future spawned on the runtime can't express.
+    let queries: Vec<(String, usize)> = logins
+        .chunks(MEMBERS_PER_QUERY)
+        .map(|chunk| {
+            let aliases: String = chunk
+                .iter()
+                .enumerate()
+                .map(|(i, login)| {
+                    format!(
+                        "u{i}: user(login: {}) {{ c: contributionsCollection(from: $from, to: $to, organizationID: $org) {{ totalPullRequestReviewContributions }} }}\n",
+                        quote_text(login)
+                    )
+                })
+                .collect();
+            (
+                format!("query($from: DateTime!, $to: DateTime!, $org: ID!) {{\n{aliases}}}"),
+                chunk.len(),
+            )
+        })
+        .collect();
+    let org_id = org_id.to_string();
+    let batches: Vec<Vec<u64>> = stream::iter(queries)
+        .map(|(query, len)| {
+            let org_id = org_id.clone();
+            async move {
+                let reply: Response<Value> = request(
+                    http,
+                    token,
+                    &query,
+                    json!({ "from": from, "to": to, "org": org_id }),
+                )
+                .await?;
+                Ok::<_, FetchError>(
+                    (0..len)
+                        .filter_map(|i| {
+                            reply.data[format!("u{i}")]["c"]["totalPullRequestReviewContributions"]
+                                .as_u64()
+                        })
+                        .collect::<Vec<u64>>(),
+                )
+            }
+        })
+        .buffer_unordered(MEMBER_QUERIES_AT_ONCE)
+        .try_collect()
+        .await?;
+    Ok(batches.into_iter().flatten().collect())
+}
+
 /// The teams you belong to, as `org/slug`, across your organizations. Needs
 /// `read:org`; without it the answer is an error saying so.
 pub async fn fetch_my_teams(

@@ -47,6 +47,7 @@ export function createWebPlatform(engine: Engine): Platform {
     searchPullRequests: (text) => engine.searchPullRequests(text),
     listTeams: () => engine.listTeams(),
     loadStats: (team, days) => engine.loadStats(team, days),
+    loadReviewStats: (team, days) => engine.loadReviewStats(team, days),
     addView: (name, query) => engine.addView(name, query),
     updateView: (id, name, query) => engine.updateView(id, name, query),
     removeView: (id) => engine.removeView(id),

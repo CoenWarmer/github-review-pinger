@@ -282,6 +282,21 @@ impl Poller {
             .map_err(fetch_error_message)
     }
 
+    /// The reviews submitted in the last `days`, with `team` (`org/slug`)
+    /// counted too when chosen. Rejects with a message to show.
+    pub async fn review_stats(
+        &self,
+        team: Option<String>,
+        days: i64,
+    ) -> Result<github::ReviewStatsData, String> {
+        let token = self.search_token().await?;
+        let to = Utc::now();
+        let from = to - chrono::Duration::days(days);
+        github::fetch_review_stats(&self.http, &token, team.as_deref(), from, to)
+            .await
+            .map_err(fetch_error_message)
+    }
+
     /// A token for a request the user asked for, or the message to show.
     async fn search_token(&self) -> Result<String, String> {
         let chosen = self.auth_source();

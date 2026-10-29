@@ -24,7 +24,7 @@ import {
   perMember,
   type Average,
 } from "../stats";
-import type { PullRequest, StatsData } from "../types";
+import type { PullRequest, ReviewStatsData, StatsData } from "../types";
 
 const TEAM_KEY = "reviewPinger.statsTeam";
 /** Teams up to this size are counted member by member, which the median needs. */
@@ -37,10 +37,13 @@ const NO_TEAM = "none";
  * doesn't ask GitHub again.
  */
 const CACHE_MS = 10 * 60_000;
-const statsCache = new Map<string, { at: number; stats: StatsData }>();
+type Cache<T> = Map<string, { at: number; value: T }>;
+const statsCache: Cache<StatsData> = new Map();
+const reviewsCache: Cache<ReviewStatsData> = new Map();
 let teamsCache: { at: number; teams: string[] } | null = null;
 /** A request already under way is shared, so opening Settings twice in a row asks once. */
 const statsInFlight = new Map<string, Promise<StatsData>>();
+const reviewsInFlight = new Map<string, Promise<ReviewStatsData>>();
 let teamsInFlight: Promise<string[]> | null = null;
 
 function shared<T>(inFlight: Promise<T> | undefined, start: () => Promise<T>, done: () => void) {
@@ -75,10 +78,135 @@ type Loaded<T> =
 /** The per-member bars: the team's neutral, lighter, since they're derived from the team's bar. */
 const PER_MEMBER_FILL = "color-mix(in oklab, var(--muted-foreground) 60%, transparent)";
 
-/** Your bar in the accent colour, the team's in neutral: one measure, two entities. */
-const chartConfig = {
-  merged: { label: "PRs merged" },
-} satisfies ChartConfig;
+/** Your bars in the accent colour, the team's in neutral: one measure, two entities. */
+interface Bar {
+  who: string;
+  value: number;
+  fill: string;
+}
+
+/**
+ * The bars both charts share: you (all repos), you and the team in the
+ * team's org so those compare, and the per-member average and median. A
+ * `null` leaves that bar out.
+ */
+function teamBars(
+  team: string | null,
+  counts: {
+    you: number;
+    youInTeamOrg: number | null;
+    teamTotal: number | null;
+    /** Members the average is over. */
+    members: number;
+    /** What each member did, when counted member by member. */
+    perMember: number[] | null;
+  },
+): Bar[] {
+  const average = team ? perMember(counts.teamTotal, counts.members) : null;
+  const middle = team && counts.perMember ? median(counts.perMember) : null;
+  // One decimal, so the label, tooltip and table all say the same.
+  const tenth = (n: number) => Math.round(n * 10) / 10;
+  return [
+    { who: "You (all repos)", value: counts.you, fill: "var(--info)" },
+    ...(team && counts.youInTeamOrg !== null
+      ? [{ who: "You (compared to team)", value: counts.youInTeamOrg, fill: "var(--info)" }]
+      : []),
+    ...(team && counts.teamTotal !== null
+      ? [{ who: team.split("/")[1] ?? team, value: counts.teamTotal, fill: "var(--muted-foreground)" }]
+      : []),
+    ...(average !== null ? [{ who: "Avg per member", value: tenth(average), fill: PER_MEMBER_FILL }] : []),
+    ...(middle !== null ? [{ who: "Median per member", value: tenth(middle), fill: PER_MEMBER_FILL }] : []),
+  ];
+}
+
+/**
+ * Loads once per key, reusing a recent result and sharing a request already
+ * under way. Called with a new key (a different team) it loads again.
+ */
+function useLoaded<T>(
+  key: string,
+  cache: Cache<T>,
+  inFlight: Map<string, Promise<T>>,
+  load: () => Promise<T>,
+): Loaded<T> {
+  const [state, setState] = useState<Loaded<T>>({ kind: "loading" });
+  useEffect(() => {
+    const cached = cache.get(key);
+    if (cached && Date.now() - cached.at < CACHE_MS) {
+      setState({ kind: "ready", value: cached.value });
+      return;
+    }
+    let stale = false;
+    setState({ kind: "loading" });
+    const request = shared(inFlight.get(key), load, () => inFlight.delete(key));
+    inFlight.set(key, request);
+    request
+      .then((value) => {
+        cache.set(key, { at: Date.now(), value });
+        if (!stale) setState({ kind: "ready", value });
+      })
+      .catch((e) => {
+        if (!stale) setState({ kind: "error", message: String(e) });
+      });
+    return () => {
+      stale = true;
+    };
+    // `load` only depends on the key, so it isn't a reason to load again.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [key]);
+  return state;
+}
+
+/** One horizontal bar chart with its numbers as a hidden table for screen readers. */
+function BarsChart({ bars, unit, title }: { bars: Bar[]; unit: string; title: string }) {
+  const config = { value: { label: unit } } satisfies ChartConfig;
+  return (
+    <>
+      <ChartContainer
+        config={config}
+        className="aspect-auto w-full"
+        style={{ height: 36 + bars.length * 32 }}
+      >
+        <BarChart
+          data={bars}
+          layout="vertical"
+          margin={{ top: 0, right: 32, bottom: 0, left: 0 }}
+          barSize={20}
+        >
+          <XAxis type="number" hide domain={[0, "dataMax"]} />
+          <YAxis
+            type="category"
+            dataKey="who"
+            tickLine={false}
+            axisLine={false}
+            width={140}
+            tick={{ fontSize: 11 }}
+            interval={0}
+          />
+          <ChartTooltip cursor={false} content={<ChartTooltipContent hideLabel />} />
+          <Bar dataKey="value" radius={[0, 4, 4, 0]}>
+            {bars.map((bar) => (
+              <Cell key={bar.who} fill={bar.fill} />
+            ))}
+            <LabelList dataKey="value" position="right" className="fill-foreground" fontSize={11} />
+          </Bar>
+        </BarChart>
+      </ChartContainer>
+      {/* The same numbers as text, for anyone who can't read the chart. */}
+      <table className="sr-only">
+        <caption>{title}</caption>
+        <tbody>
+          {bars.map((bar) => (
+            <tr key={bar.who}>
+              <th scope="row">{bar.who}</th>
+              <td>{bar.value}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </>
+  );
+}
 
 export function StatsSettings({
   pullRequests,
@@ -95,7 +223,13 @@ export function StatsSettings({
       ? { kind: "ready", value: teamsCache.teams }
       : { kind: "loading" },
   );
-  const [stats, setStats] = useState<Loaded<StatsData>>({ kind: "loading" });
+  const key = team ?? NO_TEAM;
+  const stats = useLoaded(key, statsCache, statsInFlight, () =>
+    platform.loadStats(team, STATS_DAYS),
+  );
+  const reviews = useLoaded(key, reviewsCache, reviewsInFlight, () =>
+    platform.loadReviewStats(team, STATS_DAYS),
+  );
 
   // The teams you could pick from, once per visit to Settings.
   useEffect(() => {
@@ -121,35 +255,6 @@ export function StatsSettings({
     };
   }, [platform]);
 
-  // The merge counts and the merged-PR sample, for the chosen team.
-  useEffect(() => {
-    const key = team ?? NO_TEAM;
-    const cached = statsCache.get(key);
-    if (cached && Date.now() - cached.at < CACHE_MS) {
-      setStats({ kind: "ready", value: cached.stats });
-      return;
-    }
-    let stale = false;
-    setStats({ kind: "loading" });
-    const request = shared(
-      statsInFlight.get(key),
-      () => platform.loadStats(team, STATS_DAYS),
-      () => statsInFlight.delete(key),
-    );
-    statsInFlight.set(key, request);
-    request
-      .then((loaded) => {
-        statsCache.set(key, { at: Date.now(), stats: loaded });
-        if (!stale) setStats({ kind: "ready", value: loaded });
-      })
-      .catch((e) => {
-        if (!stale) setStats({ kind: "error", message: String(e) });
-      });
-    return () => {
-      stale = true;
-    };
-  }, [platform, team]);
-
   function choose(value: string) {
     const next = value === NO_TEAM ? null : value;
     setTeam(next);
@@ -157,46 +262,25 @@ export function StatsSettings({
   }
 
   const data = stats.kind === "ready" ? stats.value : null;
-  const perMemberAverage = data && team ? perMember(data.mergedByTeam, data.teamMemberCount) : null;
-  // Only for a team small enough to have been counted member by member.
-  const perMemberMedian = data && team && data.teamMemberMerged ? median(data.teamMemberMerged) : null;
-  const bars = data
-    ? [
-        { who: "You (all repos)", merged: data.mergedByMe, fill: "var(--info)" },
-        // Counted in the team's org, like the team, so the two compare.
-        ...(team && data.mergedByMeInTeamOrg !== null
-          ? [
-              {
-                who: "You (compared to team)",
-                merged: data.mergedByMeInTeamOrg,
-                fill: "var(--info)",
-              },
-            ]
-          : []),
-        ...(data.mergedByTeam !== null && team
-          ? [{ who: team.split("/")[1] ?? team, merged: data.mergedByTeam, fill: "var(--muted-foreground)" }]
-          : []),
-        ...(perMemberAverage !== null
-          ? [
-              {
-                who: "Avg per member",
-                // One decimal, so the label, tooltip and table all say the same.
-                merged: Math.round(perMemberAverage * 10) / 10,
-                // The same neutral, lighter: it's derived from the bar above.
-                fill: PER_MEMBER_FILL,
-              },
-            ]
-          : []),
-        ...(perMemberMedian !== null
-          ? [
-              {
-                who: "Median per member",
-                merged: Math.round(perMemberMedian * 10) / 10,
-                fill: PER_MEMBER_FILL,
-              },
-            ]
-          : []),
-      ]
+  const mergedBars = data
+    ? teamBars(team, {
+        you: data.mergedByMe,
+        youInTeamOrg: data.mergedByMeInTeamOrg,
+        teamTotal: data.mergedByTeam,
+        members: data.teamMemberCount,
+        perMember: data.teamMemberMerged,
+      })
+    : [];
+  const reviewData = reviews.kind === "ready" ? reviews.value : null;
+  const reviewCounts = reviewData?.teamMemberReviews ?? null;
+  const reviewBars = reviewData
+    ? teamBars(team, {
+        you: reviewData.reviewsByMe,
+        youInTeamOrg: reviewData.reviewsByMeInTeamOrg,
+        teamTotal: reviewCounts ? reviewCounts.reduce((sum, n) => sum + n, 0) : null,
+        members: reviewCounts?.length ?? 0,
+        perMember: reviewCounts,
+      })
     : [];
   const teamList = teams.kind === "ready" ? teams.value : [];
   // A saved team you've since left is still shown, so the choice isn't silently lost.
@@ -227,81 +311,62 @@ export function StatsSettings({
       )}
 
       <section aria-label={`PRs merged in the last ${STATS_DAYS} days`}>
-        <h4 className="m-0 mb-1 text-xs font-medium">
-          PRs merged, last {STATS_DAYS} days
-        </h4>
+        <h4 className="m-0 mb-1 text-xs font-medium">PRs merged, last {STATS_DAYS} days</h4>
         {stats.kind === "loading" && <Placeholder>Loading…</Placeholder>}
         {stats.kind === "error" && <Placeholder error>{stats.message}</Placeholder>}
         {data && (
           <>
-            <ChartContainer
-              config={chartConfig}
-              className="aspect-auto w-full"
-              style={{ height: 36 + bars.length * 32 }}
-            >
-              <BarChart
-                data={bars}
-                layout="vertical"
-                margin={{ top: 0, right: 32, bottom: 0, left: 0 }}
-                barSize={20}
-              >
-                <XAxis type="number" hide domain={[0, "dataMax"]} />
-                <YAxis
-                  type="category"
-                  dataKey="who"
-                  tickLine={false}
-                  axisLine={false}
-                  width={140}
-                  tick={{ fontSize: 11 }}
-                  interval={0}
-                />
-                <ChartTooltip cursor={false} content={<ChartTooltipContent hideLabel />} />
-                <Bar dataKey="merged" radius={[0, 4, 4, 0]}>
-                  {bars.map((bar) => (
-                    <Cell key={bar.who} fill={bar.fill} />
-                  ))}
-                  <LabelList
-                    dataKey="merged"
-                    position="right"
-                    className="fill-foreground"
-                    fontSize={11}
-                  />
-                </Bar>
-              </BarChart>
-            </ChartContainer>
-            {/* The same numbers as text, for anyone who can't read the chart. */}
-            <table className="sr-only">
-              <caption>PRs merged in the last {STATS_DAYS} days</caption>
-              <tbody>
-                {bars.map((bar) => (
-                  <tr key={bar.who}>
-                    <th scope="row">{bar.who}</th>
-                    <td>{bar.merged}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+            <BarsChart
+              bars={mergedBars}
+              unit="PRs merged"
+              title={`PRs merged in the last ${STATS_DAYS} days`}
+            />
             {!team && (
-              <p className="m-0 mt-1 text-xs text-muted-foreground">
-                Choose a team to compare with its members' merges.
-              </p>
+              <Note>Choose a team to compare with its members' merges.</Note>
             )}
             {team && (
-              <p className="m-0 mt-1 text-xs text-muted-foreground">
+              <Note>
                 "You (compared to team)" and the team's bars count merges in {team.split("/")[0]}{" "}
                 only.
-                {perMemberMedian !== null &&
+                {data.teamMemberMerged !== null &&
                   " The average and median include members who merged nothing."}
                 {data.teamMemberMerged === null &&
                   data.teamMemberCount > MEMBER_COUNT_CAP &&
                   ` The median is shown for teams of up to ${MEMBER_COUNT_CAP} members.`}
-              </p>
+              </Note>
             )}
             {team && data.teamMembersCapped && (
-              <p className="m-0 mt-1 text-xs text-muted-foreground">
-                This team has more than 500 members. Only the first 500 are counted, so the
-                number is short.
-              </p>
+              <Note>
+                This team has more than 500 members. Only the first 500 are counted, so the number
+                is short.
+              </Note>
+            )}
+          </>
+        )}
+      </section>
+
+      <section aria-label={`Reviews done in the last ${STATS_DAYS} days`}>
+        <h4 className="m-0 mb-1 text-xs font-medium">Reviews done, last {STATS_DAYS} days</h4>
+        {reviews.kind === "loading" && <Placeholder>Loading…</Placeholder>}
+        {reviews.kind === "error" && <Placeholder error>{reviews.message}</Placeholder>}
+        {reviewData && (
+          <>
+            <BarsChart
+              bars={reviewBars}
+              unit="Reviews"
+              title={`Reviews done in the last ${STATS_DAYS} days`}
+            />
+            {!team && <Note>Choose a team to compare with its members' reviews.</Note>}
+            {team && (
+              <Note>
+                Reviews GitHub counts for each person in {team.split("/")[0]}, from repos your
+                token can see.
+                {reviewCounts !== null &&
+                  " The average and median include members who reviewed nothing."}
+                {reviewCounts === null &&
+                  reviewData.teamMemberCount > MEMBER_COUNT_CAP &&
+                  ` Team bars are shown for teams of up to ${MEMBER_COUNT_CAP} members.`}
+              </Note>
             )}
           </>
         )}
@@ -329,6 +394,10 @@ export function StatsSettings({
       </p>
     </div>
   );
+}
+
+function Note({ children }: { children: React.ReactNode }) {
+  return <p className="m-0 mt-1 text-xs text-muted-foreground">{children}</p>;
 }
 
 function Placeholder({ children, error }: { children: string; error?: boolean }) {

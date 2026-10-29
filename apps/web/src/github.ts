@@ -130,6 +130,20 @@ export interface StatsData {
   sample: { requestedAt: string | null; reviews: { by: string | null; at: string }[] }[];
 }
 
+/** What the review chart is drawn from: reviews people submitted in a window. */
+export interface ReviewStatsData {
+  /** Reviews you submitted, in any repo. */
+  reviewsByMe: number;
+  /** Reviews you submitted in the chosen team's organization, the scope the
+   * team's counts are in; null with no team. */
+  reviewsByMeInTeamOrg: number | null;
+  /** How many members of the team were looked up; 0 with no team. */
+  teamMemberCount: number;
+  /** What each member reviewed in the org, in no particular order, for a
+   * team small enough to count member by member; null otherwise. */
+  teamMemberReviews: number[] | null;
+}
+
 /** GitHub rejects search text over 256 characters. */
 const MAX_SEARCH_CHARS = 250;
 /**
@@ -193,6 +207,12 @@ export interface Github {
   fetchMergedPage(cursor: string | null, count: number): Promise<MergedPage>;
   /** The first page of PRs, in any state, matching the text and any qualifiers in it. */
   searchPullRequests(text: string): Promise<FoundPullRequest[]>;
+  /**
+   * The reviews submitted between `from` and `to` (ISO times): yours, and a
+   * team's (`org/slug`) member by member when one is chosen and it's small
+   * enough.
+   */
+  fetchReviewStats(team: string | null, from: string, to: string): Promise<ReviewStatsData>;
   /** The teams you belong to, as `org/slug`. Needs `read:org`. */
   fetchMyTeams(): Promise<string[]>;
   /** The statistics since `since` (a date), with `team` (`org/slug`) counted too when chosen. */
@@ -585,6 +605,72 @@ export function createGithub({
           );
         })
         .sort();
+    },
+
+    async fetchReviewStats(team, from, to) {
+      const countQuery =
+        "query($from: DateTime!, $to: DateTime!, $org: ID) { viewer { contributionsCollection(from: $from, to: $to, organizationID: $org) { totalPullRequestReviewContributions } } }";
+      const countOf = (data: {
+        viewer: { contributionsCollection: { totalPullRequestReviewContributions: number } };
+      }) => data.viewer.contributionsCollection.totalPullRequestReviewContributions;
+      const mine = async () => countOf((await request<Parameters<typeof countOf>[0]>(countQuery, { from, to, org: null })).data);
+      const teamPart = async (): Promise<{
+        inOrg: number | null;
+        members: number;
+        reviews: number[] | null;
+      }> => {
+        if (!team) return { inOrg: null, members: 0, reviews: null };
+        const [org, slug] = team.split("/");
+        if (!org || !slug) throw new FetchError("api", `Not a team: ${team}`);
+        const [found, orgReply] = await Promise.all([
+          github.fetchDirectory({ teams: [[org, slug]] }),
+          request<{ organization: { id: string } | null }>(
+            "query($org: String!) { organization(login: $org) { id } }",
+            { org },
+          ),
+        ]);
+        if (found.denied) throw new FetchError("api", "Counting a team's reviews needs the read:org scope.");
+        const orgId = orgReply.data.organization?.id;
+        if (!orgId) throw new FetchError("api", `Could not find ${org}.`);
+        const logins = [...(found.teams[`${org.toLowerCase()}/${slug.toLowerCase()}`] ?? [])].sort();
+        const inOrg = async () =>
+          countOf((await request<Parameters<typeof countOf>[0]>(countQuery, { from, to, org: orgId })).data);
+        const members = async (): Promise<number[] | null> => {
+          if (logins.length > MEMBER_COUNT_CAP) return null;
+          const replies = await mapLimit(chunks(logins, MEMBERS_PER_QUERY), MEMBER_QUERIES_AT_ONCE, (batch) =>
+            request<
+              Record<
+                string,
+                { c: { totalPullRequestReviewContributions: number } } | null
+              >
+            >(
+              `query($from: DateTime!, $to: DateTime!, $org: ID!) {\n${batch
+                .map(
+                  (login, i) =>
+                    `u${i}: user(login: ${JSON.stringify(login)}) { c: contributionsCollection(from: $from, to: $to, organizationID: $org) { totalPullRequestReviewContributions } }`,
+                )
+                .join("\n")}\n}`,
+              { from, to, org: orgId },
+            ).then((reply) =>
+              // A login GitHub doesn't know is left out rather than counted as zero.
+              batch.flatMap((_, i) => {
+                const count = reply.data[`u${i}`]?.c.totalPullRequestReviewContributions;
+                return count === undefined ? [] : [count];
+              }),
+            ),
+          );
+          return replies.flat();
+        };
+        const [mineInOrg, counts] = await Promise.all([inOrg(), members()]);
+        return { inOrg: mineInOrg, members: logins.length, reviews: counts };
+      };
+      const [reviewsByMe, part] = await Promise.all([mine(), teamPart()]);
+      return {
+        reviewsByMe,
+        reviewsByMeInTeamOrg: part.inOrg,
+        teamMemberCount: part.members,
+        teamMemberReviews: part.reviews,
+      };
     },
 
     async fetchStats(team, since) {
