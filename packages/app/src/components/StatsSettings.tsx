@@ -742,17 +742,20 @@ function Note({ children }: { children: React.ReactNode }) {
 }
 
 /**
- * The rings, centred where the chart will be, with about the height it will
- * have (a bar is 32 px, plus the margins) so the page doesn't jump when the
- * numbers arrive. A team has up to five bars; no team just yours.
+ * The rings with "Fetching data…" under them, centred where the chart will be,
+ * with about the height it will have (a bar is 32 px, plus the margins; a team
+ * has up to five bars, no team just yours, and never less than the loader
+ * needs) so the page doesn't jump much when the numbers arrive.
  */
 function ChartLoading({ bars }: { bars: number }) {
   return (
     <div
-      className="flex items-center justify-center"
-      style={{ height: 36 + bars * 32 }}
+      role="status"
+      className="flex flex-col items-center justify-center gap-1"
+      style={{ height: Math.max(36 + bars * 32, 132) }}
     >
-      <RingsLoader size={48} />
+      <RingsLoader size={80} />
+      <span className="text-xs text-muted-foreground">Fetching data…</span>
     </div>
   );
 }
