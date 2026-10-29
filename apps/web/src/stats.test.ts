@@ -107,12 +107,12 @@ describe("median", () => {
 
 describe("change since the window before", () => {
   it("says which way it moved, by how much, and what it was", () => {
-    assert.deepEqual(change(60, 4), { direction: "up", text: "▲ 56 (was 4)" });
-    assert.deepEqual(change(3, 10), { direction: "down", text: "▼ 7 (was 10)" });
+    assert.deepEqual(change(60, 4), { direction: "up", text: "▲ 56 (was 4)", tone: "neutral" });
+    assert.deepEqual(change(3, 10), { direction: "down", text: "▼ 7 (was 10)", tone: "neutral" });
   });
 
   it("says when nothing moved", () => {
-    assert.deepEqual(change(7, 7), { direction: "same", text: "same (was 7)" });
+    assert.deepEqual(change(7, 7), { direction: "same", text: "same (was 7)", tone: "neutral" });
     // A rounding error isn't a change.
     assert.equal(change(15.7, 15.72).direction, "same");
   });
@@ -124,11 +124,24 @@ describe("change since the window before", () => {
 
   it("can read durations, where under a minute is no change", () => {
     const minute = 60_000;
-    const text = (ms: number) => `${Math.round(ms / minute)}m`;
-    assert.equal(change(90 * minute, 150 * minute, text, minute).text, "▼ 60m (was 150m)");
-    assert.equal(change(90 * minute + 20_000, 90 * minute, text, minute).direction, "same");
+    const format = (ms: number) => `${Math.round(ms / minute)}m`;
+    assert.equal(change(90 * minute, 150 * minute, { format, tiny: minute }).text, "▼ 60m (was 150m)");
+    assert.equal(change(90 * minute + 20_000, 90 * minute, { format, tiny: minute }).direction, "same");
+  });
+
+  it("is good or bad depending on which direction is better for that number", () => {
+    // More merged PRs is better.
+    assert.equal(change(60, 4, { better: "up" }).tone, "good");
+    assert.equal(change(3, 10, { better: "up" }).tone, "bad");
+    // A shorter wait is better, so a drop is good and a rise is bad.
+    assert.equal(change(3, 10, { better: "down" }).tone, "good");
+    assert.equal(change(60, 4, { better: "down" }).tone, "bad");
+    // Neither way, or no move, is neither.
+    assert.equal(change(60, 4, { better: null }).tone, "neutral");
+    assert.equal(change(7, 7, { better: "up" }).tone, "neutral");
   });
 });
+
 
 describe("ready for review to merged", () => {
   const pr = (

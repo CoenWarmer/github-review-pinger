@@ -97,11 +97,27 @@ export function averageCodeOwners(prs: PullRequest[]): Average {
   return averageOf(reviewable(prs).map((pr) => pr.codeOwners ?? 0));
 }
 
+/** Whether a move is for the better, the worse, or neither way. */
+export type Tone = "good" | "bad" | "neutral";
+
 /** How a number moved since the window before it. */
 export interface Change {
   direction: "up" | "down" | "same";
   /** "▲ 56 (was 4)", "▼ 3 (was 10)" or "same (was 7)". */
   text: string;
+  /** Whether that's better or worse, which depends on the number: more merged
+   * PRs is better, a longer wait for a review is worse. */
+  tone: Tone;
+}
+
+export interface ChangeOptions {
+  /** How to write the size of the move and what it was. */
+  format?: (n: number) => string;
+  /** Moves smaller than this count as no change. */
+  tiny?: number;
+  /** Which direction is better, or `null` when neither is (a count of CI
+   * builds isn't good or bad by itself). */
+  better?: "up" | "down" | null;
 }
 
 /** Whole numbers as they are, anything else to a tenth. */
@@ -118,14 +134,21 @@ function plain(n: number): string {
 export function change(
   current: number,
   previous: number,
-  format: (n: number) => string = plain,
-  tiny = 0.05,
+  { format = plain, tiny = 0.05, better = null }: ChangeOptions = {},
 ): Change {
   const diff = current - previous;
-  if (Math.abs(diff) < tiny) return { direction: "same", text: `same (was ${format(previous)})` };
-  return diff > 0
-    ? { direction: "up", text: `▲ ${format(diff)} (was ${format(previous)})` }
-    : { direction: "down", text: `▼ ${format(-diff)} (was ${format(previous)})` };
+  if (Math.abs(diff) < tiny) {
+    return { direction: "same", text: `same (was ${format(previous)})`, tone: "neutral" };
+  }
+  const direction = diff > 0 ? "up" : "down";
+  return {
+    direction,
+    text:
+      diff > 0
+        ? `▲ ${format(diff)} (was ${format(previous)})`
+        : `▼ ${format(-diff)} (was ${format(previous)})`,
+    tone: better === null ? "neutral" : direction === better ? "good" : "bad",
+  };
 }
 
 /** PRs merged per team member, or null when there are no members to divide by. */

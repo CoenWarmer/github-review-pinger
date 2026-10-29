@@ -1,6 +1,7 @@
 import { memo, useCallback, useEffect, useMemo, useState } from "react";
 import { Bar, BarChart, Cell, LabelList, XAxis, YAxis } from "recharts";
 import { Button } from "@/components/ui/button";
+import { cn } from "@/lib/utils";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent } from "@/components/ui/card";
 import {
@@ -29,6 +30,7 @@ import {
   perMember,
   type Average,
   type Change,
+  type Tone,
 } from "../stats";
 import type { CiStats, PullRequest, ReviewStatsData, StatsData } from "../types";
 
@@ -95,6 +97,23 @@ type Loaded<T> =
   | { kind: "error"; message: string }
   | { kind: "ready"; value: T };
 
+/**
+ * How a change is coloured: green for better, red for worse, muted for neither.
+ * The arrow and the numbers carry the meaning without the colour.
+ */
+const SVG_TONE: Record<Tone, string> = {
+  good: "fill-success",
+  bad: "fill-destructive",
+  neutral: "fill-muted-foreground",
+};
+const TEXT_TONE: Record<Tone, string> = {
+  good: "text-success",
+  bad: "text-destructive",
+  neutral: "text-muted-foreground",
+};
+/** What a screen reader is told, since it can't see the colour. */
+const TONE_WORDS: Record<Tone, string> = { good: ", better", bad: ", worse", neutral: "" };
+
 /** The per-member bars: the team's neutral, lighter, since they're derived from the team's bar. */
 const PER_MEMBER_FILL =
   "color-mix(in oklab, var(--muted-foreground) 60%, transparent)";
@@ -141,8 +160,9 @@ function teamBars(
   const middle = team && counts.perMember ? median(counts.perMember) : null;
   // One decimal, so the label, tooltip and table all say the same.
   const tenth = (n: number) => Math.round(n * 10) / 10;
+  // More merged PRs, and more reviews, are better.
   const moved = (now: number, was: number | null | undefined) =>
-    was === null || was === undefined ? null : change(now, was);
+    was === null || was === undefined ? null : change(now, was, { better: "up" });
   return [
     {
       who: "You (all repos)",
@@ -179,7 +199,7 @@ function teamBars(
             change:
               averageBefore === null
                 ? null
-                : change(tenth(average), tenth(averageBefore)),
+                : change(tenth(average), tenth(averageBefore), { better: "up" }),
           },
         ]
       : []),
@@ -310,7 +330,7 @@ const BarsChart = memo(function BarsChart({
               <th scope="row">{bar.who}</th>
               <td>
                 {bar.value}
-                {bar.change && `, ${bar.change.text}`}
+                {bar.change && `, ${bar.change.text}${TONE_WORDS[bar.change.tone]}`}
               </td>
             </tr>
           ))}
@@ -320,7 +340,12 @@ const BarsChart = memo(function BarsChart({
   );
 });
 
-/** A bar's value at its end, with how it moved since the 30 days before in muted text. */
+/**
+ * A bar's value at its end. How it moved since the 30 days before shows,
+ * coloured, only while its row is hovered or focused, so the chart stays quiet.
+ * The row is a transparent strip behind the label, so hovering the bar, its
+ * name or its number all count; every change is also in the hidden table.
+ */
 function ValueLabel({
   x,
   y,
@@ -338,20 +363,36 @@ function ValueLabel({
 }) {
   const bar = bars[index ?? 0];
   if (!bar) return null;
+  const top = Number(y);
   return (
-    <text
-      x={Number(x) + Number(width) + 6}
-      y={Number(y) + Number(height) / 2}
-      dominantBaseline="central"
-      fontSize={11}
+    <g
+      className="group outline-none"
+      // Focusable, so a keyboard or a tap can reveal the change where there's no hover.
+      tabIndex={bar.change ? 0 : undefined}
+      aria-label={`${bar.who}: ${bar.value}${bar.change ? `, ${bar.change.text}${TONE_WORDS[bar.change.tone]}` : ""}`}
     >
-      <tspan className="fill-foreground">{bar.value}</tspan>
-      {bar.change && (
-        <tspan dx={6} className="fill-muted-foreground" fontSize={10}>
-          {bar.change.text}
-        </tspan>
-      )}
-    </text>
+      <rect x={0} y={top - 6} width={10000} height={Number(height) + 12} fill="transparent" />
+      <text
+        x={Number(x) + Number(width) + 6}
+        y={top + Number(height) / 2}
+        dominantBaseline="central"
+        fontSize={11}
+      >
+        <tspan className="fill-foreground">{bar.value}</tspan>
+        {bar.change && (
+          <tspan
+            dx={6}
+            fontSize={10}
+            className={cn(
+              SVG_TONE[bar.change.tone],
+              "opacity-0 transition-opacity group-hover:opacity-100 group-focus:opacity-100",
+            )}
+          >
+            {bar.change.text}
+          </tspan>
+        )}
+      </text>
+    </g>
   );
 }
 
@@ -572,7 +613,7 @@ export function StatsSettings({
                   data.teamMemberCount > MEMBER_COUNT_CAP &&
                   ` The median is shown for teams of up to ${MEMBER_COUNT_CAP} members.`}
                 {before &&
-                  ` Changes compare with the ${STATS_DAYS} days before; the median has none.`}
+                  ` Hover a bar to see how it changed since the ${STATS_DAYS} days before: green is better, red worse. The median has none.`}
               </Note>
             )}
             {team && data.teamMembersCapped && (
@@ -614,7 +655,7 @@ export function StatsSettings({
                   reviewData.teamMemberCount > MEMBER_COUNT_CAP &&
                   ` Team bars are shown for teams of up to ${MEMBER_COUNT_CAP} members.`}
                 {reviewsBefore &&
-                  ` Changes compare with the ${STATS_DAYS} days before, for your bars only.`}
+                  ` Hover a bar to see how it changed since the ${STATS_DAYS} days before (green is better, red worse), for your bars only.`}
               </Note>
             )}
           </>
@@ -627,6 +668,7 @@ export function StatsSettings({
           value={data ? averageReviewWait(data.sample, viewer) : null}
           previous={before ? averageReviewWait(before.sample, viewer) : null}
           format={duration}
+          better="down"
           hint="request to first review"
           basis="merged PR"
           loading={stats.kind === "loading"}
@@ -636,6 +678,7 @@ export function StatsSettings({
           value={data ? averageApproval(data.sample, viewer) : null}
           previous={before ? averageApproval(before.sample, viewer) : null}
           format={duration}
+          better="down"
           hint="request to last approval"
           basis="merged PR"
           loading={stats.kind === "loading"}
@@ -645,6 +688,7 @@ export function StatsSettings({
           value={data ? averageReadyToMerged(data.sample) : null}
           previous={before ? averageReadyToMerged(before.sample) : null}
           format={duration}
+          better="down"
           hint="ready for review to merge"
           basis="merged PR"
           loading={stats.kind === "loading"}
@@ -795,7 +839,9 @@ function Tile({
           {detail}
         </span>
         {moved && (
-          <span className="text-[11px] leading-tight text-muted-foreground">{moved.text}</span>
+          <span className={cn("text-[11px] leading-tight", TEXT_TONE[moved.tone])}>
+            {moved.text}
+          </span>
         )}
       </CardContent>
     </Card>
@@ -851,6 +897,7 @@ function Figure({
   value,
   previous,
   format,
+  better,
   basis,
   hint,
   loading,
@@ -860,6 +907,9 @@ function Figure({
   /** The same over the 30 days before, to show what changed. */
   previous?: Average | null;
   format: (n: number) => string;
+  /** Which way is for the better, so a change can be green or red. A shorter
+   * wait is, so the timing tiles say "down". */
+  better?: "up" | "down";
   basis: string;
   /** What the number runs from and to, shown before the count. */
   hint?: string;
@@ -868,12 +918,11 @@ function Figure({
   // Under a minute isn't a change worth showing for a duration.
   const moved =
     value?.average != null && previous?.average != null
-      ? change(
-          value.average,
-          previous.average,
+      ? change(value.average, previous.average, {
           format,
-          format === duration ? 60_000 : 0.05,
-        )
+          tiny: format === duration ? 60_000 : 0.05,
+          better,
+        })
       : null;
   return (
     <Tile
