@@ -408,7 +408,11 @@ function ValueLabel({
       <text
         x={Number(x) + Number(width) + 6}
         y={top + Number(height) / 2}
-        dominantBaseline="central"
+        // The baseline sits 0.36em under the bar's centre, which puts the digits
+        // (no descenders, so not the whole text box) in the middle of the bar.
+        // `dominant-baseline` centres the box and leaves them about 4px high,
+        // and isn't the same in every browser, where `dy` is.
+        dy="0.36em"
         fontSize={11}
       >
         <tspan className="fill-foreground">{bar.value}</tspan>
