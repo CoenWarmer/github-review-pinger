@@ -50,6 +50,9 @@ export interface StatsData {
   teamMembersCapped: boolean;
   /** How many members of the team were looked up; 0 with no team. */
   teamMemberCount: number;
+  /** What each member merged, in no particular order, for a team small
+   * enough to count member by member; null otherwise. */
+  teamMemberMerged: number[] | null;
   /** Up to 100 of your merged PRs, newest first. */
   sample: { requestedAt: string | null; reviews: { by: string | null; at: string }[] }[];
 }

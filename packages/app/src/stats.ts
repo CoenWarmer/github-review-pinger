@@ -56,6 +56,16 @@ export function perMember(merged: number | null, members: number): number | null
   return merged === null || members <= 0 ? null : merged / members;
 }
 
+/** The middle value (the mean of the two middle ones for an even count), or null for none. */
+export function median(values: number[]): number | null {
+  if (values.length === 0) return null;
+  const sorted = [...values].sort((a, b) => a - b);
+  const middle = sorted.length / 2;
+  return sorted.length % 2 === 1
+    ? sorted[Math.floor(middle)]
+    : (sorted[middle - 1] + sorted[middle]) / 2;
+}
+
 /** "2d 4h", "5h 20m", "12m": a duration at a glance. */
 export function duration(ms: number): string {
   const minutes = Math.max(0, Math.round(ms / 60_000));

@@ -304,6 +304,9 @@ pub struct StatsData {
     pub team_members_capped: bool,
     /// How many members of the team were looked up; 0 with no team.
     pub team_member_count: usize,
+    /// What each member merged, in no particular order, for a team small
+    /// enough to count member by member; `None` otherwise.
+    pub team_member_merged: Option<Vec<u64>>,
     /// Up to 100 of your merged PRs, newest first.
     pub sample: Vec<StatsSample>,
 }
@@ -327,6 +330,64 @@ pub struct StatsReview {
 const MAX_SEARCH_CHARS: usize = 250;
 /// How many members of a team are looked up: `MAX_MEMBER_PAGES` of 100.
 const MEMBERS_READ_LIMIT: usize = MAX_MEMBER_PAGES * 100;
+/// Teams up to this size are counted member by member, which the median
+/// needs. Bigger ones are counted together in a few searches, as one number.
+const MEMBER_COUNT_CAP: usize = 150;
+/// Measured against a real account: members per query and queries at once.
+const MEMBERS_PER_QUERY: usize = 8;
+const MEMBER_QUERIES_AT_ONCE: usize = 10;
+
+fn quote_text(text: &str) -> String {
+    serde_json::to_string(text).expect("a string serializes")
+}
+
+/// What each of `logins` merged in `org` since `since`, in no particular
+/// order: one aliased search per member, several to a request.
+async fn member_counts(
+    http: &reqwest::Client,
+    token: &str,
+    since: NaiveDate,
+    org: &str,
+    logins: &[String],
+) -> Result<Vec<u64>, FetchError> {
+    // Owned queries keep the stream's closure free of borrowed arguments,
+    // which a Send future spawned on the runtime can't express.
+    let queries: Vec<(String, usize)> = logins
+        .chunks(MEMBERS_PER_QUERY)
+        .map(|chunk| {
+            let aliases: String = chunk
+                .iter()
+                .enumerate()
+                .map(|(i, login)| {
+                    format!(
+                        "m{i}: search(type: ISSUE, query: {}) {{ issueCount }}\n",
+                        quote_text(&format!(
+                            "is:pr is:merged merged:>={since} org:{org} author:{login}"
+                        ))
+                    )
+                })
+                .collect();
+            (format!("query {{\n{aliases}}}"), chunk.len())
+        })
+        .collect();
+    let batches: Vec<Vec<u64>> = stream::iter(queries)
+        .map(|(query, len)| async move {
+            let reply: Response<Value> = request(http, token, &query, json!({})).await?;
+            Ok::<_, FetchError>(
+                (0..len)
+                    .map(|i| {
+                        reply.data[format!("m{i}")]["issueCount"]
+                            .as_u64()
+                            .unwrap_or(0)
+                    })
+                    .collect::<Vec<u64>>(),
+            )
+        })
+        .buffer_unordered(MEMBER_QUERIES_AT_ONCE)
+        .try_collect()
+        .await?;
+    Ok(batches.into_iter().flatten().collect())
+}
 
 /// Search texts that count PRs merged since `since` in `org` by any of
 /// `logins`: several `author:` qualifiers match any of them, but only so many
@@ -417,32 +478,48 @@ pub async fn fetch_stats(
         // Members are read a page at a time up to a limit, so a team that
         // reaches it may have more.
         let capped = logins.len() >= MEMBERS_READ_LIMIT;
-        let searches = merged_by_searches(since, org, &logins);
-        // One request for all the counts, each its own aliased search: the
-        // team's members in the org, and you in the same org.
-        let mine = format!("is:pr is:merged author:@me merged:>={since} org:{org}");
-        let quote = |text: &str| serde_json::to_string(text).expect("a string serializes");
-        let query = format!(
-            "query {{\nme: search(type: ISSUE, query: {}) {{ issueCount }}\n{}}}",
-            quote(&mine),
-            searches
-                .iter()
-                .enumerate()
-                .map(|(i, text)| format!(
-                    "s{i}: search(type: ISSUE, query: {}) {{ issueCount }}\n",
-                    quote(text)
-                ))
-                .collect::<String>()
-        );
-        let reply: Response<Value> = request(http, token, &query, json!({})).await?;
-        let total = (0..searches.len())
-            .filter_map(|i| reply.data[format!("s{i}")]["issueCount"].as_u64())
-            .sum();
+        // Your merges in the same org, so the two compare.
+        let mine_in_org = async {
+            let text = format!("is:pr is:merged author:@me merged:>={since} org:{org}");
+            let query = format!(
+                "query {{ me: search(type: ISSUE, query: {}) {{ issueCount }} }}",
+                quote_text(&text)
+            );
+            let reply: Response<Value> = request(http, token, &query, json!({})).await?;
+            Ok::<_, FetchError>(reply.data["me"]["issueCount"].as_u64())
+        };
+        // The members' merges: one by one for a team small enough, which
+        // also gives the total; together, as one number, for a bigger one.
+        let members_merged = async {
+            if logins.len() <= MEMBER_COUNT_CAP {
+                let counts = member_counts(http, token, since, org, &logins).await?;
+                return Ok::<_, FetchError>((counts.iter().sum::<u64>(), Some(counts)));
+            }
+            let searches = merged_by_searches(since, org, &logins);
+            let query = format!(
+                "query {{\n{}}}",
+                searches
+                    .iter()
+                    .enumerate()
+                    .map(|(i, text)| format!(
+                        "s{i}: search(type: ISSUE, query: {}) {{ issueCount }}\n",
+                        quote_text(text)
+                    ))
+                    .collect::<String>()
+            );
+            let reply: Response<Value> = request(http, token, &query, json!({})).await?;
+            let total = (0..searches.len())
+                .filter_map(|i| reply.data[format!("s{i}")]["issueCount"].as_u64())
+                .sum();
+            Ok((total, None))
+        };
+        let (mine_in_org, (total, counts)) = future::try_join(mine_in_org, members_merged).await?;
         Ok(TeamStats {
             merged: Some(total),
             capped,
             members: logins.len(),
-            mine_in_org: reply.data["me"]["issueCount"].as_u64(),
+            mine_in_org,
+            member_counts: counts,
         })
     };
     let ((merged_by_me, sample), team_stats) = future::try_join(mine, team_count).await?;
@@ -452,6 +529,7 @@ pub async fn fetch_stats(
         merged_by_team: team_stats.merged,
         team_members_capped: team_stats.capped,
         team_member_count: team_stats.members,
+        team_member_merged: team_stats.member_counts,
         sample,
     })
 }
@@ -463,6 +541,7 @@ struct TeamStats {
     capped: bool,
     members: usize,
     mine_in_org: Option<u64>,
+    member_counts: Option<Vec<u64>>,
 }
 
 #[derive(Deserialize)]

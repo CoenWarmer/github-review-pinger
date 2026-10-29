@@ -5,6 +5,7 @@ import {
   averageCodeOwners,
   averageReviewWait,
   duration,
+  median,
   perMember,
 } from "../../../packages/app/src/stats.ts";
 
@@ -72,5 +73,27 @@ describe("merged per team member", () => {
   it("is nothing without a team or without members", () => {
     assert.equal(perMember(null, 5), null);
     assert.equal(perMember(10, 0), null);
+  });
+});
+
+describe("median", () => {
+  it("is the middle value, or the mean of the two in the middle", () => {
+    assert.equal(median([3, 1, 2]), 2);
+    assert.equal(median([4, 1, 3, 2]), 2.5);
+    assert.equal(median([7]), 7);
+  });
+
+  it("isn't thrown by a few big numbers, unlike the average", () => {
+    // Fifteen members as measured: two heavy mergers and one who merged nothing.
+    const counts = [0, 1, 1, 10, 14, 15, 15, 16, 21, 25, 27, 31, 57, 72, 98];
+    assert.equal(median(counts), 16);
+    assert.ok(counts.reduce((a, b) => a + b, 0) / counts.length > 26);
+  });
+
+  it("is nothing for no values, and doesn't reorder what it's given", () => {
+    assert.equal(median([]), null);
+    const given = [3, 1, 2];
+    median(given);
+    assert.deepEqual(given, [3, 1, 2]);
   });
 });

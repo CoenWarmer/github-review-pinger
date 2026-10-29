@@ -20,12 +20,15 @@ import {
   averageCodeOwners,
   averageReviewWait,
   duration,
+  median,
   perMember,
   type Average,
 } from "../stats";
 import type { PullRequest, StatsData } from "../types";
 
 const TEAM_KEY = "reviewPinger.statsTeam";
+/** Teams up to this size are counted member by member, which the median needs. */
+const MEMBER_COUNT_CAP = 150;
 const NO_TEAM = "none";
 
 /**
@@ -68,6 +71,9 @@ type Loaded<T> =
   | { kind: "loading" }
   | { kind: "error"; message: string }
   | { kind: "ready"; value: T };
+
+/** The per-member bars: the team's neutral, lighter, since they're derived from the team's bar. */
+const PER_MEMBER_FILL = "color-mix(in oklab, var(--muted-foreground) 60%, transparent)";
 
 /** Your bar in the accent colour, the team's in neutral: one measure, two entities. */
 const chartConfig = {
@@ -152,6 +158,8 @@ export function StatsSettings({
 
   const data = stats.kind === "ready" ? stats.value : null;
   const perMemberAverage = data && team ? perMember(data.mergedByTeam, data.teamMemberCount) : null;
+  // Only for a team small enough to have been counted member by member.
+  const perMemberMedian = data && team && data.teamMemberMerged ? median(data.teamMemberMerged) : null;
   const bars = data
     ? [
         { who: "You (all repos)", merged: data.mergedByMe, fill: "var(--info)" },
@@ -175,7 +183,16 @@ export function StatsSettings({
                 // One decimal, so the label, tooltip and table all say the same.
                 merged: Math.round(perMemberAverage * 10) / 10,
                 // The same neutral, lighter: it's derived from the bar above.
-                fill: "color-mix(in oklab, var(--muted-foreground) 60%, transparent)",
+                fill: PER_MEMBER_FILL,
+              },
+            ]
+          : []),
+        ...(perMemberMedian !== null
+          ? [
+              {
+                who: "Median per member",
+                merged: Math.round(perMemberMedian * 10) / 10,
+                fill: PER_MEMBER_FILL,
               },
             ]
           : []),
@@ -273,6 +290,11 @@ export function StatsSettings({
               <p className="m-0 mt-1 text-xs text-muted-foreground">
                 "You (compared to team)" and the team's bars count merges in {team.split("/")[0]}{" "}
                 only.
+                {perMemberMedian !== null &&
+                  " The average and median include members who merged nothing."}
+                {data.teamMemberMerged === null &&
+                  data.teamMemberCount > MEMBER_COUNT_CAP &&
+                  ` The median is shown for teams of up to ${MEMBER_COUNT_CAP} members.`}
               </p>
             )}
             {team && data.teamMembersCapped && (

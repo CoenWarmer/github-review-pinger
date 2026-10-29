@@ -123,12 +123,23 @@ export interface StatsData {
   teamMembersCapped: boolean;
   /** How many members of the team were looked up; 0 with no team. */
   teamMemberCount: number;
+  /** What each member merged, in no particular order, for a team small
+   * enough to count member by member; null otherwise. */
+  teamMemberMerged: number[] | null;
   /** Up to 100 of your merged PRs, newest first. */
   sample: { requestedAt: string | null; reviews: { by: string | null; at: string }[] }[];
 }
 
 /** GitHub rejects search text over 256 characters. */
 const MAX_SEARCH_CHARS = 250;
+/**
+ * Teams up to this size are counted member by member, which the median
+ * needs. Bigger ones are counted together in a few searches, as one number.
+ */
+export const MEMBER_COUNT_CAP = 150;
+// Measured against a real account: members per query and queries at once.
+const MEMBERS_PER_QUERY = 8;
+const MEMBER_QUERIES_AT_ONCE = 10;
 
 /**
  * Search texts that count PRs merged since `since` (a date) in `org` by any
@@ -609,8 +620,9 @@ export function createGithub({
         capped: boolean;
         members: number;
         mineInOrg: number | null;
+        counts: number[] | null;
       }> => {
-        if (!team) return { merged: null, capped: false, members: 0, mineInOrg: null };
+        if (!team) return { merged: null, capped: false, members: 0, mineInOrg: null, counts: null };
         const [org, slug] = team.split("/");
         if (!org || !slug) throw new FetchError("api", `Not a team: ${team}`);
         const found = await github.fetchDirectory({ teams: [[org, slug]] });
@@ -619,16 +631,46 @@ export function createGithub({
         // Members are read a page at a time up to a limit, so a team that
         // reaches it may have more.
         const capped = logins.length >= MAX_MEMBER_PAGES * 100;
-        const searches = mergedBySearches(since, org, logins);
-        // One request for all the counts, each its own aliased search: the
-        // team's members in the org, and you in the same org.
-        const mine = `is:pr is:merged author:@me merged:>=${since} org:${org}`;
-        const text = `query {\nme: search(type: ISSUE, query: ${JSON.stringify(mine)}) { issueCount }\n${searches
-          .map((s, i) => `s${i}: search(type: ISSUE, query: ${JSON.stringify(s)}) { issueCount }`)
-          .join("\n")}\n}`;
-        const reply = await request<Record<string, { issueCount: number }>>(text);
-        const merged = searches.reduce((sum, _, i) => sum + (reply.data[`s${i}`]?.issueCount ?? 0), 0);
-        return { merged, capped, members: logins.length, mineInOrg: reply.data.me?.issueCount ?? null };
+        // Your merges in the same org, so the two compare.
+        const mineInOrg = async () => {
+          const text = `is:pr is:merged author:@me merged:>=${since} org:${org}`;
+          const reply = await request<{ me: { issueCount: number } | null }>(
+            `query { me: search(type: ISSUE, query: ${JSON.stringify(text)}) { issueCount } }`,
+          );
+          return reply.data.me?.issueCount ?? null;
+        };
+        // The members' merges: one by one for a team small enough, which
+        // also gives the total; together, as one number, for a bigger one.
+        const membersMerged = async (): Promise<{ total: number; counts: number[] | null }> => {
+          if (logins.length <= MEMBER_COUNT_CAP) {
+            const replies = await mapLimit(
+              chunks(logins, MEMBERS_PER_QUERY),
+              MEMBER_QUERIES_AT_ONCE,
+              (batch) =>
+                request<Record<string, { issueCount: number } | null>>(
+                  `query {\n${batch
+                    .map(
+                      (login, i) =>
+                        `m${i}: search(type: ISSUE, query: ${JSON.stringify(`is:pr is:merged merged:>=${since} org:${org} author:${login}`)}) { issueCount }`,
+                    )
+                    .join("\n")}\n}`,
+                ).then((reply) => batch.map((_, i) => reply.data[`m${i}`]?.issueCount ?? 0)),
+            );
+            const counts = replies.flat();
+            return { total: counts.reduce((sum, count) => sum + count, 0), counts };
+          }
+          const searches = mergedBySearches(since, org, logins);
+          const text = `query {\n${searches
+            .map((s, i) => `s${i}: search(type: ISSUE, query: ${JSON.stringify(s)}) { issueCount }`)
+            .join("\n")}\n}`;
+          const reply = await request<Record<string, { issueCount: number }>>(text);
+          return {
+            total: searches.reduce((sum, _, i) => sum + (reply.data[`s${i}`]?.issueCount ?? 0), 0),
+            counts: null,
+          };
+        };
+        const [inOrg, { total, counts }] = await Promise.all([mineInOrg(), membersMerged()]);
+        return { merged: total, capped, members: logins.length, mineInOrg: inOrg, counts };
       };
       const [mineResult, team_] = await Promise.all([mine(), teamCount()]);
       return {
@@ -637,6 +679,7 @@ export function createGithub({
         mergedByTeam: team_.merged,
         teamMembersCapped: team_.capped,
         teamMemberCount: team_.members,
+        teamMemberMerged: team_.counts,
       };
     },
 
