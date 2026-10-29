@@ -616,10 +616,11 @@ export function StatsSettings({
           basis="open PR"
         />
         <Figure
-          label="Ready to merged"
+          label="Avg time to deliver PR"
           value={data ? averageReadyToMerged(data.sample) : null}
           previous={before ? averageReadyToMerged(before.sample) : null}
           format={duration}
+          hint="ready for review to merge"
           basis="merged PR"
           loading={stats.kind === "loading"}
         />
@@ -644,9 +645,10 @@ export function StatsSettings({
         Review wait is the time from a merged PR's first review request to its
         first review by someone else, over your latest 100 merged PRs. Code
         owners are the pending requests GitHub made from CODEOWNERS, on open PRs
-        that aren't drafts. Ready to merged is the time from a merged PR first
+        that aren't drafts. Avg time to deliver PR is the time from a merged PR first
         being ready for review (when it was opened, or first marked ready if it
-        began as a draft) to its merge: the reviews, CI and merge queue together.
+        began as a draft) to its merge, which is what delivered means here: the
+        reviews, CI and merge queue together.
         {hasCi &&
           ciNow?.kind === "ok" &&
           ` CI builds are the ones on PRs you authored, created in the last ${STATS_DAYS} days (found by branch, since a bot creates them, not you).`}
@@ -754,7 +756,9 @@ function Tile({
       <CardContent className="flex flex-col gap-0.5 px-2.5">
         <span className="text-[11px] leading-tight text-muted-foreground">{label}</span>
         <span className="text-lg leading-tight font-semibold">{value}</span>
-        <span className="text-[11px] leading-tight text-muted-foreground">{detail}</span>
+        <span className="text-[11px] leading-tight whitespace-pre-line text-muted-foreground">
+          {detail}
+        </span>
         {moved && (
           <span className="text-[11px] leading-tight text-muted-foreground">{moved.text}</span>
         )}
@@ -813,6 +817,7 @@ function Figure({
   previous,
   format,
   basis,
+  hint,
   loading,
 }: {
   label: string;
@@ -821,6 +826,8 @@ function Figure({
   previous?: Average | null;
   format: (n: number) => string;
   basis: string;
+  /** What the number runs from and to, shown before the count. */
+  hint?: string;
   loading?: boolean;
 }) {
   // Under a minute isn't a change worth showing for a duration.
@@ -840,7 +847,11 @@ function Figure({
         loading || !value ? "…" : value.average === null ? "–" : format(value.average)
       }
       detail={
-        loading || !value ? " " : `${value.count} ${basis}${value.count === 1 ? "" : "s"}`
+        loading || !value
+          ? " "
+          : [hint, `${value.count} ${basis}${value.count === 1 ? "" : "s"}`]
+              .filter(Boolean)
+              .join("\n")
       }
       moved={moved}
     />
