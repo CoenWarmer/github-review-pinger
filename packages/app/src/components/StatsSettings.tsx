@@ -6,8 +6,6 @@ import { Input } from "@/components/ui/input";
 import { Card, CardContent } from "@/components/ui/card";
 import {
   ChartContainer,
-  ChartTooltip,
-  ChartTooltipContent,
   type ChartConfig,
 } from "@/components/ui/chart";
 import {
@@ -334,10 +332,6 @@ const BarsChart = memo(function BarsChart({
             width={140}
             tick={{ fontSize: 11 }}
             interval={0}
-          />
-          <ChartTooltip
-            cursor={false}
-            content={<ChartTooltipContent hideLabel />}
           />
           <Bar dataKey="value" radius={[0, 4, 4, 0]} isAnimationActive={false}>
             {bars.map((bar) => (
