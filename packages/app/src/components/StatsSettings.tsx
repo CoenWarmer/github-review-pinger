@@ -763,6 +763,10 @@ export function StatsSettings({
       </div>
       {hasCi && <PipelineSetting value={buildkitePipeline} />}
       {hasCi && ciNow && ciNow.kind !== "ok" && <CiHelp stats={ciNow} />}
+      {/* The end of the tab, in every app, not only where the CI tiles are. */}
+      <div className="mt-5 mb-2 border-t p-2">
+        <Credits platform={platform} />
+      </div>
     </div>
   );
 }
@@ -866,9 +870,6 @@ function PipelineSetting({ value }: { value: string }) {
         CI builds are counted in this pipeline only.
       </p>
       {error && <p className="m-0 text-xs text-destructive">{error}</p>}
-      <div className="mt-5 mb-2 p-2 border-t">
-        <Credits platform={platform} />
-      </div>
     </div>
   );
 }
