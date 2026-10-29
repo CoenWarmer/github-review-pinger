@@ -100,7 +100,7 @@ export function averageCodeOwners(prs: PullRequest[]): Average {
 /** How a number moved since the window before it. */
 export interface Change {
   direction: "up" | "down" | "same";
-  /** "▲ 56 (was 4)", "▼ 3 (was 10)" or "no change (was 7)". */
+  /** "▲ 56 (was 4)", "▼ 3 (was 10)" or "same (was 7)". */
   text: string;
 }
 
@@ -122,7 +122,7 @@ export function change(
   tiny = 0.05,
 ): Change {
   const diff = current - previous;
-  if (Math.abs(diff) < tiny) return { direction: "same", text: `no change (was ${format(previous)})` };
+  if (Math.abs(diff) < tiny) return { direction: "same", text: `same (was ${format(previous)})` };
   return diff > 0
     ? { direction: "up", text: `▲ ${format(diff)} (was ${format(previous)})` }
     : { direction: "down", text: `▼ ${format(-diff)} (was ${format(previous)})` };

@@ -112,7 +112,7 @@ describe("change since the window before", () => {
   });
 
   it("says when nothing moved", () => {
-    assert.deepEqual(change(7, 7), { direction: "same", text: "no change (was 7)" });
+    assert.deepEqual(change(7, 7), { direction: "same", text: "same (was 7)" });
     // A rounding error isn't a change.
     assert.equal(change(15.7, 15.72).direction, "same");
   });
