@@ -62,7 +62,7 @@ function Empty({ children }: { children: ReactNode }) {
 }
 
 function Banner({ children }: { children: ReactNode }) {
-  return <p className="m-0 border-b bg-warning/15 px-3 py-2">{children}</p>;
+  return <p className="m-0 border-t bg-warning/15 px-3 py-2">{children}</p>;
 }
 
 function SortMenu({ value, onChange }: { value: SortKey; onChange: (key: SortKey) => void }) {
@@ -293,14 +293,6 @@ function AppContent() {
       }}
     >
       <main className="flex h-full flex-col">
-        {snapshot.status.kind === "error" && (
-          <Banner>{problemMessage(snapshot.status.problem, platform.features.githubCli)}</Banner>
-        )}
-        {snapshot.ssoPartial && (
-          <Banner>
-            Some organizations are hidden because this token isn't authorized for their SSO.
-          </Banner>
-        )}
         <Tabs value={tab} onValueChange={(value) => setTab(value as Tab)} className="gap-0 py-1">
           <TabsList variant="line" className="h-auto w-full rounded-none border-b p-0">
             {TABS.map(({ id, label, icon }) => (
@@ -338,109 +330,122 @@ function AppContent() {
             />
           </div>
         )}
-        <ScrollArea className="min-h-0 flex-1">
-          {search ? (
-            <SearchResults
-              key={`${tab}:${query.trim()}`}
-              query={query}
-              shownIds={search.ids}
-              rows={search.rows}
-              now={now}
-            />
-          ) : tab === "stats" ? (
-            // Only here, once this tab is opened, are the statistics fetched:
-            // never on the polling cycle, to spare the API quota.
-            <div className="px-3 py-3">
-              <StatsSettings
-                pullRequests={prs}
-                viewer={snapshot.viewer}
-                buildkitePipeline={snapshot.buildkitePipeline}
+        {/* Pinned over the list, so a notice appearing doesn't push the rows down. */}
+        <div className="relative min-h-0 flex-1">
+          <ScrollArea className="h-full">
+            {search ? (
+              <SearchResults
+                key={`${tab}:${query.trim()}`}
+                query={query}
+                shownIds={search.ids}
+                rows={search.rows}
+                now={now}
               />
-            </div>
-          ) : tab === "settings" ? (
-            <SettingsPanel
-              account={snapshot.viewer}
-              authSource={snapshot.authChoice ?? (snapshot.hasSavedToken ? "pat" : "gh")}
-              hasSavedToken={snapshot.hasSavedToken}
-              theme={snapshot.theme}
-              notificationsMuted={snapshot.notificationsMuted}
-              soundOnMerge={snapshot.soundOnMerge}
-              teamLookupDenied={snapshot.teamLookupDenied}
-              channels={snapshot.teamChannels}
-              sync={snapshot.sync}
-              myPrsSections={snapshot.myPrsSections}
-              views={snapshot.views}
-            />
-          ) : tab === "mine" ? (
-            prs.length === 0 &&
-            snapshot.mergedPullRequests.length === 0 &&
-            Object.values(snapshot.viewPullRequests).every((rows) => rows.length === 0) ? (
-              <Empty>No open pull requests.</Empty>
-            ) : (
-              snapshot.myPrsSections
-                .filter((pref) => pref.enabled)
-                .map((pref) => {
-                  if (pref.kind === "view") {
-                    const view = snapshot.views.find((v) => v.id === pref.id);
-                    if (!view) return null;
+            ) : tab === "stats" ? (
+              // Only here, once this tab is opened, are the statistics fetched:
+              // never on the polling cycle, to spare the API quota.
+              <div className="px-3 py-3">
+                <StatsSettings
+                  pullRequests={prs}
+                  viewer={snapshot.viewer}
+                  buildkitePipeline={snapshot.buildkitePipeline}
+                />
+              </div>
+            ) : tab === "settings" ? (
+              <SettingsPanel
+                account={snapshot.viewer}
+                authSource={snapshot.authChoice ?? (snapshot.hasSavedToken ? "pat" : "gh")}
+                hasSavedToken={snapshot.hasSavedToken}
+                theme={snapshot.theme}
+                notificationsMuted={snapshot.notificationsMuted}
+                soundOnMerge={snapshot.soundOnMerge}
+                teamLookupDenied={snapshot.teamLookupDenied}
+                channels={snapshot.teamChannels}
+                sync={snapshot.sync}
+                myPrsSections={snapshot.myPrsSections}
+                views={snapshot.views}
+              />
+            ) : tab === "mine" ? (
+              prs.length === 0 &&
+              snapshot.mergedPullRequests.length === 0 &&
+              Object.values(snapshot.viewPullRequests).every((rows) => rows.length === 0) ? (
+                <Empty>No open pull requests.</Empty>
+              ) : (
+                snapshot.myPrsSections
+                  .filter((pref) => pref.enabled)
+                  .map((pref) => {
+                    if (pref.kind === "view") {
+                      const view = snapshot.views.find((v) => v.id === pref.id);
+                      if (!view) return null;
+                      return (
+                        <Section
+                          key={`view:${pref.id}`}
+                          id={`mine:view:${pref.id}`}
+                          title={view.name}
+                          rows={snapshot.viewPullRequests[pref.id] ?? []}
+                          defaultOpen={false}
+                          render={(pr) => <PrRow key={pr.id} pr={pr} now={now} />}
+                        />
+                      );
+                    }
+                    if (pref.section === "merged") {
+                      return (
+                        <MergedSection
+                          key="merged"
+                          rows={snapshot.mergedPullRequests}
+                          canLoadMore={snapshot.mergedCanLoadMore}
+                          now={now}
+                        />
+                      );
+                    }
                     return (
                       <Section
-                        key={`view:${pref.id}`}
-                        id={`mine:view:${pref.id}`}
-                        title={view.name}
-                        rows={snapshot.viewPullRequests[pref.id] ?? []}
-                        defaultOpen={false}
+                        key={pref.section}
+                        id={`mine:${pref.section}`}
+                        title={SECTION_TITLES[pref.section]}
+                        rows={prs.filter((pr) => pr.group === pref.section)}
+                        defaultOpen={!STARTS_COLLAPSED.has(pref.section)}
                         render={(pr) => <PrRow key={pr.id} pr={pr} now={now} />}
                       />
                     );
-                  }
-                  if (pref.section === "merged") {
-                    return (
-                      <MergedSection
-                        key="merged"
-                        rows={snapshot.mergedPullRequests}
-                        canLoadMore={snapshot.mergedCanLoadMore}
-                        now={now}
-                      />
-                    );
-                  }
-                  return (
-                    <Section
-                      key={pref.section}
-                      id={`mine:${pref.section}`}
-                      title={SECTION_TITLES[pref.section]}
-                      rows={prs.filter((pr) => pr.group === pref.section)}
-                      defaultOpen={!STARTS_COLLAPSED.has(pref.section)}
-                      render={(pr) => <PrRow key={pr.id} pr={pr} now={now} />}
-                    />
-                  );
-                })
-            )
-          ) : snapshot.partial && reviews.length === 0 ? (
-            // My PRs came first; this is still on its way, so empty isn't known.
-            snapshot.status.kind === "error" ? (
-              <Empty>Couldn't load review requests.</Empty>
+                  })
+              )
+            ) : snapshot.partial && reviews.length === 0 ? (
+              // My PRs came first; this is still on its way, so empty isn't known.
+              snapshot.status.kind === "error" ? (
+                <Empty>Couldn't load review requests.</Empty>
+              ) : (
+                <div className="flex flex-col items-center gap-3 px-3 py-10 text-muted-foreground">
+                  <RingsLoader loading />
+                  <p className="m-0">Loading review requests…</p>
+                </div>
+              )
+            ) : reviews.length === 0 ? (
+              <Empty>No pull requests are waiting on your review.</Empty>
             ) : (
-              <div className="flex flex-col items-center gap-3 px-3 py-10 text-muted-foreground">
-                <RingsLoader loading />
-                <p className="m-0">Loading review requests…</p>
-              </div>
-            )
-          ) : reviews.length === 0 ? (
-            <Empty>No pull requests are waiting on your review.</Empty>
-          ) : (
-            REVIEW_SECTIONS.map(({ group, title }) => (
-              <Section
-                key={group}
-                id={`reviews:${group}`}
-                title={title}
-                rows={reviews.filter((pr) => pr.group === group)}
-                defaultOpen={group !== "snoozed" && group !== "draft"}
-                render={(pr) => <ReviewRow key={pr.id} pr={pr} now={now} />}
-              />
-            ))
+              REVIEW_SECTIONS.map(({ group, title }) => (
+                <Section
+                  key={group}
+                  id={`reviews:${group}`}
+                  title={title}
+                  rows={reviews.filter((pr) => pr.group === group)}
+                  defaultOpen={group !== "snoozed" && group !== "draft"}
+                  render={(pr) => <ReviewRow key={pr.id} pr={pr} now={now} />}
+                />
+              ))
+            )}
+          </ScrollArea>
+        <div className="absolute inset-x-0 bottom-0 z-10 bg-background">
+          {snapshot.status.kind === "error" && (
+            <Banner>{problemMessage(snapshot.status.problem, platform.features.githubCli)}</Banner>
           )}
-        </ScrollArea>
+          {snapshot.ssoPartial && (
+            <Banner>
+              Some organizations are hidden because this token isn't authorized for their SSO.
+            </Banner>
+          )}
+        </div>
+        </div>
         <Footer snapshot={snapshot} now={now} />
       </main>
     </SlackContext.Provider>
