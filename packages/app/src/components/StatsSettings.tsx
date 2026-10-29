@@ -602,10 +602,11 @@ export function StatsSettings({
 
       <div className="grid grid-cols-2 gap-2">
         <Figure
-          label="Review wait, merged"
+          label="Avg time to get approval"
           value={data ? averageReviewWait(data.sample, viewer) : null}
           previous={before ? averageReviewWait(before.sample, viewer) : null}
           format={duration}
+          hint="request to first review"
           basis="merged PR"
           loading={stats.kind === "loading"}
         />
@@ -642,8 +643,9 @@ export function StatsSettings({
       {hasCi && <PipelineSetting value={buildkitePipeline} />}
       {hasCi && ciNow && ciNow.kind !== "ok" && <CiHelp stats={ciNow} />}
       <p className="m-0 -mt-2 text-[11px] leading-snug text-muted-foreground">
-        Review wait is the time from a merged PR's first review request to its
-        first review by someone else, over your latest 100 merged PRs. Code
+        Avg time to get approval is the time from a merged PR's first review
+        request to the first review by someone else (any review, not only an
+        approval), over your latest 100 merged PRs. Code
         owners are the pending requests GitHub made from CODEOWNERS, on open PRs
         that aren't drafts. Avg time to deliver PR is the time from a merged PR first
         being ready for review (when it was opened, or first marked ready if it
