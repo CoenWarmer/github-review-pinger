@@ -79,6 +79,12 @@ export interface Platform {
    * `features.buildkite`. Always answers: no CLI or login is part of it.
    */
   loadCiStats(days: number, previous?: boolean): Promise<CiStats>;
+  /**
+   * Chooses the Buildkite pipeline the CI statistics count builds in. It's
+   * saved and synced with your other devices. Rejects with a message to show
+   * when what was typed isn't a pipeline name.
+   */
+  setBuildkitePipeline(name: string): Promise<void>;
 
   /** Adds a custom view and shows it right away. */
   addView(name: string, query: string): void;

@@ -59,6 +59,10 @@ pub struct SyncDoc {
     /// Custom views by id; `None` once removed.
     #[serde(default)]
     pub views: BTreeMap<String, Stamped<Option<ViewDoc>>>,
+    /// The Buildkite pipeline the CI statistics count builds in, one value
+    /// like the sections; going back to the default is a value too.
+    #[serde(default)]
+    pub buildkite_pipeline: Option<Stamped<String>>,
 }
 
 /// A custom view's definition, as it crosses the gist: the id is the map key.
@@ -84,6 +88,8 @@ pub struct SyncMemory {
     pub sections_changed_at: Option<DateTime<Utc>>,
     /// When each view last changed here or was taken from the gist.
     pub views: HashMap<String, DateTime<Utc>>,
+    /// When the Buildkite pipeline last changed here or was taken from the gist.
+    pub buildkite_pipeline_changed_at: Option<DateTime<Utc>>,
 }
 
 /// The outcome of merging the gist into a device.
@@ -120,6 +126,14 @@ impl SyncDoc {
                 .is_none_or(|ours| theirs.at >= ours.at)
         {
             self.sections = Some(theirs.clone());
+        }
+        if let Some(theirs) = &other.buildkite_pipeline
+            && self
+                .buildkite_pipeline
+                .as_ref()
+                .is_none_or(|ours| theirs.at >= ours.at)
+        {
+            self.buildkite_pipeline = Some(theirs.clone());
         }
     }
 
@@ -183,6 +197,13 @@ fn local_doc(memory: &mut Memory, now: DateTime<Utc>) -> SyncDoc {
         let at = *memory.sync.sections_changed_at.get_or_insert(now);
         doc.sections = Some(Stamped {
             value: sections.clone(),
+            at,
+        });
+    }
+    if let Some(pipeline) = &memory.buildkite_pipeline {
+        let at = *memory.sync.buildkite_pipeline_changed_at.get_or_insert(now);
+        doc.buildkite_pipeline = Some(Stamped {
+            value: pipeline.clone(),
             at,
         });
     }
@@ -272,6 +293,20 @@ fn apply(memory: &mut Memory, merged: &SyncDoc, now: DateTime<Utc>) -> bool {
                 memory.my_prs_sections = Some(entry.value.clone());
                 changed = true;
             }
+        }
+    }
+    if let Some(entry) = &merged.buildkite_pipeline
+        && memory
+            .sync
+            .buildkite_pipeline_changed_at
+            .is_none_or(|own| entry.at > own)
+        // A hand-edited gist shouldn't put anything but a pipeline name on a command line.
+        && let Some(slug) = crate::memory::clean_pipeline(&entry.value)
+    {
+        memory.sync.buildkite_pipeline_changed_at = Some(entry.at);
+        if memory.buildkite_pipeline() != slug {
+            memory.buildkite_pipeline = Some(slug);
+            changed = true;
         }
     }
     for (id, entry) in &merged.views {
@@ -658,6 +693,54 @@ mod tests {
         let result = reconcile(&mut b, Some(gist), at(NOW));
         assert!(result.changed);
         assert_eq!(b.my_prs_sections, a.my_prs_sections);
+    }
+
+    #[test]
+    fn the_buildkite_pipeline_syncs_as_one_value_and_the_newest_wins() {
+        let mut a = Memory::default();
+        a.set_buildkite_pipeline("kibana-on-merge", at("2026-10-27T09:00:00Z"));
+        let gist = reconcile(&mut a, None, at(NOW)).upload.unwrap();
+
+        // A device that never chose one takes the gist's.
+        let mut b = Memory::default();
+        assert_eq!(b.buildkite_pipeline(), "kibana-pull-request");
+        assert!(reconcile(&mut b, Some(gist.clone()), at(NOW)).changed);
+        assert_eq!(b.buildkite_pipeline(), "kibana-on-merge");
+
+        // An older choice on another device loses to the newer one in the gist.
+        let mut c = Memory::default();
+        c.set_buildkite_pipeline("older", at("2026-10-26T09:00:00Z"));
+        reconcile(&mut c, Some(gist), at(NOW));
+        assert_eq!(c.buildkite_pipeline(), "kibana-on-merge");
+
+        // And going back to the default is a change that syncs too.
+        let mut d = Memory::default();
+        d.set_buildkite_pipeline("other", at("2026-10-27T09:00:00Z"));
+        let first = reconcile(&mut d, None, at(NOW)).upload.unwrap();
+        d.set_buildkite_pipeline("kibana-pull-request", at("2026-10-28T09:00:00Z"));
+        let upload = reconcile(&mut d, Some(first), at(NOW)).upload.unwrap();
+        assert_eq!(
+            upload.buildkite_pipeline.map(|p| p.value).as_deref(),
+            Some("kibana-pull-request")
+        );
+    }
+
+    #[test]
+    fn a_pipeline_that_isnt_a_slug_is_ignored() {
+        let mut memory = Memory::default();
+        let remote = SyncDoc {
+            version: 1,
+            buildkite_pipeline: Some(Stamped {
+                value: "$(rm -rf ~)".to_string(),
+                at: at("2026-10-27T09:00:00Z"),
+            }),
+            ..SyncDoc::default()
+        };
+
+        reconcile(&mut memory, Some(remote), at(NOW));
+
+        assert_eq!(memory.buildkite_pipeline, None);
+        assert_eq!(memory.sync.buildkite_pipeline_changed_at, None);
     }
 
     #[test]

@@ -350,6 +350,7 @@ function AppContent() {
               myPrsSections={snapshot.myPrsSections}
               views={snapshot.views}
               pullRequests={prs}
+              buildkitePipeline={snapshot.buildkitePipeline}
             />
           ) : tab === "mine" ? (
             prs.length === 0 &&

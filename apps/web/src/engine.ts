@@ -85,6 +85,8 @@ export interface PingerLike {
   removeTeamChannel(team: string, now: string): void;
   myPrsSections(): string;
   setMyPrsSections(sections: string, now: string): void;
+  buildkitePipeline(): string;
+  setBuildkitePipeline(name: string, now: string): boolean;
   mergedDerive(page: string, loadedMore: string, now: string): string;
   views(): string;
   addView(name: string, query: string, now: string): string;
@@ -189,6 +191,7 @@ export class Engine {
       slackOpensIn: "app",
       sync: { enabled: false, available: null, lastSyncedAt: null, gistUrl: null, error: null },
       myPrsSections: [],
+      buildkitePipeline: "kibana-pull-request",
       mergedPullRequests: [],
       mergedCanLoadMore: false,
       views: [],
@@ -243,6 +246,7 @@ export class Engine {
     this.publish({
       views: JSON.parse(this.pinger.views()) as View[],
       myPrsSections: JSON.parse(this.pinger.myPrsSections()) as SectionPref[],
+      buildkitePipeline: this.pinger.buildkitePipeline(),
     });
   }
 
@@ -264,6 +268,7 @@ export class Engine {
       },
       myPrsSections: JSON.parse(this.pinger.myPrsSections()) as SectionPref[],
       views: JSON.parse(this.pinger.views()) as View[],
+      buildkitePipeline: this.pinger.buildkitePipeline(),
     });
     if (this.token) await this.poll();
     else this.publish({ status: { kind: "error", problem: { code: "noToken" } } });
@@ -481,6 +486,21 @@ export class Engine {
     this.publish({ myPrsSections: JSON.parse(this.pinger.myPrsSections()) as SectionPref[] });
     this.syncSoon();
     void this.refresh();
+  }
+
+  /**
+   * Chooses the Buildkite pipeline the CI statistics count builds in, and
+   * shares it. Rejects with a message to show when it isn't a pipeline name.
+   * Nothing in the browser shows it, but a device that does reads it from
+   * the same gist.
+   */
+  setBuildkitePipeline(name: string) {
+    if (!this.pinger.setBuildkitePipeline(name, this.nowIso())) {
+      throw "A pipeline name is letters, digits, dashes, underscores and dots.";
+    }
+    this.persist();
+    this.publish({ buildkitePipeline: this.pinger.buildkitePipeline() });
+    this.syncSoon();
   }
 
   /** Adds a view and refreshes right away, so it shows without waiting for

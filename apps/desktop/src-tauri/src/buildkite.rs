@@ -124,11 +124,17 @@ pub fn ready() -> Result<PathBuf, CiStats> {
 /// A build, with what's needed to attribute and time it.
 #[derive(Debug, Clone, Deserialize)]
 pub struct Build {
+    pipeline: Option<PipelineRef>,
     branch: Option<String>,
     created_at: DateTime<Utc>,
     started_at: Option<DateTime<Utc>>,
     finished_at: Option<DateTime<Utc>>,
     pull_request: Option<PullRequestRef>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct PipelineRef {
+    slug: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -159,10 +165,35 @@ fn is_on(build: &Build, prs: &[PrBranch]) -> bool {
     })
 }
 
-/// The builds on `prs` created in the last `2 * days` days: the window and
-/// the one before it, both from one fetch. Several `bk build list` runs go
-/// at once, each for a batch of branches.
-pub fn my_builds(bk: &Path, prs: &[PrBranch], days: i64) -> Result<Vec<Build>, String> {
+/// The `bk build list` arguments for builds of the pipeline on any of the
+/// comma-separated `branches`, created in the last `since` (a Go duration,
+/// which has no days).
+fn list_args(branches: &str, since: &str, pipeline: &str) -> Vec<String> {
+    [
+        "build",
+        "list",
+        "--pipeline",
+        pipeline,
+        "--branch",
+        branches,
+        "--since",
+        since,
+        "--no-limit",
+        "--json",
+    ]
+    .map(String::from)
+    .into()
+}
+
+/// The builds on `prs` in `pipeline`, created in the last `2 * days` days:
+/// the window and the one before it, both from one fetch. Several
+/// `bk build list` runs go at once, each for a batch of branches.
+pub fn my_builds(
+    bk: &Path,
+    prs: &[PrBranch],
+    days: i64,
+    pipeline: &str,
+) -> Result<Vec<Build>, String> {
     let mut branches: Vec<&str> = prs.iter().map(|pr| pr.branch.as_str()).collect();
     branches.sort_unstable();
     branches.dedup();
@@ -177,17 +208,7 @@ pub fn my_builds(bk: &Path, prs: &[PrBranch], days: i64) -> Result<Vec<Build>, S
         for _ in 0..CALLS_AT_ONCE.min(batches.len()) {
             scope.spawn(|| {
                 while let Some(joined) = batches.get(next.fetch_add(1, Ordering::Relaxed)) {
-                    let args = [
-                        "build",
-                        "list",
-                        "--branch",
-                        joined,
-                        "--since",
-                        &since,
-                        "--no-limit",
-                        "--json",
-                    ]
-                    .map(String::from);
+                    let args = list_args(joined, &since, pipeline);
                     let result = run(bk, &args).and_then(|(ok, stdout, stderr)| {
                         if !ok {
                             return Err(last_line(&stderr));
@@ -204,7 +225,14 @@ pub fn my_builds(bk: &Path, prs: &[PrBranch], days: i64) -> Result<Vec<Build>, S
     for batch in collected.into_inner().unwrap() {
         builds.extend(batch?);
     }
-    builds.retain(|build| is_on(build, prs));
+    // The CLI filters by pipeline too, but what's counted is checked anyway.
+    builds.retain(|build| {
+        build
+            .pipeline
+            .as_ref()
+            .is_some_and(|p| p.slug.eq_ignore_ascii_case(pipeline))
+            && is_on(build, prs)
+    });
     Ok(builds)
 }
 
@@ -246,17 +274,20 @@ pub fn summarize(builds: &[Build], now: DateTime<Utc>, days: i64, previous: bool
     }
 }
 
-/// The builds last fetched, for `days`, while they're recent enough to reuse.
-static RECENT: Mutex<Option<(Instant, i64, Vec<Build>)>> = Mutex::new(None);
+/// The builds last fetched, for `days` and a pipeline, while they're recent
+/// enough to reuse.
+type Recent = Option<(Instant, i64, String, Vec<Build>)>;
+static RECENT: Mutex<Recent> = Mutex::new(None);
 
-pub fn recent(days: i64) -> Option<Vec<Build>> {
+pub fn recent(days: i64, pipeline: &str) -> Option<Vec<Build>> {
     let recent = RECENT.lock().unwrap();
-    let (at, for_days, builds) = recent.as_ref()?;
-    (*for_days == days && at.elapsed() < REUSE_FOR).then(|| builds.clone())
+    let (at, for_days, for_pipeline, builds) = recent.as_ref()?;
+    (*for_days == days && for_pipeline == pipeline && at.elapsed() < REUSE_FOR)
+        .then(|| builds.clone())
 }
 
-pub fn remember(days: i64, builds: &[Build]) {
-    *RECENT.lock().unwrap() = Some((Instant::now(), days, builds.to_vec()));
+pub fn remember(days: i64, pipeline: &str, builds: &[Build]) {
+    *RECENT.lock().unwrap() = Some((Instant::now(), days, pipeline.to_string(), builds.to_vec()));
 }
 
 #[cfg(test)]
@@ -366,6 +397,19 @@ mod tests {
     }
 
     #[test]
+    fn asks_for_one_pipeline_and_the_hours_ago() {
+        let args = list_args("a,b:c", "1440h", "kibana-pull-request");
+        for pair in [
+            ["--pipeline", "kibana-pull-request"],
+            ["--branch", "a,b:c"],
+            ["--since", "1440h"],
+        ] {
+            assert!(args.windows(2).any(|w| w == pair), "{pair:?}");
+        }
+        assert!(args.contains(&"--no-limit".to_string()));
+    }
+
+    #[test]
     fn reads_the_json_past_a_warning() {
         let output = "Warning: BUILDKITE_API_TOKEN is overriding the credential\n[1]";
         assert_eq!(json_part(output, '['), "[1]");
@@ -396,7 +440,7 @@ mod tests {
         ))
         .expect("PRs load");
         let started = Instant::now();
-        let builds = my_builds(&bk, &prs, 30).expect("builds load");
+        let builds = my_builds(&bk, &prs, 30, "kibana-pull-request").expect("builds load");
         println!(
             "{} PRs, {} of your builds in 60 days, fetched in {:?}",
             prs.len(),

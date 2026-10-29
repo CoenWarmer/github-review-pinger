@@ -359,6 +359,16 @@ impl PingerState {
         json(&self.memory.my_prs_sections())
     }
 
+    /// The Buildkite pipeline the CI statistics count builds in.
+    pub fn buildkite_pipeline(&self) -> String {
+        self.memory.buildkite_pipeline().to_string()
+    }
+
+    /// Chooses it, from what was typed. Whether it was a pipeline name.
+    pub fn set_buildkite_pipeline(&mut self, name: &str, now: &str) -> Result<bool, String> {
+        Ok(self.memory.set_buildkite_pipeline(name, time(now)?))
+    }
+
     pub fn set_my_prs_sections(&mut self, sections: &str, now: &str) -> Result<(), String> {
         let sections: Vec<SectionPref> =
             serde_json::from_str(sections).map_err(|e| e.to_string())?;

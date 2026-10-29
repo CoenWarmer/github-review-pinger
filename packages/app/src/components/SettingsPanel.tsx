@@ -40,6 +40,7 @@ export function SettingsPanel({
   myPrsSections,
   views,
   pullRequests,
+  buildkitePipeline,
 }: {
   /** Who is signed in. */
   account: string | null;
@@ -62,6 +63,8 @@ export function SettingsPanel({
   views: View[];
   /** Your open PRs, which some of the statistics are worked out from. */
   pullRequests: PullRequest[];
+  /** The Buildkite pipeline the CI statistics count builds in. */
+  buildkitePipeline: string;
 }) {
   const platform = usePlatform();
   const {
@@ -105,7 +108,11 @@ export function SettingsPanel({
     <div className="flex flex-col">
       <Section>
         <Heading>Statistics</Heading>
-        <StatsSettings pullRequests={pullRequests} viewer={account} />
+        <StatsSettings
+          pullRequests={pullRequests}
+          viewer={account}
+          buildkitePipeline={buildkitePipeline}
+        />
       </Section>
       {hasAutostart && (
         <Section>

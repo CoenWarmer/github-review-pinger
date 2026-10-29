@@ -183,6 +183,16 @@ async fn load_ci_stats(
     Ok(poller.ci_stats(days, previous).await)
 }
 
+/// Chooses the Buildkite pipeline the CI statistics count builds in.
+#[tauri::command]
+fn set_buildkite_pipeline(
+    app: AppHandle,
+    poller: State<Arc<Poller>>,
+    name: String,
+) -> Result<(), String> {
+    poller.set_buildkite_pipeline(&app, &name)
+}
+
 #[tauri::command]
 fn add_view(app: AppHandle, poller: State<Arc<Poller>>, name: String, query: String) {
     poller.add_view(&app, name, query);
@@ -339,6 +349,7 @@ pub fn run() {
             load_stats,
             load_review_stats,
             load_ci_stats,
+            set_buildkite_pipeline,
             add_view,
             update_view,
             remove_view,

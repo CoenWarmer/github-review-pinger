@@ -46,6 +46,7 @@ export const tauriPlatform: Platform = {
   listTeams: () => invoke("my_teams"),
   loadStats: (team, days, previous = false) => invoke("load_stats", { team, days, previous }),
   loadCiStats: (days, previous = false) => invoke("load_ci_stats", { days, previous }),
+  setBuildkitePipeline: (name) => invoke("set_buildkite_pipeline", { name }),
   loadReviewStats: (team, days, previous = false) =>
     invoke("load_review_stats", { team, days, previous }),
   addView: (name, query) => {

@@ -185,6 +185,18 @@ impl Pinger {
         js(self.0.my_prs_sections())
     }
 
+    /// The Buildkite pipeline the CI statistics count builds in.
+    #[wasm_bindgen(js_name = buildkitePipeline)]
+    pub fn buildkite_pipeline(&self) -> String {
+        self.0.buildkite_pipeline()
+    }
+
+    /// Chooses it. Whether what was typed is a pipeline name.
+    #[wasm_bindgen(js_name = setBuildkitePipeline)]
+    pub fn set_buildkite_pipeline(&mut self, name: &str, now: &str) -> Result<bool, JsError> {
+        js(self.0.set_buildkite_pipeline(name, now))
+    }
+
     #[wasm_bindgen(js_name = setMyPrsSections)]
     pub fn set_my_prs_sections(&mut self, sections: &str, now: &str) -> Result<(), JsError> {
         js(self.0.set_my_prs_sections(sections, now))

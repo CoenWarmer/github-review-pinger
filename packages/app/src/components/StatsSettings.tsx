@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Bar, BarChart, Cell, LabelList, XAxis, YAxis } from "recharts";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { Card, CardContent } from "@/components/ui/card";
 import {
   ChartContainer,
@@ -347,10 +348,13 @@ function ValueLabel({
 export function StatsSettings({
   pullRequests,
   viewer,
+  buildkitePipeline,
 }: {
   /** Your open PRs, already loaded: the open-PR numbers come from these. */
   pullRequests: PullRequest[];
   viewer: string | null;
+  /** The Buildkite pipeline the CI tiles count builds in. */
+  buildkitePipeline: string;
 }) {
   const platform = usePlatform();
   const [team, setTeam] = useState<string | null>(savedTeam);
@@ -384,7 +388,7 @@ export function StatsSettings({
   // CI builds come from the Buildkite CLI, so only where the app can run it.
   const hasCi = platform.features.buildkite;
   const ci = useLoaded(
-    "ci",
+    `ci:${buildkitePipeline}`,
     ciCache,
     ciInFlight,
     () => platform.loadCiStats(STATS_DAYS),
@@ -392,7 +396,7 @@ export function StatsSettings({
   );
   const ciNow = ci.kind === "ready" ? ci.value : null;
   const previousCi = useLoaded(
-    "ci",
+    `ci:${buildkitePipeline}`,
     previousCiCache,
     previousCiInFlight,
     () => platform.loadCiStats(STATS_DAYS, true),
@@ -615,7 +619,7 @@ export function StatsSettings({
             <Tile
               label="CI builds"
               value={ciValue(ciNow, ci.kind === "loading", (c) => String(c.builds))}
-              detail={ciNow?.kind === "ok" ? "on your PRs" : " "}
+              detail={ciNow?.kind === "ok" ? `on your PRs in ${buildkitePipeline}` : " "}
               moved={
                 ciNow?.kind === "ok" && ciBefore
                   ? change(ciNow.builds, ciBefore.builds)
@@ -649,6 +653,7 @@ export function StatsSettings({
           </>
         )}
       </div>
+      {hasCi && <PipelineSetting value={buildkitePipeline} />}
       {hasCi && ciNow && ciNow.kind !== "ok" && <CiHelp stats={ciNow} />}
       <p className="m-0 -mt-2 text-[11px] leading-snug text-muted-foreground">
         Review wait is the time from a merged PR's first review request to its
@@ -680,6 +685,68 @@ function Placeholder({
     >
       {children}
     </p>
+  );
+}
+
+/** What a pipeline is until another is chosen. The same as the app's own default. */
+const DEFAULT_PIPELINE = "kibana-pull-request";
+
+/**
+ * Which Buildkite pipeline the CI tiles count builds in. Saved when you leave
+ * the field or press Enter, and synced with your other devices.
+ */
+function PipelineSetting({ value }: { value: string }) {
+  const platform = usePlatform();
+  const [draft, setDraft] = useState(value);
+  const [error, setError] = useState<string | null>(null);
+  // A change that arrives from another device, or a reset, shows here too.
+  useEffect(() => setDraft(value), [value]);
+
+  function save(next: string) {
+    setError(null);
+    if (next.trim().toLowerCase() === value) return;
+    platform.setBuildkitePipeline(next).catch((e) => {
+      setError(String(e));
+      setDraft(value);
+    });
+  }
+
+  return (
+    <div className="-mt-1 flex flex-col gap-1">
+      <div className="flex items-center gap-2">
+        <label htmlFor="buildkite-pipeline" className="shrink-0 text-xs text-muted-foreground">
+          Buildkite pipeline
+        </label>
+        <Input
+          id="buildkite-pipeline"
+          value={draft}
+          spellCheck={false}
+          autoComplete="off"
+          className="h-7 min-w-0 flex-1 text-xs md:text-xs"
+          onChange={(e) => setDraft(e.currentTarget.value)}
+          onBlur={() => save(draft)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") e.currentTarget.blur();
+          }}
+        />
+        {value !== DEFAULT_PIPELINE && (
+          <Button
+            type="button"
+            variant="link"
+            size="xs"
+            className="h-auto shrink-0 p-0"
+            onClick={() => save(DEFAULT_PIPELINE)}
+          >
+            Reset
+          </Button>
+        )}
+      </div>
+      <p className="m-0 text-[11px] leading-snug text-muted-foreground">
+        CI builds are counted in this pipeline only, and the setting syncs with your other
+        devices.
+      </p>
+      {error && <p className="m-0 text-xs text-destructive">{error}</p>}
+    </div>
   );
 }
 

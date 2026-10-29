@@ -54,6 +54,7 @@ export function createWebPlatform(engine: Engine): Platform {
     listTeams: () => engine.listTeams(),
     loadStats: (team, days, previous) => engine.loadStats(team, days, previous),
     loadReviewStats: (team, days, previous) => engine.loadReviewStats(team, days, previous),
+    setBuildkitePipeline: (name) => rejectWithMessage(() => engine.setBuildkitePipeline(name)),
     // Needs the Buildkite CLI, which only the desktop app can run.
     loadCiStats: async () => ({ kind: "error", message: "Not available in the browser." }),
     addView: (name, query) => engine.addView(name, query),

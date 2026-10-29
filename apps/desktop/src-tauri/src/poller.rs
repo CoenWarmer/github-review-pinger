@@ -71,6 +71,8 @@ pub struct Snapshot {
     pub sync: SyncStatus,
     /// Plays a sound when one of your own PRs is merged.
     pub sound_on_merge: bool,
+    /// The Buildkite pipeline the CI statistics count builds in.
+    pub buildkite_pipeline: String,
     /// Order and visibility of "My PRs" sections.
     pub my_prs_sections: Vec<SectionPref>,
     /// Merged in the last couple of days, or further back via "Load more".
@@ -327,7 +329,8 @@ impl Poller {
     /// fetch covers both windows and is reused for a few minutes.
     pub async fn ci_stats(&self, days: i64, previous: bool) -> buildkite::CiStats {
         use crate::buildkite::CiStats;
-        if let Some(builds) = buildkite::recent(days) {
+        let pipeline = self.memory.lock().unwrap().buildkite_pipeline().to_string();
+        if let Some(builds) = buildkite::recent(days, &pipeline) {
             return buildkite::summarize(&builds, Utc::now(), days, previous);
         }
         let ready = tauri::async_runtime::spawn_blocking(buildkite::ready).await;
@@ -354,12 +357,14 @@ impl Poller {
                 };
             }
         };
-        let fetched =
-            tauri::async_runtime::spawn_blocking(move || buildkite::my_builds(&bk, &prs, days))
-                .await;
+        let named = pipeline.clone();
+        let fetched = tauri::async_runtime::spawn_blocking(move || {
+            buildkite::my_builds(&bk, &prs, days, &named)
+        })
+        .await;
         match fetched {
             Ok(Ok(builds)) => {
-                buildkite::remember(days, &builds);
+                buildkite::remember(days, &pipeline, &builds);
                 buildkite::summarize(&builds, Utc::now(), days, previous)
             }
             Ok(Err(message)) => CiStats::Error { message },
@@ -512,13 +517,18 @@ impl Poller {
     /// Updates the snapshot from the last fetch, after snoozes or a single
     /// PR changed.
     fn rederive(&self, app: &AppHandle) {
-        let (sections, views) = {
+        let (sections, views, pipeline) = {
             let memory = self.memory.lock().unwrap();
-            (memory.my_prs_sections(), memory.views.clone())
+            (
+                memory.my_prs_sections(),
+                memory.views.clone(),
+                memory.buildkite_pipeline().to_string(),
+            )
         };
         self.update(app, |s| {
             s.my_prs_sections = sections;
             s.views = views;
+            s.buildkite_pipeline = pipeline;
         });
         let latest = self.latest.lock().unwrap();
         if let Some(fetched) = latest.as_ref() {
@@ -533,6 +543,25 @@ impl Poller {
                 s.team_lookup_denied = denied;
             });
         }
+    }
+
+    /// Chooses the Buildkite pipeline the CI statistics count builds in, and
+    /// shares it with other devices. Rejects with a message to show when it
+    /// isn't a pipeline name.
+    pub fn set_buildkite_pipeline(&self, app: &AppHandle, name: &str) -> Result<(), String> {
+        let pipeline = {
+            let mut memory = self.memory.lock().unwrap();
+            if !memory.set_buildkite_pipeline(name, Utc::now()) {
+                return Err(
+                    "A pipeline name is letters, digits, dashes, underscores and dots.".to_string(),
+                );
+            }
+            self.save(&memory);
+            memory.buildkite_pipeline().to_string()
+        };
+        self.update(app, |s| s.buildkite_pipeline = pipeline);
+        self.sync_wake.notify_one();
+        Ok(())
     }
 
     /// Saves the order and visibility of "My PRs" sections, and refreshes
@@ -730,6 +759,7 @@ pub fn start(app: &AppHandle) -> Arc<Poller> {
                 error: None,
             },
             sound_on_merge: memory.sound.pr_merged,
+            buildkite_pipeline: memory.buildkite_pipeline().to_string(),
             my_prs_sections: memory.my_prs_sections(),
             merged_pull_requests: Vec::new(),
             merged_can_load_more: false,
