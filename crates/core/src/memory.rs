@@ -1,7 +1,7 @@
 //! State that survives restarts: which responses and review requests have been
 //! notified, which quiet and waiting periods have been nudged, and snoozes.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fs;
 use std::io;
 use std::path::Path;
@@ -59,6 +59,10 @@ pub struct Memory {
     /// read through [`Memory::buildkite_pipeline`], which has the default.
     #[serde(default)]
     pub buildkite_pipeline: Option<String>,
+    /// How each section's PRs are ordered, by section id (such as
+    /// `mine:approved`). A section missing here keeps the default order.
+    #[serde(default)]
+    pub section_sorts: BTreeMap<String, String>,
 }
 
 /// The pipeline the CI statistics look at until another is chosen.
@@ -75,6 +79,28 @@ pub fn clean_pipeline(text: &str) -> Option<String> {
             .chars()
             .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'));
     valid.then_some(slug)
+}
+
+/// The orders a section can be sorted in, besides the default one.
+pub const SORT_KEYS: [&str; 4] = ["oldest", "newest", "active", "repo"];
+
+/// A section id fit to be a key: what the UI names sections with, and short.
+fn clean_section_id(id: &str) -> bool {
+    !id.is_empty()
+        && id.len() <= 100
+        && id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, ':' | '-' | '_' | '.'))
+}
+
+/// Keeps only the sorts this version understands, so a hand-edited gist or a
+/// newer device's order can't leave a section with one it can't apply.
+pub fn clean_section_sorts(sorts: &BTreeMap<String, String>) -> BTreeMap<String, String> {
+    sorts
+        .iter()
+        .filter(|(id, key)| clean_section_id(id) && SORT_KEYS.contains(&key.as_str()))
+        .map(|(id, key)| (id.clone(), key.clone()))
+        .collect()
 }
 
 /// How the UI looks: a fixed light or dark appearance, or the system's.
@@ -247,6 +273,27 @@ impl Memory {
         if slug != self.buildkite_pipeline() {
             self.buildkite_pipeline = Some(slug);
             self.sync.buildkite_pipeline_changed_at = Some(now);
+        }
+        true
+    }
+
+    /// Orders a section's PRs: one of [`SORT_KEYS`], or `"default"` to go
+    /// back to the usual order. Returns whether it was a section and a sort;
+    /// one that's already in effect changes nothing, so isn't synced.
+    pub fn set_section_sort(&mut self, id: &str, key: &str, now: DateTime<Utc>) -> bool {
+        if !clean_section_id(id) || (key != "default" && !SORT_KEYS.contains(&key)) {
+            return false;
+        }
+        let changed = if key == "default" {
+            self.section_sorts.remove(id).is_some()
+        } else {
+            self.section_sorts
+                .insert(id.to_string(), key.to_string())
+                .as_deref()
+                != Some(key)
+        };
+        if changed {
+            self.sync.section_sorts_changed_at = Some(now);
         }
         true
     }

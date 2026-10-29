@@ -49,6 +49,7 @@ export function createWebPlatform(engine: Engine): Platform {
     removeTeamChannel: (team) => engine.removeTeamChannel(team),
 
     setMyPrsSections: (sections) => engine.setMyPrsSections(sections),
+    setSectionSort: (id, key) => engine.setSectionSort(id, key),
     loadMoreMerged: () => engine.loadMoreMerged(),
     searchPullRequests: (text) => engine.searchPullRequests(text),
     listTeams: () => engine.listTeams(),

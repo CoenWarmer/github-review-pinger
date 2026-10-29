@@ -123,6 +123,12 @@ fn set_sound_on_merge(app: AppHandle, poller: State<Arc<Poller>>, enabled: bool)
     poller.set_sound_on_merge(&app, enabled);
 }
 
+/// Sorts a section's PRs, saved and synced with other devices.
+#[tauri::command]
+fn set_section_sort(app: AppHandle, poller: State<Arc<Poller>>, id: String, key: String) {
+    poller.set_section_sort(&app, &id, &key);
+}
+
 #[tauri::command]
 fn set_my_prs_sections(
     app: AppHandle,
@@ -343,6 +349,7 @@ pub fn run() {
             set_theme,
             set_sound_on_merge,
             set_my_prs_sections,
+            set_section_sort,
             load_more_merged,
             search_pull_requests,
             my_teams,

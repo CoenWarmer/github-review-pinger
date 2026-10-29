@@ -85,6 +85,8 @@ export interface Platform {
    * when what was typed isn't a pipeline name.
    */
   setBuildkitePipeline(name: string): Promise<void>;
+  /** Sorts a section (`mine:approved`), or `default` to put it back. Saved and synced. */
+  setSectionSort(id: string, key: string): void;
 
   /** Adds a custom view and shows it right away. */
   addView(name: string, query: string): void;

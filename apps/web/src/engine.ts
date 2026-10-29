@@ -87,6 +87,8 @@ export interface PingerLike {
   setMyPrsSections(sections: string, now: string): void;
   buildkitePipeline(): string;
   setBuildkitePipeline(name: string, now: string): boolean;
+  sectionSorts(): string;
+  setSectionSort(id: string, key: string, now: string): boolean;
   mergedDerive(page: string, loadedMore: string, now: string): string;
   views(): string;
   addView(name: string, query: string, now: string): string;
@@ -192,6 +194,7 @@ export class Engine {
       sync: { enabled: false, available: null, lastSyncedAt: null, gistUrl: null, error: null },
       myPrsSections: [],
       buildkitePipeline: "kibana-pull-request",
+      sectionSorts: {},
       mergedPullRequests: [],
       mergedCanLoadMore: false,
       views: [],
@@ -247,6 +250,7 @@ export class Engine {
       views: JSON.parse(this.pinger.views()) as View[],
       myPrsSections: JSON.parse(this.pinger.myPrsSections()) as SectionPref[],
       buildkitePipeline: this.pinger.buildkitePipeline(),
+      sectionSorts: JSON.parse(this.pinger.sectionSorts()) as Record<string, string>,
     });
   }
 
@@ -269,6 +273,7 @@ export class Engine {
       myPrsSections: JSON.parse(this.pinger.myPrsSections()) as SectionPref[],
       views: JSON.parse(this.pinger.views()) as View[],
       buildkitePipeline: this.pinger.buildkitePipeline(),
+      sectionSorts: JSON.parse(this.pinger.sectionSorts()) as Record<string, string>,
     });
     if (this.token) await this.poll();
     else this.publish({ status: { kind: "error", problem: { code: "noToken" } } });
@@ -401,6 +406,7 @@ export class Engine {
         // Re-read, so a section or view change synced in just now shows right away.
         myPrsSections: JSON.parse(this.pinger.myPrsSections()) as SectionPref[],
         views: JSON.parse(this.pinger.views()) as View[],
+        sectionSorts: JSON.parse(this.pinger.sectionSorts()) as Record<string, string>,
         mergedPullRequests,
         mergedCanLoadMore: this.mergedHasMore,
       });
@@ -500,6 +506,16 @@ export class Engine {
     }
     this.persist();
     this.publish({ buildkitePipeline: this.pinger.buildkitePipeline() });
+    this.syncSoon();
+  }
+
+  /** Sorts a section's PRs, or puts it back with `default`, and shares the choice. */
+  setSectionSort(id: string, key: string) {
+    if (!this.pinger.setSectionSort(id, key, this.nowIso())) return;
+    this.persist();
+    this.publish({
+      sectionSorts: JSON.parse(this.pinger.sectionSorts()) as Record<string, string>,
+    });
     this.syncSoon();
   }
 

@@ -1,4 +1,4 @@
-import { useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import {
   ArrowDownWideNarrow,
   ChartColumn,
@@ -9,7 +9,11 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "@/components/ui/collapsible";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -34,12 +38,24 @@ import { MergedRow } from "./components/MergedRow";
 import { PlatformProvider, usePlatform, type Platform } from "./platform";
 import { SECTION_TITLES } from "./sections";
 import { SlackContext } from "./slack";
-import { SORT_OPTIONS, sortRows, useSectionSort, type SortKey } from "./sort";
+import {
+  adoptLocalSorts,
+  SectionSortsContext,
+  SORT_OPTIONS,
+  sortRows,
+  useSectionSort,
+  type SortKey,
+} from "./sort";
 import type { ReviewGroup, Section, Snapshot } from "./types";
 
 /** Sections with little left to act on, so they start collapsed. */
 /** Sections that start collapsed; every section can be toggled either way. */
-const STARTS_COLLAPSED: ReadonlySet<Section> = new Set(["snoozed", "dormant", "draft", "merged"]);
+const STARTS_COLLAPSED: ReadonlySet<Section> = new Set([
+  "snoozed",
+  "dormant",
+  "draft",
+  "merged",
+]);
 
 const REVIEW_SECTIONS: { group: ReviewGroup; title: string }[] = [
   { group: "needsReview", title: "Needs your review" },
@@ -58,14 +74,24 @@ const TABS: { id: Tab; label: string; icon?: ReactNode }[] = [
 ];
 
 function Empty({ children }: { children: ReactNode }) {
-  return <p className="m-0 px-3 py-6 text-center text-muted-foreground">{children}</p>;
+  return (
+    <p className="m-0 px-3 py-6 text-center text-muted-foreground">
+      {children}
+    </p>
+  );
 }
 
 function Banner({ children }: { children: ReactNode }) {
   return <p className="m-0 border-t bg-warning/15 px-3 py-2">{children}</p>;
 }
 
-function SortMenu({ value, onChange }: { value: SortKey; onChange: (key: SortKey) => void }) {
+function SortMenu({
+  value,
+  onChange,
+}: {
+  value: SortKey;
+  onChange: (key: SortKey) => void;
+}) {
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
@@ -75,13 +101,18 @@ function SortMenu({ value, onChange }: { value: SortKey; onChange: (key: SortKey
           size="icon-xs"
           aria-label="Sort"
           title="Sort"
-          className={cn(value !== "default" ? "text-info" : "text-muted-foreground")}
+          className={cn(
+            value !== "default" ? "text-info" : "text-muted-foreground",
+          )}
         >
           <ArrowDownWideNarrow />
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="min-w-[150px] text-xs">
-        <DropdownMenuRadioGroup value={value} onValueChange={(key) => onChange(key as SortKey)}>
+        <DropdownMenuRadioGroup
+          value={value}
+          onValueChange={(key) => onChange(key as SortKey)}
+        >
           {SORT_OPTIONS.map(({ key, label }) => (
             <DropdownMenuRadioItem key={key} value={key} className="text-xs">
               {label}
@@ -130,13 +161,19 @@ function Section<
       <section>
         <h2 className="sticky top-0 z-10 m-0 flex items-center justify-between border-b bg-background px-3 py-1 text-[11px] font-semibold tracking-wide text-muted-foreground uppercase">
           <CollapsibleTrigger className="flex cursor-pointer items-center gap-1 border-0 bg-transparent p-0 font-[inherit] tracking-[inherit] uppercase">
-            {open ? <ChevronDown className="size-3" /> : <ChevronRight className="size-3" />}
+            {open ? (
+              <ChevronDown className="size-3" />
+            ) : (
+              <ChevronRight className="size-3" />
+            )}
             {heading}
           </CollapsibleTrigger>
           <SortMenu value={sort} onChange={setSort} />
         </h2>
         <CollapsibleContent asChild>
-          <ul className="m-0 list-none p-0">{sortRows(rows, sort).map(render)}</ul>
+          <ul className="m-0 list-none p-0">
+            {sortRows(rows, sort).map(render)}
+          </ul>
         </CollapsibleContent>
       </section>
     </Collapsible>
@@ -172,8 +209,13 @@ function MergedSection({
         {/* As tall as the others, whose sort button sets their height. */}
         <h2 className="sticky top-0 z-10 m-0 flex min-h-[33px] items-center justify-between border-b bg-background px-3 py-1 text-[11px] font-semibold tracking-wide text-muted-foreground uppercase">
           <CollapsibleTrigger className="flex cursor-pointer items-center gap-1 border-0 bg-transparent p-0 font-[inherit] tracking-[inherit] uppercase">
-            {open ? <ChevronDown className="size-3" /> : <ChevronRight className="size-3" />}
-            {SECTION_TITLES.merged} <span className="font-normal">{rows.length}</span>
+            {open ? (
+              <ChevronDown className="size-3" />
+            ) : (
+              <ChevronRight className="size-3" />
+            )}
+            {SECTION_TITLES.merged}{" "}
+            <span className="font-normal">{rows.length}</span>
           </CollapsibleTrigger>
         </h2>
         <CollapsibleContent asChild>
@@ -183,7 +225,13 @@ function MergedSection({
             ))}
             {canLoadMore && (
               <li className="px-3 py-2">
-                <Button type="button" variant="outline" size="xs" disabled={loading} onClick={loadMore}>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="xs"
+                  disabled={loading}
+                  onClick={loadMore}
+                >
                   {loading ? "Loading…" : "Load more"}
                 </Button>
               </li>
@@ -200,9 +248,11 @@ function Footer({ snapshot, now }: { snapshot: Snapshot; now: number }) {
   return (
     <footer className="flex items-center justify-between gap-2 border-t px-3 py-1 text-xs text-muted-background">
       <span>
-        {snapshot.refreshing || (snapshot.stale && snapshot.status.kind !== "error")
+        {snapshot.refreshing ||
+        (snapshot.stale && snapshot.status.kind !== "error")
           ? "Refreshing…"
-          : snapshot.fetchedAt && `Updated ${elapsed(snapshot.fetchedAt, now)} ago`}
+          : snapshot.fetchedAt &&
+            `Updated ${elapsed(snapshot.fetchedAt, now)} ago`}
       </span>
       <Button
         type="button"
@@ -226,8 +276,19 @@ function AppContent() {
   const [tab, setTab] = useState<Tab>("mine");
   const [query, setQuery] = useState("");
   useApplyTheme(snapshot?.theme);
+  // Once a fetch has landed (so sync has had its say), hand over the sorts
+  // this browser remembered before they were synced.
+  const loaded = snapshot?.status.kind === "ok";
+  useEffect(() => {
+    if (loaded) adoptLocalSorts(snapshot?.sectionSorts ?? {}, platform.setSectionSort);
+    // Only when it first loads: later changes come from the host.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loaded]);
 
-  if (!snapshot || (snapshot.status.kind === "loading" && !snapshot.fetchedAt)) {
+  if (
+    !snapshot ||
+    (snapshot.status.kind === "loading" && !snapshot.fetchedAt)
+  ) {
     return (
       <div className="flex h-full flex-col items-center justify-center gap-3 text-muted-foreground">
         <RingsLoader loading />
@@ -243,7 +304,8 @@ function AppContent() {
   const reviews = snapshot.reviewRequests;
   const counts: Partial<Record<Tab, number>> = {
     mine: prs.filter(
-      (pr) => pr.actions.length > 0 && ["approved", "needsAction"].includes(pr.group),
+      (pr) =>
+        pr.actions.length > 0 && ["approved", "needsAction"].includes(pr.group),
     ).length,
     reviews: reviews.filter((pr) => pr.group === "needsReview").length,
   };
@@ -267,11 +329,19 @@ function AppContent() {
       };
     }
     // A PR in a custom view may also be one of yours: list it once.
-    const open = [...prs, ...Object.values(snapshot.viewPullRequests).flat()].filter(
+    const open = [
+      ...prs,
+      ...Object.values(snapshot.viewPullRequests).flat(),
+    ].filter(
       (pr, i, all) => all.findIndex((other) => other.id === pr.id) === i,
     );
     const foundOpen = open.filter((pr) =>
-      matchesQuery(query, [pr.title, pr.repo, pr.number, ...pr.reviewers.map((r) => r.login)]),
+      matchesQuery(query, [
+        pr.title,
+        pr.repo,
+        pr.number,
+        ...pr.reviewers.map((r) => r.login),
+      ]),
     );
     const foundMerged = snapshot.mergedPullRequests.filter((pr) =>
       matchesQuery(query, [pr.title, pr.repo, pr.number]),
@@ -293,162 +363,183 @@ function AppContent() {
         opensIn: snapshot.slackOpensIn,
       }}
     >
-      <main className="flex h-full flex-col">
-        <Tabs value={tab} onValueChange={(value) => setTab(value as Tab)} className="gap-0 py-1">
-          <TabsList variant="line" className="h-auto w-full rounded-none border-b p-0">
-            {TABS.map(({ id, label, icon }) => (
-              <TabsTrigger
-                key={id}
-                value={id}
-                aria-label={icon ? label : undefined}
-                title={icon ? label : undefined}
-                className={cn(
-                  "h-9 rounded-none after:bottom-0 after:h-0.5 after:bg-info text-[12px]",
-                  icon && "flex-none px-4",
-                )}
-              >
-                {icon ?? label}
-                {!!counts[id] && (
-                  <span className="rounded-full bg-muted px-1.5 text-[11px] leading-[18px] tabular-nums">
-                    {counts[id]}
-                  </span>
-                )}
-              </TabsTrigger>
-            ))}
-          </TabsList>
-        </Tabs>
-        {filterable && (
-          <div className="border-b px-3 py-1.5">
-            <Input
-              type="search"
-              aria-label="Filter pull requests"
-              placeholder="Filter pull requests…"
-              autoComplete="off"
-              spellCheck={false}
-              value={query}
-              onChange={(e) => setQuery(e.currentTarget.value)}
-              className="h-7 text-xs md:text-xs"
-            />
-          </div>
-        )}
-        {/* Pinned over the list, so a notice appearing doesn't push the rows down. */}
-        <div className="relative min-h-0 flex-1">
-          <ScrollArea className="h-full">
-            {search ? (
-              <SearchResults
-                key={`${tab}:${query.trim()}`}
-                query={query}
-                shownIds={search.ids}
-                rows={search.rows}
-                now={now}
+      <SectionSortsContext.Provider value={snapshot.sectionSorts ?? {}}>
+        <main className="flex h-full flex-col">
+          <Tabs
+            value={tab}
+            onValueChange={(value) => setTab(value as Tab)}
+            className="gap-0 py-1"
+          >
+            <TabsList
+              variant="line"
+              className="h-auto w-full rounded-none border-b p-0"
+            >
+              {TABS.map(({ id, label, icon }) => (
+                <TabsTrigger
+                  key={id}
+                  value={id}
+                  aria-label={icon ? label : undefined}
+                  title={icon ? label : undefined}
+                  className={cn(
+                    "h-9 rounded-none after:bottom-0 after:h-0.5 after:bg-info text-[12px]",
+                    icon && "flex-none px-4",
+                  )}
+                >
+                  {icon ?? label}
+                  {!!counts[id] && (
+                    <span className="rounded-full bg-muted px-1.5 text-[11px] leading-[18px] tabular-nums">
+                      {counts[id]}
+                    </span>
+                  )}
+                </TabsTrigger>
+              ))}
+            </TabsList>
+          </Tabs>
+          {filterable && (
+            <div className="border-b px-3 py-3">
+              <Input
+                type="search"
+                aria-label="Filter pull requests"
+                placeholder="Filter pull requests…"
+                autoComplete="off"
+                spellCheck={false}
+                value={query}
+                onChange={(e) => setQuery(e.currentTarget.value)}
+                className="h-7 text-xs md:text-xs"
               />
-            ) : tab === "stats" ? (
-              // Only here, once this tab is opened, are the statistics fetched:
-              // never on the polling cycle, to spare the API quota.
-              <div className="px-3 py-3">
-                <StatsSettings
-                  pullRequests={prs}
-                  viewer={snapshot.viewer}
-                  buildkitePipeline={snapshot.buildkitePipeline}
+            </div>
+          )}
+          {/* Pinned over the list, so a notice appearing doesn't push the rows down. */}
+          <div className="relative min-h-0 flex-1">
+            <ScrollArea className="h-full">
+              {search ? (
+                <SearchResults
+                  key={`${tab}:${query.trim()}`}
+                  query={query}
+                  shownIds={search.ids}
+                  rows={search.rows}
+                  now={now}
                 />
-              </div>
-            ) : tab === "settings" ? (
-              <SettingsPanel
-                account={snapshot.viewer}
-                authSource={snapshot.authChoice ?? (snapshot.hasSavedToken ? "pat" : "gh")}
-                hasSavedToken={snapshot.hasSavedToken}
-                theme={snapshot.theme}
-                notificationsMuted={snapshot.notificationsMuted}
-                soundOnMerge={snapshot.soundOnMerge}
-                teamLookupDenied={snapshot.teamLookupDenied}
-                channels={snapshot.teamChannels}
-                sync={snapshot.sync}
-                myPrsSections={snapshot.myPrsSections}
-                views={snapshot.views}
-              />
-            ) : tab === "mine" ? (
-              prs.length === 0 &&
-              snapshot.mergedPullRequests.length === 0 &&
-              Object.values(snapshot.viewPullRequests).every((rows) => rows.length === 0) ? (
-                <Empty>No open pull requests.</Empty>
-              ) : (
-                snapshot.myPrsSections
-                  .filter((pref) => pref.enabled)
-                  .map((pref) => {
-                    if (pref.kind === "view") {
-                      const view = snapshot.views.find((v) => v.id === pref.id);
-                      if (!view) return null;
+              ) : tab === "stats" ? (
+                // Only here, once this tab is opened, are the statistics fetched:
+                // never on the polling cycle, to spare the API quota.
+                <div className="px-3 py-3">
+                  <StatsSettings
+                    pullRequests={prs}
+                    viewer={snapshot.viewer}
+                    buildkitePipeline={snapshot.buildkitePipeline}
+                  />
+                </div>
+              ) : tab === "settings" ? (
+                <SettingsPanel
+                  account={snapshot.viewer}
+                  authSource={
+                    snapshot.authChoice ?? (snapshot.hasSavedToken ? "pat" : "gh")
+                  }
+                  hasSavedToken={snapshot.hasSavedToken}
+                  theme={snapshot.theme}
+                  notificationsMuted={snapshot.notificationsMuted}
+                  soundOnMerge={snapshot.soundOnMerge}
+                  teamLookupDenied={snapshot.teamLookupDenied}
+                  channels={snapshot.teamChannels}
+                  sync={snapshot.sync}
+                  myPrsSections={snapshot.myPrsSections}
+                  views={snapshot.views}
+                />
+              ) : tab === "mine" ? (
+                prs.length === 0 &&
+                snapshot.mergedPullRequests.length === 0 &&
+                Object.values(snapshot.viewPullRequests).every(
+                  (rows) => rows.length === 0,
+                ) ? (
+                  <Empty>No open pull requests.</Empty>
+                ) : (
+                  snapshot.myPrsSections
+                    .filter((pref) => pref.enabled)
+                    .map((pref) => {
+                      if (pref.kind === "view") {
+                        const view = snapshot.views.find((v) => v.id === pref.id);
+                        if (!view) return null;
+                        return (
+                          <Section
+                            key={`view:${pref.id}`}
+                            id={`mine:view:${pref.id}`}
+                            title={view.name}
+                            rows={snapshot.viewPullRequests[pref.id] ?? []}
+                            defaultOpen={false}
+                            render={(pr) => (
+                              <PrRow key={pr.id} pr={pr} now={now} />
+                            )}
+                          />
+                        );
+                      }
+                      if (pref.section === "merged") {
+                        return (
+                          <MergedSection
+                            key="merged"
+                            rows={snapshot.mergedPullRequests}
+                            canLoadMore={snapshot.mergedCanLoadMore}
+                            now={now}
+                          />
+                        );
+                      }
                       return (
                         <Section
-                          key={`view:${pref.id}`}
-                          id={`mine:view:${pref.id}`}
-                          title={view.name}
-                          rows={snapshot.viewPullRequests[pref.id] ?? []}
-                          defaultOpen={false}
+                          key={pref.section}
+                          id={`mine:${pref.section}`}
+                          title={SECTION_TITLES[pref.section]}
+                          rows={prs.filter((pr) => pr.group === pref.section)}
+                          defaultOpen={!STARTS_COLLAPSED.has(pref.section)}
                           render={(pr) => <PrRow key={pr.id} pr={pr} now={now} />}
                         />
                       );
-                    }
-                    if (pref.section === "merged") {
-                      return (
-                        <MergedSection
-                          key="merged"
-                          rows={snapshot.mergedPullRequests}
-                          canLoadMore={snapshot.mergedCanLoadMore}
-                          now={now}
-                        />
-                      );
-                    }
-                    return (
-                      <Section
-                        key={pref.section}
-                        id={`mine:${pref.section}`}
-                        title={SECTION_TITLES[pref.section]}
-                        rows={prs.filter((pr) => pr.group === pref.section)}
-                        defaultOpen={!STARTS_COLLAPSED.has(pref.section)}
-                        render={(pr) => <PrRow key={pr.id} pr={pr} now={now} />}
-                      />
-                    );
-                  })
-              )
-            ) : snapshot.partial && reviews.length === 0 ? (
-              // My PRs came first; this is still on its way, so empty isn't known.
-              snapshot.status.kind === "error" ? (
-                <Empty>Couldn't load review requests.</Empty>
+                    })
+                )
+              ) : snapshot.partial && reviews.length === 0 ? (
+                // My PRs came first; this is still on its way, so empty isn't known.
+                snapshot.status.kind === "error" ? (
+                  <Empty>Couldn't load review requests.</Empty>
+                ) : (
+                  <div className="flex flex-col items-center gap-3 px-3 py-10 text-muted-foreground">
+                    <RingsLoader loading />
+                    <p className="m-0">Loading review requests…</p>
+                  </div>
+                )
+              ) : reviews.length === 0 ? (
+                <Empty>No pull requests are waiting on your review.</Empty>
               ) : (
-                <div className="flex flex-col items-center gap-3 px-3 py-10 text-muted-foreground">
-                  <RingsLoader loading />
-                  <p className="m-0">Loading review requests…</p>
-                </div>
-              )
-            ) : reviews.length === 0 ? (
-              <Empty>No pull requests are waiting on your review.</Empty>
-            ) : (
-              REVIEW_SECTIONS.map(({ group, title }) => (
-                <Section
-                  key={group}
-                  id={`reviews:${group}`}
-                  title={title}
-                  rows={reviews.filter((pr) => pr.group === group)}
-                  defaultOpen={group !== "snoozed" && group !== "draft"}
-                  render={(pr) => <ReviewRow key={pr.id} pr={pr} now={now} />}
-                />
-              ))
-            )}
-          </ScrollArea>
-        <div className="absolute inset-x-0 bottom-0 z-10 bg-background">
-          {snapshot.status.kind === "error" && (
-            <Banner>{problemMessage(snapshot.status.problem, platform.features.githubCli)}</Banner>
-          )}
-          {snapshot.ssoPartial && (
-            <Banner>
-              Some organizations are hidden because this token isn't authorized for their SSO.
-            </Banner>
-          )}
-        </div>
-        </div>
-        <Footer snapshot={snapshot} now={now} />
-      </main>
+                REVIEW_SECTIONS.map(({ group, title }) => (
+                  <Section
+                    key={group}
+                    id={`reviews:${group}`}
+                    title={title}
+                    rows={reviews.filter((pr) => pr.group === group)}
+                    defaultOpen={group !== "snoozed" && group !== "draft"}
+                    render={(pr) => <ReviewRow key={pr.id} pr={pr} now={now} />}
+                  />
+                ))
+              )}
+            </ScrollArea>
+            <div className="absolute inset-x-0 bottom-0 z-10 bg-background">
+              {snapshot.status.kind === "error" && (
+                <Banner>
+                  {problemMessage(
+                    snapshot.status.problem,
+                    platform.features.githubCli,
+                  )}
+                </Banner>
+              )}
+              {snapshot.ssoPartial && (
+                <Banner>
+                  Some organizations are hidden because this token isn't
+                  authorized for their SSO.
+                </Banner>
+              )}
+            </div>
+          </div>
+          <Footer snapshot={snapshot} now={now} />
+        </main>
+      </SectionSortsContext.Provider>
     </SlackContext.Provider>
   );
 }
