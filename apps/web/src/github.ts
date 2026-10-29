@@ -127,7 +127,17 @@ export interface StatsData {
    * enough to count member by member; null otherwise. */
   teamMemberMerged: number[] | null;
   /** Up to 100 of your merged PRs, newest first. */
-  sample: { requestedAt: string | null; reviews: { by: string | null; at: string }[] }[];
+  sample: {
+    /** When the PR was opened. */
+    createdAt: string;
+    /** When it was merged. */
+    mergedAt: string;
+    /** Each time it was marked ready for review or turned back into a draft,
+     * oldest first. A PR opened as a draft starts with a ready event. */
+    draftEvents: { kind: "ready" | "draft"; at: string }[];
+    requestedAt: string | null;
+    reviews: { by: string | null; at: string }[];
+  }[];
 }
 
 /** What the review chart is drawn from: reviews people submitted in a window. */
@@ -693,6 +703,9 @@ export function createGithub({
         search: {
           issueCount: number;
           nodes: ({
+            createdAt: string;
+            mergedAt: string | null;
+            draftEvents: { nodes: ({ __typename: string; createdAt?: string } | null)[] };
             timelineItems: { nodes: ({ createdAt?: string } | null)[] };
             reviews: { nodes: ({ submittedAt: string | null; author: { login: string } | null } | null)[] };
           } | null)[];
@@ -703,9 +716,23 @@ export function createGithub({
           q: `is:pr is:merged author:@me merged:${range} sort:updated-desc`,
         });
         const sample = reply.data.search.nodes.flatMap((pr) =>
-          pr
+          // A PR with no merge time can't have merged; there's nothing to time.
+          pr && pr.mergedAt
             ? [
                 {
+                  createdAt: pr.createdAt,
+                  mergedAt: pr.mergedAt,
+                  draftEvents: pr.draftEvents.nodes
+                    .flatMap((event) => {
+                      const kind =
+                        event?.__typename === "ReadyForReviewEvent"
+                          ? ("ready" as const)
+                          : event?.__typename === "ConvertToDraftEvent"
+                            ? ("draft" as const)
+                            : null;
+                      return kind && event?.createdAt ? [{ kind, at: event.createdAt }] : [];
+                    })
+                    .sort((a, b) => Date.parse(a.at) - Date.parse(b.at)),
                   requestedAt: pr.timelineItems.nodes.find((event) => event?.createdAt)?.createdAt ?? null,
                   reviews: pr.reviews.nodes.flatMap((review) =>
                     review?.submittedAt ? [{ by: review.author?.login ?? null, at: review.submittedAt }] : [],

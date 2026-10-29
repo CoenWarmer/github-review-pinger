@@ -20,6 +20,7 @@ import { usePlatform } from "../platform";
 import {
   STATS_DAYS,
   averageCodeOwners,
+  averageReadyToMerged,
   averageReviewWait,
   change,
   duration,
@@ -614,6 +615,14 @@ export function StatsSettings({
           format={(n) => (Math.round(n * 10) / 10).toString()}
           basis="open PR"
         />
+        <Figure
+          label="Ready to merged"
+          value={data ? averageReadyToMerged(data.sample) : null}
+          previous={before ? averageReadyToMerged(before.sample) : null}
+          format={duration}
+          basis="merged PR"
+          loading={stats.kind === "loading"}
+        />
         {hasCi && (
           <>
             <Tile
@@ -626,30 +635,6 @@ export function StatsSettings({
                   : null
               }
             />
-            <Tile
-              label="Avg build duration"
-              value={ciValue(ciNow, ci.kind === "loading", (c) =>
-                c.avgDurationSecs === null ? "–" : duration(c.avgDurationSecs * 1000),
-              )}
-              detail={
-                ciNow?.kind === "ok"
-                  ? `${ciNow.durationSample} finished build${ciNow.durationSample === 1 ? "" : "s"}`
-                  : " "
-              }
-              moved={
-                ciNow?.kind === "ok" &&
-                ciBefore &&
-                ciNow.avgDurationSecs !== null &&
-                ciBefore.avgDurationSecs !== null
-                  ? change(
-                      ciNow.avgDurationSecs * 1000,
-                      ciBefore.avgDurationSecs * 1000,
-                      duration,
-                      60_000,
-                    )
-                  : null
-              }
-            />
           </>
         )}
       </div>
@@ -659,10 +644,12 @@ export function StatsSettings({
         Review wait is the time from a merged PR's first review request to its
         first review by someone else, over your latest 100 merged PRs. Code
         owners are the pending requests GitHub made from CODEOWNERS, on open PRs
-        that aren't drafts.
+        that aren't drafts. Ready to merged is the time from a merged PR first
+        being ready for review (when it was opened, or first marked ready if it
+        began as a draft) to its merge: the reviews, CI and merge queue together.
         {hasCi &&
           ciNow?.kind === "ok" &&
-          ` CI builds are the ones on PRs you authored, created in the last ${STATS_DAYS} days (found by branch, since a bot creates them, not you); the duration is start to finish of the ones that finished.`}
+          ` CI builds are the ones on PRs you authored, created in the last ${STATS_DAYS} days (found by branch, since a bot creates them, not you).`}
       </p>
     </div>
   );

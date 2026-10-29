@@ -3,6 +3,7 @@ import { describe, it } from "node:test";
 import type { PullRequest } from "@review-pinger/app";
 import {
   averageCodeOwners,
+  averageReadyToMerged,
   averageReviewWait,
   change,
   duration,
@@ -18,6 +19,9 @@ const pr = (over: Partial<PullRequest> = {}): PullRequest =>
 
 describe("review wait on merged PRs", () => {
   const sample = (requestedAt: string | null, reviews: [string | null, string][]) => ({
+    createdAt: hoursAgo(200),
+    mergedAt: hoursAgo(0),
+    draftEvents: [],
     requestedAt,
     reviews: reviews.map(([by, at]) => ({ by, at })),
   });
@@ -121,5 +125,55 @@ describe("change since the window before", () => {
     const text = (ms: number) => `${Math.round(ms / minute)}m`;
     assert.equal(change(90 * minute, 150 * minute, text, minute).text, "▼ 60m (was 150m)");
     assert.equal(change(90 * minute + 20_000, 90 * minute, text, minute).direction, "same");
+  });
+});
+
+describe("ready for review to merged", () => {
+  const pr = (
+    createdAt: string,
+    mergedAt: string,
+    draftEvents: { kind: "ready" | "draft"; at: string }[] = [],
+  ) => ({ createdAt, mergedAt, draftEvents, requestedAt: null, reviews: [] });
+  const HOUR = 3_600_000;
+
+  it("counts from opening for a PR that was never a draft", () => {
+    const merged = [pr(hoursAgo(10), hoursAgo(4)), pr(hoursAgo(5), hoursAgo(1))];
+    // 6h and 4h.
+    assert.deepEqual(averageReadyToMerged(merged), { average: 5 * HOUR, count: 2 });
+  });
+
+  it("counts from being marked ready for a PR opened as a draft", () => {
+    // Opened 100h ago as a draft, ready 8h ago, merged 2h ago: 6h, not 98h.
+    const merged = [pr(hoursAgo(100), hoursAgo(2), [{ kind: "ready", at: hoursAgo(8) }])];
+    assert.equal(averageReadyToMerged(merged).average, 6 * HOUR);
+  });
+
+  it("counts from opening when the first draft event is turning it into a draft", () => {
+    // Opened ready 20h ago, back to draft at 15h, ready again at 6h, merged 2h ago: 18h.
+    const merged = [
+      pr(hoursAgo(20), hoursAgo(2), [
+        { kind: "draft", at: hoursAgo(15) },
+        { kind: "ready", at: hoursAgo(6) },
+      ]),
+    ];
+    assert.equal(averageReadyToMerged(merged).average, 18 * HOUR);
+  });
+
+  it("counts from the first ready time, so a later round through draft is still time to merge", () => {
+    // Draft, ready at 30h, draft again at 20h, ready at 10h, merged 2h ago: 28h from the first.
+    const merged = [
+      pr(hoursAgo(50), hoursAgo(2), [
+        { kind: "ready", at: hoursAgo(30) },
+        { kind: "draft", at: hoursAgo(20) },
+        { kind: "ready", at: hoursAgo(10) },
+      ]),
+    ];
+    assert.equal(averageReadyToMerged(merged).average, 28 * HOUR);
+  });
+
+  it("is nothing for no PRs, and skips a PR merged before it was ready", () => {
+    assert.deepEqual(averageReadyToMerged([]), { average: null, count: 0 });
+    const odd = [pr(hoursAgo(1), hoursAgo(5))];
+    assert.deepEqual(averageReadyToMerged(odd), { average: null, count: 0 });
   });
 });

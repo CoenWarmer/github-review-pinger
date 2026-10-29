@@ -423,11 +423,29 @@ describe("statistics", () => {
             issueCount: 60,
             nodes: [
               {
+                createdAt: "2026-09-30T08:00:00Z",
+                mergedAt: "2026-10-02T08:00:00Z",
+                // Opened as a draft, then marked ready; events arrive in any order.
+                draftEvents: {
+                  nodes: [
+                    { __typename: "ConvertToDraftEvent", createdAt: "2026-10-01T09:00:00Z" },
+                    { __typename: "ReadyForReviewEvent", createdAt: "2026-09-30T12:00:00Z" },
+                    { __typename: "SomethingElse", createdAt: "2026-09-30T13:00:00Z" },
+                  ],
+                },
                 timelineItems: { nodes: [{ createdAt: "2026-10-01T10:00:00Z" }] },
                 reviews: { nodes: [{ submittedAt: "2026-10-01T12:00:00Z", author: { login: "ana" } }, { submittedAt: null, author: null }] },
               },
               null,
-              { timelineItems: { nodes: [] }, reviews: { nodes: [] } },
+              // Not merged, so nothing to time.
+              { createdAt: "2026-10-01T00:00:00Z", mergedAt: null, draftEvents: { nodes: [] }, timelineItems: { nodes: [] }, reviews: { nodes: [] } },
+              {
+                createdAt: "2026-10-03T08:00:00Z",
+                mergedAt: "2026-10-03T09:00:00Z",
+                draftEvents: { nodes: [] },
+                timelineItems: { nodes: [] },
+                reviews: { nodes: [] },
+              },
             ],
           },
         });
@@ -450,8 +468,24 @@ describe("statistics", () => {
     assert.equal(stats.teamMemberCount, 2);
     assert.deepEqual(stats.teamMemberMerged, [30, 11]);
     assert.deepEqual(stats.sample, [
-      { requestedAt: "2026-10-01T10:00:00Z", reviews: [{ by: "ana", at: "2026-10-01T12:00:00Z" }] },
-      { requestedAt: null, reviews: [] },
+      {
+        createdAt: "2026-09-30T08:00:00Z",
+        mergedAt: "2026-10-02T08:00:00Z",
+        // Oldest first, and only the kinds that matter.
+        draftEvents: [
+          { kind: "ready", at: "2026-09-30T12:00:00Z" },
+          { kind: "draft", at: "2026-10-01T09:00:00Z" },
+        ],
+        requestedAt: "2026-10-01T10:00:00Z",
+        reviews: [{ by: "ana", at: "2026-10-01T12:00:00Z" }],
+      },
+      {
+        createdAt: "2026-10-03T08:00:00Z",
+        mergedAt: "2026-10-03T09:00:00Z",
+        draftEvents: [],
+        requestedAt: null,
+        reviews: [],
+      },
     ]);
     assert.ok(seen[0].startsWith("is:pr is:merged author:@me merged:>=2026-09-29"));
     assert.ok(seen.some((q) => q.includes("org:o author:ana")));

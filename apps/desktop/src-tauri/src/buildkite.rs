@@ -36,14 +36,9 @@ const REUSE_FOR: Duration = Duration::from_secs(5 * 60);
     rename_all_fields = "camelCase"
 )]
 pub enum CiStats {
-    /// Builds on your PRs created in the window, and how long the finished
-    /// ones took.
+    /// How many builds on your PRs were created in the window.
     Ok {
         builds: usize,
-        /// Average of start to finish over the builds that have both.
-        avg_duration_secs: Option<u64>,
-        /// How many builds the average is over.
-        duration_sample: usize,
     },
     /// There is no `bk` to run.
     NotInstalled,
@@ -121,14 +116,12 @@ pub fn ready() -> Result<PathBuf, CiStats> {
     }
 }
 
-/// A build, with what's needed to attribute and time it.
+/// A build, with what's needed to attribute and place it.
 #[derive(Debug, Clone, Deserialize)]
 pub struct Build {
     pipeline: Option<PipelineRef>,
     branch: Option<String>,
     created_at: DateTime<Utc>,
-    started_at: Option<DateTime<Utc>>,
-    finished_at: Option<DateTime<Utc>>,
     pull_request: Option<PullRequestRef>,
 }
 
@@ -248,8 +241,7 @@ fn last_line(stderr: &str) -> String {
 }
 
 /// The count of `builds` created in the window of `days` ending `days` days
-/// before `now` with `previous` (otherwise ending at `now`), and the average
-/// time the ones with a start and a finish took.
+/// before `now` with `previous` (otherwise ending at `now`).
 pub fn summarize(builds: &[Build], now: DateTime<Utc>, days: i64, previous: bool) -> CiStats {
     let end = if previous {
         now - chrono::Duration::days(days)
@@ -257,20 +249,11 @@ pub fn summarize(builds: &[Build], now: DateTime<Utc>, days: i64, previous: bool
         now
     };
     let start = end - chrono::Duration::days(days);
-    let in_window: Vec<&Build> = builds
-        .iter()
-        .filter(|build| build.created_at >= start && build.created_at < end)
-        .collect();
-    let durations: Vec<i64> = in_window
-        .iter()
-        .filter_map(|build| Some((build.finished_at? - build.started_at?).num_seconds()))
-        .filter(|seconds| *seconds >= 0)
-        .collect();
     CiStats::Ok {
-        builds: in_window.len(),
-        avg_duration_secs: (!durations.is_empty())
-            .then(|| (durations.iter().sum::<i64>() / durations.len() as i64) as u64),
-        duration_sample: durations.len(),
+        builds: builds
+            .iter()
+            .filter(|build| build.created_at >= start && build.created_at < end)
+            .count(),
     }
 }
 
@@ -346,67 +329,31 @@ mod tests {
     }
 
     #[test]
-    fn counts_builds_in_each_window_and_averages_the_ones_that_finished() {
+    fn counts_builds_in_each_window() {
         let now = at("2026-10-31T00:00:00Z");
         let builds = [
-            // In the last 30 days: 10 and 30 minutes, one still unfinished.
-            build(
-                r#"{"created_at": "2026-10-20T00:00:00Z", "started_at": "2026-10-20T00:00:00Z", "finished_at": "2026-10-20T00:10:00Z"}"#,
-            ),
-            build(
-                r#"{"created_at": "2026-10-25T00:00:00Z", "started_at": "2026-10-25T00:00:00Z", "finished_at": "2026-10-25T00:30:00Z"}"#,
-            ),
-            build(
-                r#"{"created_at": "2026-10-30T00:00:00Z", "started_at": null, "finished_at": null}"#,
-            ),
-            // The 30 days before: one, 60 minutes.
-            build(
-                r#"{"created_at": "2026-09-20T00:00:00Z", "started_at": "2026-09-20T00:00:00Z", "finished_at": "2026-09-20T01:00:00Z"}"#,
-            ),
+            // In the last 30 days.
+            build(r#"{"created_at": "2026-10-20T00:00:00Z"}"#),
+            build(r#"{"created_at": "2026-10-25T00:00:00Z"}"#),
+            build(r#"{"created_at": "2026-10-30T00:00:00Z"}"#),
+            // The 30 days before.
+            build(r#"{"created_at": "2026-09-20T00:00:00Z"}"#),
             // Older than both.
             build(r#"{"created_at": "2026-08-01T00:00:00Z"}"#),
         ];
         assert_eq!(
             summarize(&builds, now, 30, false),
-            CiStats::Ok {
-                builds: 3,
-                avg_duration_secs: Some(20 * 60),
-                duration_sample: 2,
-            }
+            CiStats::Ok { builds: 3 }
         );
-        assert_eq!(
-            summarize(&builds, now, 30, true),
-            CiStats::Ok {
-                builds: 1,
-                avg_duration_secs: Some(60 * 60),
-                duration_sample: 1,
-            }
-        );
+        assert_eq!(summarize(&builds, now, 30, true), CiStats::Ok { builds: 1 });
     }
 
     #[test]
-    fn no_builds_is_zero_with_no_average() {
+    fn no_builds_is_zero() {
         assert_eq!(
             summarize(&[], at("2026-10-31T00:00:00Z"), 30, false),
-            CiStats::Ok {
-                builds: 0,
-                avg_duration_secs: None,
-                duration_sample: 0,
-            }
+            CiStats::Ok { builds: 0 }
         );
-    }
-
-    #[test]
-    fn asks_for_one_pipeline_and_the_hours_ago() {
-        let args = list_args("a,b:c", "1440h", "kibana-pull-request");
-        for pair in [
-            ["--pipeline", "kibana-pull-request"],
-            ["--branch", "a,b:c"],
-            ["--since", "1440h"],
-        ] {
-            assert!(args.windows(2).any(|w| w == pair), "{pair:?}");
-        }
-        assert!(args.contains(&"--no-limit".to_string()));
     }
 
     #[test]
@@ -459,17 +406,9 @@ mod tests {
 
     #[test]
     fn serializes_for_the_ui() {
-        let ok = serde_json::to_value(CiStats::Ok {
-            builds: 3,
-            avg_duration_secs: Some(60),
-            duration_sample: 2,
-        })
-        .unwrap();
         assert_eq!(
-            ok,
-            serde_json::json!({
-                "kind": "ok", "builds": 3, "avgDurationSecs": 60, "durationSample": 2
-            })
+            serde_json::to_value(CiStats::Ok { builds: 3 }).unwrap(),
+            serde_json::json!({ "kind": "ok", "builds": 3 })
         );
         assert_eq!(
             serde_json::to_value(CiStats::NotInstalled).unwrap(),

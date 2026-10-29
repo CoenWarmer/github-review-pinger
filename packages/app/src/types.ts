@@ -54,7 +54,17 @@ export interface StatsData {
    * enough to count member by member; null otherwise. */
   teamMemberMerged: number[] | null;
   /** Up to 100 of your merged PRs, newest first. */
-  sample: { requestedAt: string | null; reviews: { by: string | null; at: string }[] }[];
+  sample: {
+    /** When the PR was opened. */
+    createdAt: string;
+    /** When it was merged. */
+    mergedAt: string;
+    /** Each time it was marked ready for review or turned back into a draft,
+     * oldest first. A PR opened as a draft starts with a ready event. */
+    draftEvents: { kind: "ready" | "draft"; at: string }[];
+    requestedAt: string | null;
+    reviews: { by: string | null; at: string }[];
+  }[];
 }
 
 /** What the review chart is drawn from, over a window of days. */
@@ -76,14 +86,7 @@ export interface ReviewStatsData {
  * missing CLI or login is an answer, not a failure, so the UI can explain it.
  */
 export type CiStats =
-  | {
-      kind: "ok";
-      builds: number;
-      /** Average start to finish, over the builds that have both. */
-      avgDurationSecs: number | null;
-      /** How many builds the average is over. */
-      durationSample: number;
-    }
+  | { kind: "ok"; builds: number }
   | { kind: "notInstalled" }
   | { kind: "notLoggedIn" }
   | { kind: "error"; message: string };

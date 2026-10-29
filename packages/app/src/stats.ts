@@ -43,6 +43,29 @@ export function averageReviewWait(sample: StatsData["sample"], viewer: string | 
 }
 
 /**
+ * When a merged PR was first ready for review: when it was opened, or for one
+ * opened as a draft (its first draft event is a "ready") when it was first
+ * marked ready.
+ */
+function firstReady(pr: StatsData["sample"][number]): number {
+  const first = pr.draftEvents[0];
+  return Date.parse(first?.kind === "ready" ? first.at : pr.createdAt);
+}
+
+/**
+ * How long your merged PRs took from first being ready for review to being
+ * merged, in milliseconds: the reviews, the CI and the merge queue together.
+ * Time spent as a draft again after that counts, as it's time not yet merged.
+ */
+export function averageReadyToMerged(sample: StatsData["sample"]): Average {
+  const times = sample
+    .map((pr) => Date.parse(pr.mergedAt) - firstReady(pr))
+    // Merged before it was ready can only be bad data.
+    .filter((ms) => Number.isFinite(ms) && ms >= 0);
+  return averageOf(times);
+}
+
+/**
  * Code owners per PR, over your open non-draft PRs: how many of the pending
  * review requests GitHub made because of CODEOWNERS. A request ends once the
  * owner reviews, so partly reviewed PRs count fewer.

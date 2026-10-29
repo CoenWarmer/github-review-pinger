@@ -314,9 +314,24 @@ pub struct StatsData {
 #[derive(Debug, serde::Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct StatsSample {
+    /// When the PR was opened.
+    pub created_at: DateTime<Utc>,
+    /// When it was merged.
+    pub merged_at: DateTime<Utc>,
+    /// Each time it was marked ready for review or turned back into a draft,
+    /// oldest first. A PR opened as a draft starts with a ready event.
+    pub draft_events: Vec<StatsDraftEvent>,
     /// When the first review was asked for, if ever.
     pub requested_at: Option<DateTime<Utc>>,
     pub reviews: Vec<StatsReview>,
+}
+
+#[derive(Debug, serde::Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct StatsDraftEvent {
+    /// `ready` or `draft`.
+    pub kind: &'static str,
+    pub at: DateTime<Utc>,
 }
 
 #[derive(Debug, serde::Serialize, PartialEq)]
@@ -451,7 +466,35 @@ pub async fn fetch_stats(
             .nodes
             .into_iter()
             .flatten()
-            .map(|pr| StatsSample {
+            // A PR with no merge time can't have merged; there's nothing to time.
+            .filter_map(|pr| {
+                let merged_at = pr.merged_at?;
+                Some((pr, merged_at))
+            })
+            .map(|(pr, merged_at)| StatsSample {
+                created_at: pr.created_at,
+                merged_at,
+                draft_events: {
+                    let mut events: Vec<StatsDraftEvent> = pr
+                        .draft_events
+                        .nodes
+                        .into_iter()
+                        .flatten()
+                        .filter_map(|event| {
+                            let kind = match event.typename.as_str() {
+                                "ReadyForReviewEvent" => "ready",
+                                "ConvertToDraftEvent" => "draft",
+                                _ => return None,
+                            };
+                            Some(StatsDraftEvent {
+                                kind,
+                                at: event.created_at?,
+                            })
+                        })
+                        .collect();
+                    events.sort_by_key(|event| event.at);
+                    events
+                },
                 requested_at: pr
                     .timeline_items
                     .nodes
@@ -581,8 +624,19 @@ struct StatsMergedSearch {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct StatsMergedPr {
+    created_at: DateTime<Utc>,
+    merged_at: Option<DateTime<Utc>>,
+    draft_events: Nodes<StatsDraftNode>,
     timeline_items: Nodes<StatsRequested>,
     reviews: Nodes<StatsReviewNode>,
+}
+
+#[derive(Deserialize)]
+struct StatsDraftNode {
+    #[serde(rename = "__typename")]
+    typename: String,
+    #[serde(rename = "createdAt")]
+    created_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Deserialize)]
