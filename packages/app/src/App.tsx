@@ -169,7 +169,8 @@ function MergedSection({
   return (
     <Collapsible asChild open={open} onOpenChange={setOpen}>
       <section>
-        <h2 className="sticky top-0 z-10 m-0 flex items-center justify-between border-b bg-background px-3 py-1 text-[11px] font-semibold tracking-wide text-muted-foreground uppercase">
+        {/* As tall as the others, whose sort button sets their height. */}
+        <h2 className="sticky top-0 z-10 m-0 flex min-h-[33px] items-center justify-between border-b bg-background px-3 py-1 text-[11px] font-semibold tracking-wide text-muted-foreground uppercase">
           <CollapsibleTrigger className="flex cursor-pointer items-center gap-1 border-0 bg-transparent p-0 font-[inherit] tracking-[inherit] uppercase">
             {open ? <ChevronDown className="size-3" /> : <ChevronRight className="size-3" />}
             {SECTION_TITLES.merged} <span className="font-normal">{rows.length}</span>
