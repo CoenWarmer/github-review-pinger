@@ -777,6 +777,68 @@ async fn member_reviews(
     Ok(batches.into_iter().flatten().collect())
 }
 
+/// A PR of yours as its CI builds name it, for finding those builds.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PrBranch {
+    pub number: u64,
+    /// The branch as Buildkite records it: `owner:ref` for a PR from a fork,
+    /// the plain ref for one from the same repository.
+    pub branch: String,
+    /// The repository the branch is in, lowercase `owner/name`.
+    pub head_repo: String,
+}
+
+/// How many PRs are looked at, `PR_BRANCH_PAGES` of 100.
+const PR_BRANCH_PAGES: usize = 3;
+
+/// The PRs you authored that were updated since `since`, newest first, as
+/// their CI builds name them. Builds on a PR are created by a bot, not by the
+/// person, so these are how a person's builds are found.
+pub async fn fetch_my_pr_branches(
+    http: &reqwest::Client,
+    token: &str,
+    since: NaiveDate,
+) -> Result<Vec<PrBranch>, FetchError> {
+    const QUERY: &str = "query($q: String!, $cursor: String) { search(type: ISSUE, query: $q, first: 100, after: $cursor) { pageInfo { hasNextPage endCursor } nodes { ... on PullRequest { number headRefName isCrossRepository headRepository { nameWithOwner } headRepositoryOwner { login } } } } }";
+    let text = format!("is:pr author:@me updated:>={since} sort:updated-desc");
+    let mut found = Vec::new();
+    let mut cursor: Option<String> = None;
+    for _ in 0..PR_BRANCH_PAGES {
+        let reply: Response<Value> =
+            request(http, token, QUERY, json!({ "q": text, "cursor": cursor })).await?;
+        let search = &reply.data["search"];
+        for node in search["nodes"].as_array().into_iter().flatten() {
+            let (Some(number), Some(head_ref), Some(repo)) = (
+                node["number"].as_u64(),
+                node["headRefName"].as_str(),
+                node["headRepository"]["nameWithOwner"].as_str(),
+            ) else {
+                // The fork was deleted, so there's no branch to look for.
+                continue;
+            };
+            let branch = match node["headRepositoryOwner"]["login"].as_str() {
+                Some(owner) if node["isCrossRepository"].as_bool() == Some(true) => {
+                    format!("{owner}:{head_ref}")
+                }
+                _ => head_ref.to_string(),
+            };
+            found.push(PrBranch {
+                number,
+                branch,
+                head_repo: repo.to_lowercase(),
+            });
+        }
+        let page = &search["pageInfo"];
+        match page["endCursor"].as_str() {
+            Some(next) if page["hasNextPage"].as_bool() == Some(true) => {
+                cursor = Some(next.to_string());
+            }
+            _ => break,
+        }
+    }
+    Ok(found)
+}
+
 /// The teams you belong to, as `org/slug`, across your organizations. Needs
 /// `read:org`; without it the answer is an error saying so.
 pub async fn fetch_my_teams(

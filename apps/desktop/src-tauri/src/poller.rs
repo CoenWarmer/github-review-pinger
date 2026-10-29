@@ -14,6 +14,7 @@ use tauri::{AppHandle, Emitter, Manager};
 use tokio::sync::Notify;
 
 use crate::auth::{self, AuthError, TokenSource};
+use crate::buildkite;
 use crate::card;
 use crate::directory::Directory;
 use crate::engine::{self, Fetched};
@@ -315,6 +316,57 @@ impl Poller {
         github::fetch_review_stats(&self.http, &token, team.as_deref(), from, to, !previous)
             .await
             .map_err(fetch_error_message)
+    }
+
+    /// Statistics over the builds on PRs you authored, from the Buildkite CLI,
+    /// for the last `days` or with `previous` the same number of days before
+    /// those. Always answers: a missing CLI or login is part of the answer.
+    ///
+    /// The PRs come from GitHub and their builds from `bk`, found by branch
+    /// (builds are created by a bot, so there's no creator to filter on). One
+    /// fetch covers both windows and is reused for a few minutes.
+    pub async fn ci_stats(&self, days: i64, previous: bool) -> buildkite::CiStats {
+        use crate::buildkite::CiStats;
+        if let Some(builds) = buildkite::recent(days) {
+            return buildkite::summarize(&builds, Utc::now(), days, previous);
+        }
+        let ready = tauri::async_runtime::spawn_blocking(buildkite::ready).await;
+        let bk = match ready {
+            Ok(Ok(bk)) => bk,
+            Ok(Err(answer)) => return answer,
+            Err(e) => {
+                return CiStats::Error {
+                    message: e.to_string(),
+                };
+            }
+        };
+        let token = match self.search_token().await {
+            Ok(token) => token,
+            Err(message) => return CiStats::Error { message },
+        };
+        // PRs updated since the earlier window began are the ones that can have builds in it.
+        let since = (Utc::now() - chrono::Duration::days(2 * days)).date_naive();
+        let prs = match github::fetch_my_pr_branches(&self.http, &token, since).await {
+            Ok(prs) => prs,
+            Err(e) => {
+                return CiStats::Error {
+                    message: fetch_error_message(e),
+                };
+            }
+        };
+        let fetched =
+            tauri::async_runtime::spawn_blocking(move || buildkite::my_builds(&bk, &prs, days))
+                .await;
+        match fetched {
+            Ok(Ok(builds)) => {
+                buildkite::remember(days, &builds);
+                buildkite::summarize(&builds, Utc::now(), days, previous)
+            }
+            Ok(Err(message)) => CiStats::Error { message },
+            Err(e) => CiStats::Error {
+                message: e.to_string(),
+            },
+        }
     }
 
     /// A token for a request the user asked for, or the message to show.

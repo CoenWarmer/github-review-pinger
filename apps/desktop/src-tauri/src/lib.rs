@@ -171,15 +171,16 @@ async fn load_review_stats(
     poller.review_stats(team, days, previous).await
 }
 
-/// Statistics over the builds you created, from the Buildkite CLI. Always
-/// answers: a missing CLI or login is part of the answer, for the UI to explain.
+/// Statistics over the builds on PRs you authored, from the Buildkite CLI.
+/// Always answers: a missing CLI or login is part of the answer, for the UI to
+/// explain.
 #[tauri::command]
-async fn load_ci_stats(days: i64, previous: bool) -> buildkite::CiStats {
-    tauri::async_runtime::spawn_blocking(move || buildkite::ci_stats(days, previous))
-        .await
-        .unwrap_or_else(|e| buildkite::CiStats::Error {
-            message: e.to_string(),
-        })
+async fn load_ci_stats(
+    days: i64,
+    previous: bool,
+    poller: State<'_, Arc<Poller>>,
+) -> Result<buildkite::CiStats, ()> {
+    Ok(poller.ci_stats(days, previous).await)
 }
 
 #[tauri::command]

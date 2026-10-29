@@ -615,7 +615,7 @@ export function StatsSettings({
             <Tile
               label="CI builds"
               value={ciValue(ciNow, ci.kind === "loading", (c) => String(c.builds))}
-              detail={ciNow?.kind === "ok" ? `created by you` : " "}
+              detail={ciNow?.kind === "ok" ? "on your PRs" : " "}
               moved={
                 ciNow?.kind === "ok" && ciBefore
                   ? change(ciNow.builds, ciBefore.builds)
@@ -657,7 +657,7 @@ export function StatsSettings({
         that aren't drafts.
         {hasCi &&
           ciNow?.kind === "ok" &&
-          ` CI builds are those Buildkite lists as created by you, in the last ${STATS_DAYS} days; the duration is start to finish of the ones that finished.`}
+          ` CI builds are the ones on PRs you authored, created in the last ${STATS_DAYS} days (found by branch, since a bot creates them, not you); the duration is start to finish of the ones that finished.`}
       </p>
     </div>
   );
