@@ -23,7 +23,13 @@ export function createWebPlatform(engine: Engine): Platform {
 
     // No GitHub CLI or login items in a browser, and notifications only work in
     // the open page, so they're left out for now.
-    features: { githubCli: false, autostart: false, notifications: false, sound: false },
+    features: {
+      githubCli: false,
+      autostart: false,
+      notifications: false,
+      sound: false,
+      buildkite: false,
+    },
 
     getSnapshot: async () => engine.getSnapshot(),
     onSnapshot: (callback) => engine.subscribe(callback),
@@ -48,6 +54,8 @@ export function createWebPlatform(engine: Engine): Platform {
     listTeams: () => engine.listTeams(),
     loadStats: (team, days, previous) => engine.loadStats(team, days, previous),
     loadReviewStats: (team, days, previous) => engine.loadReviewStats(team, days, previous),
+    // Needs the Buildkite CLI, which only the desktop app can run.
+    loadCiStats: async () => ({ kind: "error", message: "Not available in the browser." }),
     addView: (name, query) => engine.addView(name, query),
     updateView: (id, name, query) => engine.updateView(id, name, query),
     removeView: (id) => engine.removeView(id),

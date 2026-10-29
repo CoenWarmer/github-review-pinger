@@ -71,6 +71,23 @@ export interface ReviewStatsData {
   teamMemberReviews: number[] | null;
 }
 
+/**
+ * CI build statistics from the Buildkite CLI, over builds you created. A
+ * missing CLI or login is an answer, not a failure, so the UI can explain it.
+ */
+export type CiStats =
+  | {
+      kind: "ok";
+      builds: number;
+      /** Average start to finish, over the builds that have both. */
+      avgDurationSecs: number | null;
+      /** How many builds the average is over. */
+      durationSample: number;
+    }
+  | { kind: "notInstalled" }
+  | { kind: "notLoggedIn" }
+  | { kind: "error"; message: string };
+
 /** How the UI looks: a fixed appearance, or whatever the system uses. */
 export type Theme = "system" | "light" | "dark";
 

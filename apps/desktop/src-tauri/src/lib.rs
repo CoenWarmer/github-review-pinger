@@ -1,4 +1,5 @@
 mod auth;
+mod buildkite;
 mod card;
 mod gist;
 mod github;
@@ -170,6 +171,17 @@ async fn load_review_stats(
     poller.review_stats(team, days, previous).await
 }
 
+/// Statistics over the builds you created, from the Buildkite CLI. Always
+/// answers: a missing CLI or login is part of the answer, for the UI to explain.
+#[tauri::command]
+async fn load_ci_stats(days: i64, previous: bool) -> buildkite::CiStats {
+    tauri::async_runtime::spawn_blocking(move || buildkite::ci_stats(days, previous))
+        .await
+        .unwrap_or_else(|e| buildkite::CiStats::Error {
+            message: e.to_string(),
+        })
+}
+
 #[tauri::command]
 fn add_view(app: AppHandle, poller: State<Arc<Poller>>, name: String, query: String) {
     poller.add_view(&app, name, query);
@@ -325,6 +337,7 @@ pub fn run() {
             my_teams,
             load_stats,
             load_review_stats,
+            load_ci_stats,
             add_view,
             update_view,
             remove_view,

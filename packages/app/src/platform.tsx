@@ -1,5 +1,6 @@
 import { createContext, useContext, type ReactNode } from "react";
 import type {
+  CiStats,
   FoundPr,
   ReviewStatsData,
   SectionPref,
@@ -27,6 +28,8 @@ export interface Platform {
     notifications: boolean;
     /** A sound can be played for events, such as one of your PRs merging. */
     sound: boolean;
+    /** CI build statistics can be loaded, through the Buildkite CLI. */
+    buildkite: boolean;
   };
 
   getSnapshot(): Promise<Snapshot>;
@@ -69,6 +72,13 @@ export interface Platform {
    * a message to show.
    */
   loadReviewStats(team: string | null, days: number, previous?: boolean): Promise<ReviewStatsData>;
+
+  /**
+   * Builds you created in the last `days` (or with `previous` in the same
+   * number of days before), counted and timed by the Buildkite CLI. Only where
+   * `features.buildkite`. Always answers: no CLI or login is part of it.
+   */
+  loadCiStats(days: number, previous?: boolean): Promise<CiStats>;
 
   /** Adds a custom view and shows it right away. */
   addView(name: string, query: string): void;

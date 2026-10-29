@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { Bar, BarChart, Cell, LabelList, XAxis, YAxis } from "recharts";
+import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import {
   ChartContainer,
@@ -26,7 +27,7 @@ import {
   type Average,
   type Change,
 } from "../stats";
-import type { PullRequest, ReviewStatsData, StatsData } from "../types";
+import type { CiStats, PullRequest, ReviewStatsData, StatsData } from "../types";
 
 const TEAM_KEY = "reviewPinger.statsTeam";
 /** Teams up to this size are counted member by member, which the median needs. */
@@ -45,12 +46,17 @@ const reviewsCache: Cache<ReviewStatsData> = new Map();
 /** The window before, loaded after the current one shows, only to compare with. */
 const previousStatsCache: Cache<StatsData> = new Map();
 const previousReviewsCache: Cache<ReviewStatsData> = new Map();
+/** CI builds through the Buildkite CLI: the same for any team. */
+const ciCache: Cache<CiStats> = new Map();
+const previousCiCache: Cache<CiStats> = new Map();
 let teamsCache: { at: number; teams: string[] } | null = null;
 /** A request already under way is shared, so opening Settings twice in a row asks once. */
 const statsInFlight = new Map<string, Promise<StatsData>>();
 const reviewsInFlight = new Map<string, Promise<ReviewStatsData>>();
 const previousStatsInFlight = new Map<string, Promise<StatsData>>();
 const previousReviewsInFlight = new Map<string, Promise<ReviewStatsData>>();
+const ciInFlight = new Map<string, Promise<CiStats>>();
+const previousCiInFlight = new Map<string, Promise<CiStats>>();
 let teamsInFlight: Promise<string[]> | null = null;
 
 function shared<T>(
@@ -375,6 +381,27 @@ export function StatsSettings({
     () => platform.loadReviewStats(team, STATS_DAYS, true),
     reviews.kind === "ready",
   );
+  // CI builds come from the Buildkite CLI, so only where the app can run it.
+  const hasCi = platform.features.buildkite;
+  const ci = useLoaded(
+    "ci",
+    ciCache,
+    ciInFlight,
+    () => platform.loadCiStats(STATS_DAYS),
+    hasCi,
+  );
+  const ciNow = ci.kind === "ready" ? ci.value : null;
+  const previousCi = useLoaded(
+    "ci",
+    previousCiCache,
+    previousCiInFlight,
+    () => platform.loadCiStats(STATS_DAYS, true),
+    hasCi && ciNow?.kind === "ok",
+  );
+  const ciBefore =
+    previousCi.kind === "ready" && previousCi.value.kind === "ok"
+      ? previousCi.value
+      : null;
 
   // The teams you could pick from, once per visit to Settings.
   useEffect(() => {
@@ -583,12 +610,54 @@ export function StatsSettings({
           format={(n) => (Math.round(n * 10) / 10).toString()}
           basis="open PR"
         />
+        {hasCi && (
+          <>
+            <Tile
+              label="CI builds"
+              value={ciValue(ciNow, ci.kind === "loading", (c) => String(c.builds))}
+              detail={ciNow?.kind === "ok" ? `created by you` : " "}
+              moved={
+                ciNow?.kind === "ok" && ciBefore
+                  ? change(ciNow.builds, ciBefore.builds)
+                  : null
+              }
+            />
+            <Tile
+              label="Avg build duration"
+              value={ciValue(ciNow, ci.kind === "loading", (c) =>
+                c.avgDurationSecs === null ? "–" : duration(c.avgDurationSecs * 1000),
+              )}
+              detail={
+                ciNow?.kind === "ok"
+                  ? `${ciNow.durationSample} finished build${ciNow.durationSample === 1 ? "" : "s"}`
+                  : " "
+              }
+              moved={
+                ciNow?.kind === "ok" &&
+                ciBefore &&
+                ciNow.avgDurationSecs !== null &&
+                ciBefore.avgDurationSecs !== null
+                  ? change(
+                      ciNow.avgDurationSecs * 1000,
+                      ciBefore.avgDurationSecs * 1000,
+                      duration,
+                      60_000,
+                    )
+                  : null
+              }
+            />
+          </>
+        )}
       </div>
+      {hasCi && ciNow && ciNow.kind !== "ok" && <CiHelp stats={ciNow} />}
       <p className="m-0 -mt-2 text-[11px] leading-snug text-muted-foreground">
         Review wait is the time from a merged PR's first review request to its
         first review by someone else, over your latest 100 merged PRs. Code
         owners are the pending requests GitHub made from CODEOWNERS, on open PRs
         that aren't drafts.
+        {hasCi &&
+          ciNow?.kind === "ok" &&
+          ` CI builds are those Buildkite lists as created by you, in the last ${STATS_DAYS} days; the duration is start to finish of the ones that finished.`}
       </p>
     </div>
   );
@@ -614,7 +683,76 @@ function Placeholder({
   );
 }
 
-/** One number with its label and how many PRs it's over. */
+/** A tile: a label, one number, a line under it, and optionally how it moved. */
+function Tile({
+  label,
+  value,
+  detail,
+  moved,
+}: {
+  label: string;
+  value: string;
+  detail: string;
+  moved: Change | null;
+}) {
+  return (
+    <Card className="gap-1 rounded-lg py-2 shadow-none">
+      <CardContent className="flex flex-col gap-0.5 px-2.5">
+        <span className="text-[11px] leading-tight text-muted-foreground">{label}</span>
+        <span className="text-lg leading-tight font-semibold">{value}</span>
+        <span className="text-[11px] leading-tight text-muted-foreground">{detail}</span>
+        {moved && (
+          <span className="text-[11px] leading-tight text-muted-foreground">{moved.text}</span>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+/** A CI tile's number: "…" while loading, "–" when there's no answer to show. */
+function ciValue(
+  stats: CiStats | null,
+  loading: boolean,
+  of: (ok: Extract<CiStats, { kind: "ok" }>) => string,
+): string {
+  if (loading || !stats) return "…";
+  return stats.kind === "ok" ? of(stats) : "–";
+}
+
+/** Why the CI tiles are empty, and what to do about it. */
+function CiHelp({ stats }: { stats: Exclude<CiStats, { kind: "ok" }> }) {
+  const platform = usePlatform();
+  const code = "rounded bg-muted px-1 py-0.5 font-mono text-[11px]";
+  if (stats.kind === "error") {
+    return <p className="m-0 -mt-2 text-xs text-destructive">{stats.message}</p>;
+  }
+  return (
+    <p className="m-0 -mt-2 text-xs leading-snug text-muted-foreground">
+      {stats.kind === "notInstalled" ? (
+        <>
+          CI build stats come from the Buildkite CLI, which isn't installed. Install it
+          with <code className={code}>brew install buildkite/buildkite/bk@3</code>, then
+          log in with <code className={code}>bk auth login</code>.{" "}
+          <Button
+            type="button"
+            variant="link"
+            size="xs"
+            className="h-auto p-0"
+            onClick={() => platform.openUrl("https://buildkite.com/docs/platform/cli")}
+          >
+            Installation guide
+          </Button>
+        </>
+      ) : (
+        <>
+          The Buildkite CLI isn't logged in. Run <code className={code}>bk auth login</code>{" "}
+          in a terminal, then reopen Settings.
+        </>
+      )}
+    </p>
+  );
+}
+
 function Figure({
   label,
   value,
@@ -642,29 +780,15 @@ function Figure({
         )
       : null;
   return (
-    <Card className="gap-1 rounded-lg py-2 shadow-none">
-      <CardContent className="flex flex-col gap-0.5 px-2.5">
-        <span className="text-[11px] leading-tight text-muted-foreground">
-          {label}
-        </span>
-        <span className="text-lg leading-tight font-semibold">
-          {loading || !value
-            ? "…"
-            : value.average === null
-              ? "–"
-              : format(value.average)}
-        </span>
-        <span className="text-[11px] leading-tight text-muted-foreground">
-          {loading || !value
-            ? " "
-            : `${value.count} ${basis}${value.count === 1 ? "" : "s"}`}
-        </span>
-        {moved && (
-          <span className="text-[11px] leading-tight text-muted-foreground">
-            {moved.text}
-          </span>
-        )}
-      </CardContent>
-    </Card>
+    <Tile
+      label={label}
+      value={
+        loading || !value ? "…" : value.average === null ? "–" : format(value.average)
+      }
+      detail={
+        loading || !value ? " " : `${value.count} ${basis}${value.count === 1 ? "" : "s"}`
+      }
+      moved={moved}
+    />
   );
 }
