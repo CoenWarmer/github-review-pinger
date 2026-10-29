@@ -197,6 +197,19 @@ impl Pinger {
         js(self.0.set_buildkite_pipeline(name, now))
     }
 
+    /// How each section is sorted, by section id, as JSON.
+    #[wasm_bindgen(js_name = sectionSorts)]
+    pub fn section_sorts(&self) -> Result<String, JsError> {
+        js(self.0.section_sorts())
+    }
+
+    /// Sorts a section, or puts it back with `"default"`. Whether it was a
+    /// section and a sort.
+    #[wasm_bindgen(js_name = setSectionSort)]
+    pub fn set_section_sort(&mut self, id: &str, key: &str, now: &str) -> Result<bool, JsError> {
+        js(self.0.set_section_sort(id, key, now))
+    }
+
     #[wasm_bindgen(js_name = setMyPrsSections)]
     pub fn set_my_prs_sections(&mut self, sections: &str, now: &str) -> Result<(), JsError> {
         js(self.0.set_my_prs_sections(sections, now))

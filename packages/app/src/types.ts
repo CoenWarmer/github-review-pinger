@@ -247,6 +247,8 @@ export interface Snapshot {
   soundOnMerge: boolean;
   /** The Buildkite pipeline the CI statistics count builds in. */
   buildkitePipeline: string;
+  /** How each section is sorted, by section id; one missing keeps the default order. */
+  sectionSorts: Record<string, string>;
   /** The team lookup was refused for lack of the `read:org` scope. */
   teamLookupDenied: boolean;
   /** The first load is under way and only My PRs has arrived, so a list that

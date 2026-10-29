@@ -41,6 +41,9 @@ export const tauriPlatform: Platform = {
   setMyPrsSections: (sections) => {
     invoke("set_my_prs_sections", { sections });
   },
+  setSectionSort: (id, key) => {
+    invoke("set_section_sort", { id, key });
+  },
   loadMoreMerged: () => invoke("load_more_merged"),
   searchPullRequests: (text) => invoke("search_pull_requests", { text }),
   listTeams: () => invoke("my_teams"),

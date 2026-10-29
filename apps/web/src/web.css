@@ -1,6 +1,7 @@
 /* The page is the whole screen on a phone, so leave the popover look behind. */
 #root {
   height: 100dvh;
-  padding-top: env(safe-area-inset-top);
+  /* A little air under the clock and battery when run from the home screen. */
+  padding-top: calc(env(safe-area-inset-top) + 0.5rem);
   padding-bottom: env(safe-area-inset-bottom);
 }

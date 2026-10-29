@@ -660,6 +660,9 @@ fn team_activity(pr: &PullRequest, people: &People, members: &HashSet<String>) -
 }
 
 pub(crate) fn checks(pr: &PullRequest) -> Checks {
+    if let Some(checks) = crate::checks::without_advisory(pr) {
+        return checks;
+    }
     let rollup = pr
         .commits
         .iter()
@@ -1265,6 +1268,69 @@ mod tests {
             "mergeStateStatus": "UNKNOWN",
         }));
         assert!(pr.actions.is_empty());
+    }
+
+    /// A head commit whose rollup is `state`, with these `(context, state)` statuses.
+    fn commit_with_statuses(state: &str, statuses: &[(&str, &str)]) -> Value {
+        let nodes: Vec<Value> = statuses
+            .iter()
+            .map(|(context, state)| {
+                json!({
+                    "__typename": "StatusContext",
+                    "context": context,
+                    "state": state,
+                    "createdAt": "2026-10-01T09:00:00Z",
+                })
+            })
+            .collect();
+        json!({ "commit": {
+            "committedDate": "2026-10-01T09:00:00Z",
+            "statusCheckRollup": {
+                "state": state,
+                "contexts": { "totalCount": nodes.len(), "nodes": nodes },
+            },
+        } })
+    }
+
+    #[test]
+    fn a_failing_pr_bot_status_does_not_make_running_ci_fail() {
+        let pr = derive_one(
+            json!({ "commits": { "nodes": [commit_with_statuses("FAILURE", &[
+            ("prbot:outdated", "FAILURE"),
+            ("kibana-ci", "PENDING"),
+        ])] } }),
+        );
+        assert_eq!(pr.checks, Checks::Pending);
+    }
+
+    #[test]
+    fn a_failing_pr_bot_status_does_not_make_passing_ci_fail() {
+        let pr = derive_one(
+            json!({ "commits": { "nodes": [commit_with_statuses("FAILURE", &[
+            ("prbot:outdated", "FAILURE"),
+            ("kibana-ci", "SUCCESS"),
+        ])] } }),
+        );
+        assert_eq!(pr.checks, Checks::Passing);
+    }
+
+    #[test]
+    fn a_failing_build_still_fails_next_to_the_pr_bot() {
+        let pr = derive_one(
+            json!({ "commits": { "nodes": [commit_with_statuses("FAILURE", &[
+            ("prbot:outdated", "FAILURE"),
+            ("kibana-ci", "FAILURE"),
+        ])] } }),
+        );
+        assert_eq!(pr.checks, Checks::Failing);
+    }
+
+    #[test]
+    fn a_partial_page_of_checks_keeps_the_rollup_verdict() {
+        let mut commit = commit_with_statuses("FAILURE", &[("prbot:outdated", "FAILURE")]);
+        commit["commit"]["statusCheckRollup"]["contexts"]["totalCount"] = json!(64);
+        let pr = derive_one(json!({ "commits": { "nodes": [commit] } }));
+        assert_eq!(pr.checks, Checks::Failing);
     }
 
     #[test]

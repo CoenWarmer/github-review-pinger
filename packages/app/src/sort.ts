@@ -1,4 +1,6 @@
-import { useState } from "react";
+import { createContext, useContext } from "react";
+
+import { usePlatform } from "./platform";
 
 export type SortKey = "default" | "oldest" | "newest" | "active" | "repo";
 
@@ -33,30 +35,34 @@ export function sortRows<T extends Sortable>(rows: T[], key: SortKey): T[] {
   }
 }
 
-const STORAGE_KEY = "sortBySection";
+/** The synced sort of each section, by section id, from the host's snapshot. */
+export const SectionSortsContext = createContext<Record<string, string>>({});
 
-function load(): Record<string, SortKey> {
-  try {
-    return JSON.parse(localStorage.getItem(STORAGE_KEY) ?? "{}");
-  } catch {
-    return {};
-  }
+/** A section's sort. `id` names the section, e.g. `mine:approved`. */
+export function useSectionSort(id: string): [SortKey, (key: SortKey) => void] {
+  const platform = usePlatform();
+  const stored = useContext(SectionSortsContext)[id];
+  const key = SORT_OPTIONS.find((o) => o.key === stored)?.key ?? "default";
+  return [key, (next) => platform.setSectionSort(id, next)];
 }
 
-/** A section's sort, remembered across restarts. `id` names the section, e.g. `mine:approved`. */
-export function useSectionSort(id: string): [SortKey, (key: SortKey) => void] {
-  const [key, setKey] = useState<SortKey>(() => {
-    const stored = load()[id];
-    return SORT_OPTIONS.some((o) => o.key === stored) ? stored : "default";
-  });
+// Sorts used to live only in this browser. They're handed to the host once,
+// so they carry over to the synced setting instead of being lost.
+const LEGACY_STORAGE_KEY = "sortBySection";
 
-  const update = (next: SortKey) => {
-    setKey(next);
-    try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify({ ...load(), [id]: next }));
-    } catch {
-      // Storage unavailable: the choice just won't survive a restart.
+export function adoptLocalSorts(
+  synced: Record<string, string>,
+  set: (id: string, key: string) => void,
+) {
+  try {
+    const raw = localStorage.getItem(LEGACY_STORAGE_KEY);
+    if (raw === null) return;
+    const local = JSON.parse(raw) as Record<string, string>;
+    for (const [id, key] of Object.entries(local)) {
+      if (!(id in synced) && key !== "default") set(id, key);
     }
-  };
-  return [key, update];
+    localStorage.removeItem(LEGACY_STORAGE_KEY);
+  } catch {
+    // Storage unavailable or unreadable: nothing to carry over.
+  }
 }

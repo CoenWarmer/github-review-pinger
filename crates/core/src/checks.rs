@@ -17,6 +17,66 @@ const MAX_RUN_SECS: i64 = 6 * 60 * 60;
 /// Durations needed before the learned median replaces the configured one.
 const MIN_SAMPLES: usize = 3;
 
+/// Statuses from a PR bot, such as Kibana's `prbot:outdated` ("branch is out
+/// of date"), that report on the PR rather than on a build. They fail often
+/// and drag the whole rollup to FAILURE while the real CI is still running.
+fn is_advisory(context: &CheckContext) -> bool {
+    matches!(context, CheckContext::StatusContext { context, .. } if context.starts_with("prbot:"))
+}
+
+/// The head commit's checks, judged without the advisory statuses. `None`
+/// when the rollup is not a failure, or can't be second-guessed because only
+/// part of the checks were fetched; the rollup's own verdict stands then.
+pub(crate) fn without_advisory(pr: &PullRequest) -> Option<Checks> {
+    let rollup = pr
+        .commits
+        .iter()
+        .last()?
+        .commit
+        .status_check_rollup
+        .as_ref()?;
+    if !matches!(rollup.state, CheckState::Failure | CheckState::Error) {
+        return None;
+    }
+    let contexts = rollup.contexts.as_ref()?;
+    if contexts
+        .total_count
+        .is_none_or(|total| total > contexts.nodes.len())
+    {
+        return None;
+    }
+
+    let (mut failed, mut running, mut settled) = (false, false, false);
+    for context in contexts.iter().filter(|c| !is_advisory(c)) {
+        match context {
+            CheckContext::CheckRun {
+                status, conclusion, ..
+            } => match (status, conclusion.as_deref()) {
+                (CheckRunStatus::Completed, Some("SUCCESS" | "SKIPPED" | "NEUTRAL")) => {
+                    settled = true
+                }
+                (CheckRunStatus::Completed, _) => failed = true,
+                _ => running = true,
+            },
+            CheckContext::StatusContext { state, .. } => match state {
+                CheckState::Success => settled = true,
+                CheckState::Pending | CheckState::Expected => running = true,
+                _ => failed = true,
+            },
+            CheckContext::Other => {}
+        }
+    }
+    Some(if failed {
+        Checks::Failing
+    } else if running {
+        Checks::Pending
+    } else if settled {
+        Checks::Passing
+    } else {
+        Checks::None
+    })
+}
+
 /// When the head commit's checks started, and when the last finished.
 ///
 /// A check run keeps its `startedAt`, but a commit status only has the time
@@ -36,12 +96,17 @@ pub fn timing(pr: &PullRequest) -> (Option<DateTime<Utc>>, Option<DateTime<Utc>>
     let mut earliest = |at: DateTime<Utc>| started = Some(started.map_or(at, |s| s.min(at)));
     let mut latest = |at: DateTime<Utc>| finished = Some(finished.map_or(at, |f| f.max(at)));
 
-    for context in contexts.into_iter().flat_map(|c| c.iter()) {
+    for context in contexts
+        .into_iter()
+        .flat_map(|c| c.iter())
+        .filter(|c| !is_advisory(c))
+    {
         match context {
             CheckContext::CheckRun {
                 status,
                 started_at,
                 completed_at,
+                ..
             } => {
                 if let Some(at) = started_at {
                     earliest(*at);
@@ -50,7 +115,9 @@ pub fn timing(pr: &PullRequest) -> (Option<DateTime<Utc>>, Option<DateTime<Utc>>
                     latest(*at);
                 }
             }
-            CheckContext::StatusContext { state, created_at } => {
+            CheckContext::StatusContext {
+                state, created_at, ..
+            } => {
                 if matches!(state, CheckState::Pending | CheckState::Expected) {
                     earliest(*created_at);
                 } else {

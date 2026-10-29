@@ -63,6 +63,10 @@ pub struct SyncDoc {
     /// like the sections; going back to the default is a value too.
     #[serde(default)]
     pub buildkite_pipeline: Option<Stamped<String>>,
+    /// How each section is sorted, by section id: one whole map like the
+    /// sections, since people change them one at a time but rarely at once.
+    #[serde(default)]
+    pub section_sorts: Option<Stamped<BTreeMap<String, String>>>,
 }
 
 /// A custom view's definition, as it crosses the gist: the id is the map key.
@@ -90,6 +94,8 @@ pub struct SyncMemory {
     pub views: HashMap<String, DateTime<Utc>>,
     /// When the Buildkite pipeline last changed here or was taken from the gist.
     pub buildkite_pipeline_changed_at: Option<DateTime<Utc>>,
+    /// When the section sorts last changed here or were taken from the gist.
+    pub section_sorts_changed_at: Option<DateTime<Utc>>,
 }
 
 /// The outcome of merging the gist into a device.
@@ -134,6 +140,14 @@ impl SyncDoc {
                 .is_none_or(|ours| theirs.at >= ours.at)
         {
             self.buildkite_pipeline = Some(theirs.clone());
+        }
+        if let Some(theirs) = &other.section_sorts
+            && self
+                .section_sorts
+                .as_ref()
+                .is_none_or(|ours| theirs.at >= ours.at)
+        {
+            self.section_sorts = Some(theirs.clone());
         }
     }
 
@@ -204,6 +218,14 @@ fn local_doc(memory: &mut Memory, now: DateTime<Utc>) -> SyncDoc {
         let at = *memory.sync.buildkite_pipeline_changed_at.get_or_insert(now);
         doc.buildkite_pipeline = Some(Stamped {
             value: pipeline.clone(),
+            at,
+        });
+    }
+    // Going back to every default is a change too, so it's sent once changed.
+    if !memory.section_sorts.is_empty() || memory.sync.section_sorts_changed_at.is_some() {
+        let at = *memory.sync.section_sorts_changed_at.get_or_insert(now);
+        doc.section_sorts = Some(Stamped {
+            value: memory.section_sorts.clone(),
             at,
         });
     }
@@ -306,6 +328,19 @@ fn apply(memory: &mut Memory, merged: &SyncDoc, now: DateTime<Utc>) -> bool {
         memory.sync.buildkite_pipeline_changed_at = Some(entry.at);
         if memory.buildkite_pipeline() != slug {
             memory.buildkite_pipeline = Some(slug);
+            changed = true;
+        }
+    }
+    if let Some(entry) = &merged.section_sorts
+        && memory
+            .sync
+            .section_sorts_changed_at
+            .is_none_or(|own| entry.at > own)
+    {
+        memory.sync.section_sorts_changed_at = Some(entry.at);
+        let sorts = crate::memory::clean_section_sorts(&entry.value);
+        if memory.section_sorts != sorts {
+            memory.section_sorts = sorts;
             changed = true;
         }
     }
@@ -722,6 +757,73 @@ mod tests {
         assert_eq!(
             upload.buildkite_pipeline.map(|p| p.value).as_deref(),
             Some("kibana-pull-request")
+        );
+    }
+
+    #[test]
+    fn section_sorts_sync_as_one_value_and_the_newest_wins() {
+        let mut a = Memory::default();
+        a.set_section_sort("mine:approved", "oldest", at("2026-10-27T09:00:00Z"));
+        a.set_section_sort("reviews:needsReview", "repo", at("2026-10-27T09:01:00Z"));
+        let gist = reconcile(&mut a, None, at(NOW)).upload.unwrap();
+
+        // A device with none takes the gist's.
+        let mut b = Memory::default();
+        assert!(reconcile(&mut b, Some(gist.clone()), at(NOW)).changed);
+        assert_eq!(b.section_sorts, a.section_sorts);
+
+        // An older choice elsewhere loses to the newer one in the gist.
+        let mut c = Memory::default();
+        c.set_section_sort("mine:approved", "newest", at("2026-10-26T09:00:00Z"));
+        reconcile(&mut c, Some(gist), at(NOW));
+        assert_eq!(c.section_sorts, a.section_sorts);
+
+        // And putting every section back to the default syncs too.
+        let mut d = Memory::default();
+        d.set_section_sort("mine:approved", "oldest", at("2026-10-27T09:00:00Z"));
+        let first = reconcile(&mut d, None, at(NOW)).upload.unwrap();
+        d.set_section_sort("mine:approved", "default", at("2026-10-28T09:00:00Z"));
+        let upload = reconcile(&mut d, Some(first), at(NOW)).upload.unwrap();
+        assert_eq!(upload.section_sorts.map(|s| s.value), Some(BTreeMap::new()));
+    }
+
+    #[test]
+    fn a_sort_that_isnt_one_is_ignored() {
+        let mut memory = Memory::default();
+        assert!(!memory.set_section_sort("mine:approved", "sideways", at(NOW)));
+        assert!(!memory.set_section_sort("has space", "oldest", at(NOW)));
+        assert!(memory.section_sorts.is_empty());
+        assert_eq!(memory.sync.section_sorts_changed_at, None);
+
+        let remote = SyncDoc {
+            version: 1,
+            section_sorts: Some(Stamped {
+                value: BTreeMap::from([
+                    ("mine:approved".to_string(), "oldest".to_string()),
+                    ("mine:drafts".to_string(), "sideways".to_string()),
+                ]),
+                at: at("2026-10-27T09:00:00Z"),
+            }),
+            ..SyncDoc::default()
+        };
+        reconcile(&mut memory, Some(remote), at(NOW));
+
+        assert_eq!(
+            memory.section_sorts,
+            BTreeMap::from([("mine:approved".to_string(), "oldest".to_string())])
+        );
+    }
+
+    #[test]
+    fn choosing_the_sort_already_in_effect_is_not_a_change() {
+        let mut memory = Memory::default();
+        assert!(memory.set_section_sort("mine:approved", "default", at(NOW)));
+        assert_eq!(memory.sync.section_sorts_changed_at, None);
+        memory.set_section_sort("mine:approved", "oldest", at("2026-10-27T09:00:00Z"));
+        memory.set_section_sort("mine:approved", "oldest", at("2026-10-28T09:00:00Z"));
+        assert_eq!(
+            memory.sync.section_sorts_changed_at,
+            Some(at("2026-10-27T09:00:00Z"))
         );
     }
 

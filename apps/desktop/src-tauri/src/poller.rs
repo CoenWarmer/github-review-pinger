@@ -2,7 +2,7 @@
 //! popover as a `snapshot` event, keeps the tray count in sync, and sends
 //! notifications for what changed between polls.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -73,6 +73,8 @@ pub struct Snapshot {
     pub sound_on_merge: bool,
     /// The Buildkite pipeline the CI statistics count builds in.
     pub buildkite_pipeline: String,
+    /// How each section is sorted, by section id.
+    pub section_sorts: BTreeMap<String, String>,
     /// Order and visibility of "My PRs" sections.
     pub my_prs_sections: Vec<SectionPref>,
     /// Merged in the last couple of days, or further back via "Load more".
@@ -517,18 +519,20 @@ impl Poller {
     /// Updates the snapshot from the last fetch, after snoozes or a single
     /// PR changed.
     fn rederive(&self, app: &AppHandle) {
-        let (sections, views, pipeline) = {
+        let (sections, views, pipeline, sorts) = {
             let memory = self.memory.lock().unwrap();
             (
                 memory.my_prs_sections(),
                 memory.views.clone(),
                 memory.buildkite_pipeline().to_string(),
+                memory.section_sorts.clone(),
             )
         };
         self.update(app, |s| {
             s.my_prs_sections = sections;
             s.views = views;
             s.buildkite_pipeline = pipeline;
+            s.section_sorts = sorts;
         });
         let latest = self.latest.lock().unwrap();
         if let Some(fetched) = latest.as_ref() {
@@ -566,6 +570,20 @@ impl Poller {
 
     /// Saves the order and visibility of "My PRs" sections, and refreshes
     /// right away in case a section just turned on needs fetching.
+    /// Sorts a section's PRs and shares the choice with other devices.
+    pub fn set_section_sort(&self, app: &AppHandle, id: &str, key: &str) {
+        let sorts = {
+            let mut memory = self.memory.lock().unwrap();
+            if !memory.set_section_sort(id, key, Utc::now()) {
+                return;
+            }
+            self.save(&memory);
+            memory.section_sorts.clone()
+        };
+        self.update(app, |s| s.section_sorts = sorts);
+        self.sync_wake.notify_one();
+    }
+
     pub fn set_my_prs_sections(&self, app: &AppHandle, prefs: Vec<SectionPref>) {
         let effective = {
             let mut memory = self.memory.lock().unwrap();
@@ -760,6 +778,7 @@ pub fn start(app: &AppHandle) -> Arc<Poller> {
             },
             sound_on_merge: memory.sound.pr_merged,
             buildkite_pipeline: memory.buildkite_pipeline().to_string(),
+            section_sorts: memory.section_sorts.clone(),
             my_prs_sections: memory.my_prs_sections(),
             merged_pull_requests: Vec::new(),
             merged_can_load_more: false,

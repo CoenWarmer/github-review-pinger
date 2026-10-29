@@ -31,15 +31,18 @@ fragment PullRequestFields on PullRequest {
         statusCheckRollup {
           state
           # Timestamps only, to time how long checks take.
-          contexts(first: 50) {
+          contexts(first: 100) {
+            totalCount
             nodes {
               __typename
               ... on CheckRun {
                 status
+                conclusion
                 startedAt
                 completedAt
               }
               ... on StatusContext {
+                context
                 state
                 createdAt
               }

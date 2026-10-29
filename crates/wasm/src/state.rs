@@ -369,6 +369,17 @@ impl PingerState {
         Ok(self.memory.set_buildkite_pipeline(name, time(now)?))
     }
 
+    /// How each section is sorted, by section id, as JSON.
+    pub fn section_sorts(&self) -> Result<String, String> {
+        json(&self.memory.section_sorts)
+    }
+
+    /// Sorts a section, or puts it back with `"default"`. Whether it was a
+    /// section and a sort.
+    pub fn set_section_sort(&mut self, id: &str, key: &str, now: &str) -> Result<bool, String> {
+        Ok(self.memory.set_section_sort(id, key, time(now)?))
+    }
+
     pub fn set_my_prs_sections(&mut self, sections: &str, now: &str) -> Result<(), String> {
         let sections: Vec<SectionPref> =
             serde_json::from_str(sections).map_err(|e| e.to_string())?;

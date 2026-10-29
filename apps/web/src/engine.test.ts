@@ -248,6 +248,23 @@ describe("the web engine", () => {
     assert.equal(next.getSnapshot().buildkitePipeline, "kibana-on-merge");
   });
 
+  it("remembers how a section is sorted until it's put back to the default", async () => {
+    const { engine, storage } = makeEngine();
+    await engine.start();
+    assert.deepEqual(engine.getSnapshot().sectionSorts, {});
+
+    engine.setSectionSort("mine:approved", "oldest");
+    engine.setSectionSort("mine:approved", "sideways");
+    assert.deepEqual(engine.getSnapshot().sectionSorts, { "mine:approved": "oldest" });
+
+    const { engine: next } = makeEngine({ storage });
+    await next.start();
+    assert.deepEqual(next.getSnapshot().sectionSorts, { "mine:approved": "oldest" });
+
+    next.setSectionSort("mine:approved", "default");
+    assert.deepEqual(next.getSnapshot().sectionSorts, {});
+  });
+
   it("rejects a Buildkite pipeline that can't be a name, and keeps the one in effect", async () => {
     const { engine } = makeEngine();
     await engine.start();
