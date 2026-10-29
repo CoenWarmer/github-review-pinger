@@ -9,7 +9,6 @@ import { TeamChannelForm } from "../slack";
 import { ago } from "../format";
 import { useNow } from "../hooks";
 import type {
-  PullRequest,
   SectionPref,
   SyncStatus,
   TeamChannel,
@@ -17,7 +16,6 @@ import type {
   TokenSource,
   View,
 } from "../types";
-import { StatsSettings } from "./StatsSettings";
 import { MyPrsSections } from "./MyPrsSections";
 import { SYNC_ABOUT, SYNC_LABEL } from "./Setup";
 import { ViewsSettings } from "./ViewsSettings";
@@ -39,8 +37,6 @@ export function SettingsPanel({
   sync,
   myPrsSections,
   views,
-  pullRequests,
-  buildkitePipeline,
 }: {
   /** Who is signed in. */
   account: string | null;
@@ -61,10 +57,6 @@ export function SettingsPanel({
   myPrsSections: SectionPref[];
   /** Your custom views. */
   views: View[];
-  /** Your open PRs, which some of the statistics are worked out from. */
-  pullRequests: PullRequest[];
-  /** The Buildkite pipeline the CI statistics count builds in. */
-  buildkitePipeline: string;
 }) {
   const platform = usePlatform();
   const {
@@ -106,14 +98,6 @@ export function SettingsPanel({
 
   return (
     <div className="flex flex-col">
-      <Section>
-        <Heading>Statistics</Heading>
-        <StatsSettings
-          pullRequests={pullRequests}
-          viewer={account}
-          buildkitePipeline={buildkitePipeline}
-        />
-      </Section>
       {hasAutostart && (
         <Section>
           <Heading>Startup</Heading>

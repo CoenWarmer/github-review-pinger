@@ -1,5 +1,12 @@
 import { useMemo, useState, type ReactNode } from "react";
-import { ArrowDownWideNarrow, ChevronDown, ChevronRight, RefreshCw, Settings } from "lucide-react";
+import {
+  ArrowDownWideNarrow,
+  ChartColumn,
+  ChevronDown,
+  ChevronRight,
+  RefreshCw,
+  Settings,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
@@ -18,6 +25,7 @@ import { SearchResults, matchesQuery } from "./components/SearchResults";
 import { ReviewRow } from "./components/ReviewRow";
 import { RingsLoader } from "./components/RingsLoader";
 import { SettingsPanel } from "./components/SettingsPanel";
+import { StatsSettings } from "./components/StatsSettings";
 import { Setup, problemMessage } from "./components/Setup";
 import { elapsed } from "./format";
 import { clearSavedLists } from "./cache";
@@ -40,11 +48,12 @@ const REVIEW_SECTIONS: { group: ReviewGroup; title: string }[] = [
   { group: "draft", title: "Drafts" },
 ];
 
-type Tab = "mine" | "reviews" | "settings";
+type Tab = "mine" | "reviews" | "stats" | "settings";
 
 const TABS: { id: Tab; label: string; icon?: ReactNode }[] = [
   { id: "mine", label: "My PRs" },
   { id: "reviews", label: "Review Requests" },
+  { id: "stats", label: "Statistics", icon: <ChartColumn /> },
   { id: "settings", label: "Settings", icon: <Settings /> },
 ];
 
@@ -237,7 +246,9 @@ function AppContent() {
     ).length,
     reviews: reviews.filter((pr) => pr.group === "needsReview").length,
   };
-  const searching = tab !== "settings" && query.trim() !== "";
+  // Only the PR lists can be filtered.
+  const filterable = tab === "mine" || tab === "reviews";
+  const searching = filterable && query.trim() !== "";
   const searchRows = (): { ids: string[]; rows: ReactNode } => {
     if (tab === "reviews") {
       const found = reviews.filter((pr) =>
@@ -313,7 +324,7 @@ function AppContent() {
             ))}
           </TabsList>
         </Tabs>
-        {tab !== "settings" && (
+        {filterable && (
           <div className="border-b px-3 py-1.5">
             <Input
               type="search"
@@ -336,6 +347,16 @@ function AppContent() {
               rows={search.rows}
               now={now}
             />
+          ) : tab === "stats" ? (
+            // Only here, once this tab is opened, are the statistics fetched:
+            // never on the polling cycle, to spare the API quota.
+            <div className="px-3 py-3">
+              <StatsSettings
+                pullRequests={prs}
+                viewer={snapshot.viewer}
+                buildkitePipeline={snapshot.buildkitePipeline}
+              />
+            </div>
           ) : tab === "settings" ? (
             <SettingsPanel
               account={snapshot.viewer}
@@ -349,8 +370,6 @@ function AppContent() {
               sync={snapshot.sync}
               myPrsSections={snapshot.myPrsSections}
               views={snapshot.views}
-              pullRequests={prs}
-              buildkitePipeline={snapshot.buildkitePipeline}
             />
           ) : tab === "mine" ? (
             prs.length === 0 &&
