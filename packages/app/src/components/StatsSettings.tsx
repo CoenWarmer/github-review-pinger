@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useState } from "react";
 import { Bar, BarChart, Cell, LabelList, XAxis, YAxis } from "recharts";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -208,7 +208,13 @@ function useLoaded<T>(
   /** Waits (still "loading") until true, so one load can follow another. */
   enabled = true,
 ): Loaded<T> {
-  const [state, setState] = useState<Loaded<T>>({ kind: "loading" });
+  // Starts from a recent result, so reopening doesn't flash "Loading…" first.
+  const [state, setState] = useState<Loaded<T>>(() => {
+    const cached = cache.get(key);
+    return enabled && cached && Date.now() - cached.at < CACHE_MS
+      ? { kind: "ready", value: cached.value }
+      : { kind: "loading" };
+  });
   useEffect(() => {
     if (!enabled) return;
     const cached = cache.get(key);
@@ -237,17 +243,37 @@ function useLoaded<T>(
   return state;
 }
 
-/** One horizontal bar chart with its numbers as a hidden table for screen readers. */
-function BarsChart({
+/**
+ * One horizontal bar chart with its numbers as a hidden table for screen
+ * readers. Memoized, and `bars` has to stay the same array until its numbers
+ * change: a new one each render makes the chart library rebuild the value
+ * labels, which flickers them.
+ */
+const BarsChart = memo(function BarsChart({
   bars,
   unit,
   title,
+  reserveChangeSpace,
 }: {
   bars: Bar[];
   unit: string;
   title: string;
+  /** Leave room beside the bars for each one's change, which loads after them. */
+  reserveChangeSpace: boolean;
 }) {
-  const config = { value: { label: unit } } satisfies ChartConfig;
+  const config = useMemo(() => ({ value: { label: unit } }) satisfies ChartConfig, [unit]);
+  // Room beside the longest bar for its value and, once loaded, its change.
+  // Held while the change is still loading, so it doesn't shift the bars when it arrives.
+  const margin = useMemo(
+    () => ({ top: 0, right: reserveChangeSpace ? 110 : 32, bottom: 0, left: 0 }),
+    [reserveChangeSpace],
+  );
+  const label = useCallback(
+    (props: Omit<Parameters<typeof ValueLabel>[0], "bars">) => (
+      <ValueLabel {...props} bars={bars} />
+    ),
+    [bars],
+  );
   return (
     <>
       <ChartContainer
@@ -255,18 +281,7 @@ function BarsChart({
         className="aspect-auto w-full"
         style={{ height: 36 + bars.length * 32 }}
       >
-        <BarChart
-          data={bars}
-          layout="vertical"
-          // Room beside the longest bar for its value and, once loaded, its change.
-          margin={{
-            top: 0,
-            right: bars.some((bar) => bar.change) ? 110 : 32,
-            bottom: 0,
-            left: 0,
-          }}
-          barSize={20}
-        >
+        <BarChart data={bars} layout="vertical" margin={margin} barSize={20}>
           <XAxis type="number" hide domain={[0, "dataMax"]} />
           <YAxis
             type="category"
@@ -277,19 +292,12 @@ function BarsChart({
             tick={{ fontSize: 11 }}
             interval={0}
           />
-          <ChartTooltip
-            cursor={false}
-            content={<ChartTooltipContent hideLabel />}
-          />
-          <Bar dataKey="value" radius={[0, 4, 4, 0]}>
+          <ChartTooltip cursor={false} content={<ChartTooltipContent hideLabel />} />
+          <Bar dataKey="value" radius={[0, 4, 4, 0]} isAnimationActive={false}>
             {bars.map((bar) => (
               <Cell key={bar.who} fill={bar.fill} />
             ))}
-            <LabelList
-              dataKey="value"
-              position="right"
-              content={(props) => <ValueLabel {...props} bars={bars} />}
-            />
+            <LabelList dataKey="value" position="right" content={label} />
           </Bar>
         </BarChart>
       </ChartContainer>
@@ -310,7 +318,7 @@ function BarsChart({
       </table>
     </>
   );
-}
+});
 
 /** A bar's value at its end, with how it moved since the 30 days before in muted text. */
 function ValueLabel({
@@ -442,48 +450,58 @@ export function StatsSettings({
   const data = stats.kind === "ready" ? stats.value : null;
   // Failing to load the earlier window just means no changes are shown.
   const before = previousStats.kind === "ready" ? previousStats.value : null;
-  const mergedBars = data
-    ? teamBars(
-        team,
-        {
-          you: data.mergedByMe,
-          youInTeamOrg: data.mergedByMeInTeamOrg,
-          teamTotal: data.mergedByTeam,
-          members: data.teamMemberCount,
-          perMember: data.teamMemberMerged,
-        },
-        before && {
-          you: before.mergedByMe,
-          youInTeamOrg: before.mergedByMeInTeamOrg,
-          teamTotal: before.mergedByTeam,
-        },
-      )
-    : [];
+  // The same array until a number changes (see BarsChart), so a re-render
+  // from somewhere else, such as a poll, leaves the chart alone.
+  const mergedBars = useMemo(
+    () =>
+      data
+        ? teamBars(
+            team,
+            {
+              you: data.mergedByMe,
+              youInTeamOrg: data.mergedByMeInTeamOrg,
+              teamTotal: data.mergedByTeam,
+              members: data.teamMemberCount,
+              perMember: data.teamMemberMerged,
+            },
+            before && {
+              you: before.mergedByMe,
+              youInTeamOrg: before.mergedByMeInTeamOrg,
+              teamTotal: before.mergedByTeam,
+            },
+          )
+        : [],
+    [team, data, before],
+  );
   const reviewData = reviews.kind === "ready" ? reviews.value : null;
   const reviewCounts = reviewData?.teamMemberReviews ?? null;
   const reviewsBefore =
     previousReviews.kind === "ready" ? previousReviews.value : null;
-  const reviewBars = reviewData
-    ? teamBars(
-        team,
-        {
-          you: reviewData.reviewsByMe,
-          youInTeamOrg: reviewData.reviewsByMeInTeamOrg,
-          teamTotal: reviewCounts
-            ? reviewCounts.reduce((sum, n) => sum + n, 0)
-            : null,
-          members: reviewCounts?.length ?? 0,
-          perMember: reviewCounts,
-        },
-        // The team's earlier reviews would need every member looked up again,
-        // so only your own bars have a change.
-        reviewsBefore && {
-          you: reviewsBefore.reviewsByMe,
-          youInTeamOrg: reviewsBefore.reviewsByMeInTeamOrg,
-          teamTotal: null,
-        },
-      )
-    : [];
+  const reviewBars = useMemo(
+    () =>
+      reviewData
+        ? teamBars(
+            team,
+            {
+              you: reviewData.reviewsByMe,
+              youInTeamOrg: reviewData.reviewsByMeInTeamOrg,
+              teamTotal: reviewCounts
+                ? reviewCounts.reduce((sum, n) => sum + n, 0)
+                : null,
+              members: reviewCounts?.length ?? 0,
+              perMember: reviewCounts,
+            },
+            // The team's earlier reviews would need every member looked up again,
+            // so only your own bars have a change.
+            reviewsBefore && {
+              you: reviewsBefore.reviewsByMe,
+              youInTeamOrg: reviewsBefore.reviewsByMeInTeamOrg,
+              teamTotal: null,
+            },
+          )
+        : [],
+    [team, reviewData, reviewCounts, reviewsBefore],
+  );
   const teamList = teams.kind === "ready" ? teams.value : [];
   // A saved team you've since left is still shown, so the choice isn't silently lost.
   const options =
@@ -537,6 +555,7 @@ export function StatsSettings({
           <>
             <BarsChart
               bars={mergedBars}
+              reserveChangeSpace={previousStats.kind !== "error"}
               unit="PRs merged"
               title={`PRs merged in the last ${STATS_DAYS} days`}
             />
@@ -578,6 +597,7 @@ export function StatsSettings({
           <>
             <BarsChart
               bars={reviewBars}
+              reserveChangeSpace={previousReviews.kind !== "error"}
               unit="Reviews"
               title={`Reviews done in the last ${STATS_DAYS} days`}
             />
