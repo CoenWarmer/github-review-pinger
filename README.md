@@ -22,6 +22,12 @@ Windows and Linux: download the installer from the
 The app uses your [GitHub CLI](https://cli.github.com/) login, or a personal
 access token you paste into its settings.
 
+## Web Version
+
+Visit the app at https://coenwarmer.github.io/github-review-pinger/
+
+The desktop and web versions sync your personal settings with each other via an unlisted Gist owned by you.
+
 ## Development
 
 Requires Rust, Node, pnpm, and the [GitHub CLI](https://cli.github.com/)
