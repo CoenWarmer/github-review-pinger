@@ -402,12 +402,12 @@ describe("couldBeReady", () => {
 
 describe("statistics", () => {
   it("splits team members across searches that fit, each login in exactly one", () => {
-    assert.deepEqual(mergedBySearches("2026-10-01", "o", []), []);
-    assert.deepEqual(mergedBySearches("2026-10-01", "o", ["ana", "bo"]), [
+    assert.deepEqual(mergedBySearches(">=2026-10-01", "o", []), []);
+    assert.deepEqual(mergedBySearches(">=2026-10-01", "o", ["ana", "bo"]), [
       "is:pr is:merged merged:>=2026-10-01 org:o author:ana author:bo",
     ]);
     const many = Array.from({ length: 120 }, (_, i) => `member-number-${i}`);
-    const searches = mergedBySearches("2026-10-01", "o", many);
+    const searches = mergedBySearches(">=2026-10-01", "o", many);
     assert.ok(searches.length > 1);
     assert.ok(searches.every((s) => s.length <= 250));
     assert.equal(searches.join(" ").split(" author:").length - 1, many.length);
@@ -441,7 +441,7 @@ describe("statistics", () => {
       // A small team is counted member by member: ana 30, bo 11.
       return reply({ m0: { issueCount: 30 }, m1: { issueCount: 11 } });
     });
-    const stats = await gh.fetchStats("o/core", "2026-09-29");
+    const stats = await gh.fetchStats("o/core", ">=2026-09-29");
     assert.equal(stats.mergedByMe, 60);
     // In the team's org only, the scope the team's count is in.
     assert.equal(stats.mergedByMeInTeamOrg, 14);
@@ -477,7 +477,7 @@ describe("statistics", () => {
       if (query.includes("me: search(")) return reply({ me: { issueCount: 2 } });
       return reply(Object.fromEntries(Array.from({ length: 20 }, (_, i) => [`s${i}`, { issueCount: 10 }])));
     });
-    const stats = await gh.fetchStats("o/big", "2026-09-29");
+    const stats = await gh.fetchStats("o/big", ">=2026-09-29");
     assert.equal(stats.teamMemberCount, 151);
     assert.equal(stats.teamMemberMerged, null);
     // The aliased searches each took several authors, not one.
@@ -486,13 +486,38 @@ describe("statistics", () => {
     assert.ok((stats.mergedByTeam ?? 0) > 0);
   });
 
+  it("counts an earlier window in total, not member by member", async () => {
+    const seen: string[] = [];
+    const gh = github(({ query, variables }) => {
+      if (query === "STATS") {
+        seen.push(String(variables.q));
+        return reply({ search: { issueCount: 4, nodes: [] } });
+      }
+      if (query.includes("members(first: 100")) {
+        return reply({ t0: { team: { members: { nodes: [{ login: "ana" }, { login: "bo" }], pageInfo: { hasNextPage: false, endCursor: null } } } } });
+      }
+      seen.push(query);
+      if (query.includes("me: search(")) return reply({ me: { issueCount: 2 } });
+      return reply({ s0: { issueCount: 33 } });
+    });
+    const stats = await gh.fetchStats("o/core", "2026-08-30..2026-09-28", false);
+    assert.equal(stats.mergedByMe, 4);
+    assert.equal(stats.mergedByMeInTeamOrg, 2);
+    assert.equal(stats.mergedByTeam, 33);
+    assert.equal(stats.teamMemberCount, 2);
+    assert.equal(stats.teamMemberMerged, null);
+    // The earlier dates go to every search, and no member got a search of their own.
+    assert.ok(seen.every((q) => q.includes("merged:2026-08-30..2026-09-28")));
+    assert.ok(!seen.some((q) => q.includes("m0:")));
+  });
+
   it("skips the team count without a team, and says what a missing scope blocks", async () => {
     const gh = github(({ query }) =>
       query === "STATS"
         ? reply({ search: { issueCount: 3, nodes: [] } })
         : new Response(JSON.stringify({ data: { viewer: { login: "me", organizations: { nodes: [] } } }, errors: [{ type: "INSUFFICIENT_SCOPES", message: "needs read:org" }] }), { status: 200 }),
     );
-    const stats = await gh.fetchStats(null, "2026-09-29");
+    const stats = await gh.fetchStats(null, ">=2026-09-29");
     assert.deepEqual(stats, { mergedByMe: 3, mergedByMeInTeamOrg: null, mergedByTeam: null, teamMembersCapped: false, teamMemberCount: 0, teamMemberMerged: null, sample: [] });
     await assert.rejects(gh.fetchMyTeams(), /read:org/);
   });
@@ -592,6 +617,19 @@ describe("review statistics", () => {
     assert.equal(stats.teamMemberReviews, null);
     assert.equal(stats.reviewsByMeInTeamOrg, 30);
     assert.ok(!seen.some((s) => s.query.includes("u0:")));
+  });
+
+  it("counts an earlier window for you alone, without looking the team up", async () => {
+    const seen: { query: string; variables: Record<string, unknown> }[] = [];
+    const gh = reviewGithub(["ana", "bo"], () => ({}), seen);
+    const stats = await gh.fetchReviewStats("o/core", ...WINDOW, false);
+    assert.deepEqual(stats, {
+      reviewsByMe: 37,
+      reviewsByMeInTeamOrg: 30,
+      teamMemberCount: 0,
+      teamMemberReviews: null,
+    });
+    assert.ok(!seen.some((s) => s.query.includes("members(first: 100") || s.query.includes("u0:")));
   });
 
   it("says what a missing scope blocks", async () => {

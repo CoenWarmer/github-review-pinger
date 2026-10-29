@@ -156,13 +156,14 @@ const MEMBERS_PER_QUERY = 8;
 const MEMBER_QUERIES_AT_ONCE = 10;
 
 /**
- * Search texts that count PRs merged since `since` (a date) in `org` by any
+ * Search texts that count PRs merged in the date `range` (GitHub's `merged:`
+ * syntax, such as `>=2026-10-01`) in `org` by any
  * of `logins`: several `author:` qualifiers match any of them, but only so
  * many fit in one search, so the logins are split across as few as will hold
  * them.
  */
-export function mergedBySearches(since: string, org: string, logins: string[]): string[] {
-  const start = `is:pr is:merged merged:>=${since} org:${org}`;
+export function mergedBySearches(range: string, org: string, logins: string[]): string[] {
+  const start = `is:pr is:merged merged:${range} org:${org}`;
   const searches: string[] = [];
   let current = start;
   for (const login of logins) {
@@ -212,11 +213,23 @@ export interface Github {
    * team's (`org/slug`) member by member when one is chosen and it's small
    * enough.
    */
-  fetchReviewStats(team: string | null, from: string, to: string): Promise<ReviewStatsData>;
+  fetchReviewStats(
+    team: string | null,
+    from: string,
+    to: string,
+    /** False for an earlier window that's only compared with: just your own counts. */
+    byMember?: boolean,
+  ): Promise<ReviewStatsData>;
   /** The teams you belong to, as `org/slug`. Needs `read:org`. */
   fetchMyTeams(): Promise<string[]>;
-  /** The statistics since `since` (a date), with `team` (`org/slug`) counted too when chosen. */
-  fetchStats(team: string | null, since: string): Promise<StatsData>;
+  /**
+   * The statistics for the merged-date `range` (GitHub's `merged:` syntax,
+   * such as `>=2026-10-01` or `2026-08-30..2026-09-28`), with `team`
+   * (`org/slug`) counted too when chosen. Without `byMember`, as for an
+   * earlier window that's only compared with, the team is counted in total
+   * rather than member by member.
+   */
+  fetchStats(team: string | null, range: string, byMember?: boolean): Promise<StatsData>;
   addMergeStates(pullRequests: RawPullRequest[]): Promise<void>;
   fetchDirectory(needs: Needs): Promise<Found>;
   /** The token's scopes as GitHub lists them; `null` for tokens that have none, such as fine-grained ones. */
@@ -607,7 +620,7 @@ export function createGithub({
         .sort();
     },
 
-    async fetchReviewStats(team, from, to) {
+    async fetchReviewStats(team, from, to, byMember = true) {
       const countQuery =
         "query($from: DateTime!, $to: DateTime!, $org: ID) { viewer { contributionsCollection(from: $from, to: $to, organizationID: $org) { totalPullRequestReviewContributions } } }";
       const countOf = (data: {
@@ -623,7 +636,9 @@ export function createGithub({
         const [org, slug] = team.split("/");
         if (!org || !slug) throw new FetchError("api", `Not a team: ${team}`);
         const [found, orgReply] = await Promise.all([
-          github.fetchDirectory({ teams: [[org, slug]] }),
+          byMember
+            ? github.fetchDirectory({ teams: [[org, slug]] })
+            : Promise.resolve<Found>({ teams: {}, denied: false }),
           request<{ organization: { id: string } | null }>(
             "query($org: String!) { organization(login: $org) { id } }",
             { org },
@@ -636,7 +651,7 @@ export function createGithub({
         const inOrg = async () =>
           countOf((await request<Parameters<typeof countOf>[0]>(countQuery, { from, to, org: orgId })).data);
         const members = async (): Promise<number[] | null> => {
-          if (logins.length > MEMBER_COUNT_CAP) return null;
+          if (!byMember || logins.length > MEMBER_COUNT_CAP) return null;
           const replies = await mapLimit(chunks(logins, MEMBERS_PER_QUERY), MEMBER_QUERIES_AT_ONCE, (batch) =>
             request<
               Record<
@@ -673,7 +688,7 @@ export function createGithub({
       };
     },
 
-    async fetchStats(team, since) {
+    async fetchStats(team, range, byMember = true) {
       interface Mine {
         search: {
           issueCount: number;
@@ -685,7 +700,7 @@ export function createGithub({
       }
       const mine = async () => {
         const reply = await request<Mine>(queries.statsMerged, {
-          q: `is:pr is:merged author:@me merged:>=${since} sort:updated-desc`,
+          q: `is:pr is:merged author:@me merged:${range} sort:updated-desc`,
         });
         const sample = reply.data.search.nodes.flatMap((pr) =>
           pr
@@ -719,7 +734,7 @@ export function createGithub({
         const capped = logins.length >= MAX_MEMBER_PAGES * 100;
         // Your merges in the same org, so the two compare.
         const mineInOrg = async () => {
-          const text = `is:pr is:merged author:@me merged:>=${since} org:${org}`;
+          const text = `is:pr is:merged author:@me merged:${range} org:${org}`;
           const reply = await request<{ me: { issueCount: number } | null }>(
             `query { me: search(type: ISSUE, query: ${JSON.stringify(text)}) { issueCount } }`,
           );
@@ -728,7 +743,8 @@ export function createGithub({
         // The members' merges: one by one for a team small enough, which
         // also gives the total; together, as one number, for a bigger one.
         const membersMerged = async (): Promise<{ total: number; counts: number[] | null }> => {
-          if (logins.length <= MEMBER_COUNT_CAP) {
+          // An earlier window is only compared in total, so no member-by-member.
+          if (byMember && logins.length <= MEMBER_COUNT_CAP) {
             const replies = await mapLimit(
               chunks(logins, MEMBERS_PER_QUERY),
               MEMBER_QUERIES_AT_ONCE,
@@ -737,7 +753,7 @@ export function createGithub({
                   `query {\n${batch
                     .map(
                       (login, i) =>
-                        `m${i}: search(type: ISSUE, query: ${JSON.stringify(`is:pr is:merged merged:>=${since} org:${org} author:${login}`)}) { issueCount }`,
+                        `m${i}: search(type: ISSUE, query: ${JSON.stringify(`is:pr is:merged merged:${range} org:${org} author:${login}`)}) { issueCount }`,
                     )
                     .join("\n")}\n}`,
                 ).then((reply) => batch.map((_, i) => reply.data[`m${i}`]?.issueCount ?? 0)),
@@ -745,7 +761,7 @@ export function createGithub({
             const counts = replies.flat();
             return { total: counts.reduce((sum, count) => sum + count, 0), counts };
           }
-          const searches = mergedBySearches(since, org, logins);
+          const searches = mergedBySearches(range, org, logins);
           const text = `query {\n${searches
             .map((s, i) => `s${i}: search(type: ISSUE, query: ${JSON.stringify(s)}) { issueCount }`)
             .join("\n")}\n}`;

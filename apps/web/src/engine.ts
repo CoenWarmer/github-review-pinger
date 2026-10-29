@@ -560,24 +560,39 @@ export class Engine {
     }
   }
 
-  /** The statistics for the last `days`. Rejects with a message to show. */
-  async loadStats(team: string | null, days: number): Promise<StatsData> {
+  /**
+   * The statistics for the last `days`, or with `previous` for the same
+   * number of days before those, which is only compared with. Rejects with a
+   * message to show.
+   */
+  async loadStats(team: string | null, days: number, previous = false): Promise<StatsData> {
     if (!this.github) throw "There's no token to load statistics with.";
-    const since = new Date(this.now().getTime() - days * 86_400_000).toISOString().slice(0, 10);
+    const day = (back: number) =>
+      new Date(this.now().getTime() - back * 86_400_000).toISOString().slice(0, 10);
+    // The earlier window is the same length and ends the day before this one starts.
+    const range = previous ? `${day(2 * days)}..${day(days + 1)}` : `>=${day(days)}`;
     try {
-      return await this.github.fetchStats(team, since);
+      return await this.github.fetchStats(team, range, !previous);
     } catch (e) {
       throw e instanceof Error ? e.message : String(e);
     }
   }
 
-  /** The reviews submitted in the last `days`. Rejects with a message to show. */
-  async loadReviewStats(team: string | null, days: number): Promise<ReviewStatsData> {
+  /**
+   * The reviews submitted in the last `days`, or with `previous` in the same
+   * number of days before those. Rejects with a message to show.
+   */
+  async loadReviewStats(
+    team: string | null,
+    days: number,
+    previous = false,
+  ): Promise<ReviewStatsData> {
     if (!this.github) throw "There's no token to load statistics with.";
-    const to = this.now();
+    // The earlier window is the same length and ends where this one starts.
+    const to = new Date(this.now().getTime() - (previous ? days * 86_400_000 : 0));
     const from = new Date(to.getTime() - days * 86_400_000);
     try {
-      return await this.github.fetchReviewStats(team, from.toISOString(), to.toISOString());
+      return await this.github.fetchReviewStats(team, from.toISOString(), to.toISOString(), !previous);
     } catch (e) {
       throw e instanceof Error ? e.message : String(e);
     }

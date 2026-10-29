@@ -62,13 +62,13 @@ export interface Platform {
    * Your merged PRs over the last `days`, and a team's (`org/slug`) when one
    * is given. Rejects with a message to show.
    */
-  loadStats(team: string | null, days: number): Promise<StatsData>;
+  loadStats(team: string | null, days: number, previous?: boolean): Promise<StatsData>;
   /**
    * The reviews submitted over the last `days`: yours, and each member's of
    * a team (`org/slug`) when one is given and it's small enough. Rejects with
    * a message to show.
    */
-  loadReviewStats(team: string | null, days: number): Promise<ReviewStatsData>;
+  loadReviewStats(team: string | null, days: number, previous?: boolean): Promise<ReviewStatsData>;
 
   /** Adds a custom view and shows it right away. */
   addView(name: string, query: string): void;

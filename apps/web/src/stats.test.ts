@@ -4,6 +4,7 @@ import type { PullRequest } from "@review-pinger/app";
 import {
   averageCodeOwners,
   averageReviewWait,
+  change,
   duration,
   median,
   perMember,
@@ -95,5 +96,30 @@ describe("median", () => {
     const given = [3, 1, 2];
     median(given);
     assert.deepEqual(given, [3, 1, 2]);
+  });
+});
+
+describe("change since the window before", () => {
+  it("says which way it moved, by how much, and what it was", () => {
+    assert.deepEqual(change(60, 4), { direction: "up", text: "▲ 56 (was 4)" });
+    assert.deepEqual(change(3, 10), { direction: "down", text: "▼ 7 (was 10)" });
+  });
+
+  it("says when nothing moved", () => {
+    assert.deepEqual(change(7, 7), { direction: "same", text: "no change (was 7)" });
+    // A rounding error isn't a change.
+    assert.equal(change(15.7, 15.72).direction, "same");
+  });
+
+  it("rounds the size of a move that isn't whole to a tenth", () => {
+    assert.equal(change(17.4, 15.2).text, "▲ 2.2 (was 15.2)");
+    assert.equal(change(0, 2.5).text, "▼ 2.5 (was 2.5)");
+  });
+
+  it("can read durations, where under a minute is no change", () => {
+    const minute = 60_000;
+    const text = (ms: number) => `${Math.round(ms / minute)}m`;
+    assert.equal(change(90 * minute, 150 * minute, text, minute).text, "▼ 60m (was 150m)");
+    assert.equal(change(90 * minute + 20_000, 90 * minute, text, minute).direction, "same");
   });
 });

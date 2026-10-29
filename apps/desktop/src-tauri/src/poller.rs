@@ -274,10 +274,23 @@ impl Poller {
         &self,
         team: Option<String>,
         days: i64,
+        previous: bool,
     ) -> Result<github::StatsData, String> {
         let token = self.search_token().await?;
-        let since = (Utc::now() - chrono::Duration::days(days)).date_naive();
-        github::fetch_stats(&self.http, &token, team.as_deref(), since)
+        let today = Utc::now().date_naive();
+        // The window before it is the same length and ends the day before.
+        let window = if previous {
+            github::StatsWindow {
+                from: today - chrono::Duration::days(2 * days),
+                until: Some(today - chrono::Duration::days(days + 1)),
+            }
+        } else {
+            github::StatsWindow {
+                from: today - chrono::Duration::days(days),
+                until: None,
+            }
+        };
+        github::fetch_stats(&self.http, &token, team.as_deref(), window)
             .await
             .map_err(fetch_error_message)
     }
@@ -288,11 +301,18 @@ impl Poller {
         &self,
         team: Option<String>,
         days: i64,
+        previous: bool,
     ) -> Result<github::ReviewStatsData, String> {
         let token = self.search_token().await?;
-        let to = Utc::now();
+        let now = Utc::now();
+        // The earlier window is the same length and ends where this one starts.
+        let to = if previous {
+            now - chrono::Duration::days(days)
+        } else {
+            now
+        };
         let from = to - chrono::Duration::days(days);
-        github::fetch_review_stats(&self.http, &token, team.as_deref(), from, to)
+        github::fetch_review_stats(&self.http, &token, team.as_deref(), from, to, !previous)
             .await
             .map_err(fetch_error_message)
     }

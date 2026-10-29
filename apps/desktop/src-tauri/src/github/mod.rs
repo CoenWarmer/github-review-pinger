@@ -341,12 +341,13 @@ fn quote_text(text: &str) -> String {
     serde_json::to_string(text).expect("a string serializes")
 }
 
-/// What each of `logins` merged in `org` since `since`, in no particular
+/// What each of `logins` merged in `org` in the date `range` (GitHub's
+/// `merged:` syntax, such as `>=2026-10-01`), in no particular
 /// order: one aliased search per member, several to a request.
 async fn member_counts(
     http: &reqwest::Client,
     token: &str,
-    since: NaiveDate,
+    range: &str,
     org: &str,
     logins: &[String],
 ) -> Result<Vec<u64>, FetchError> {
@@ -362,7 +363,7 @@ async fn member_counts(
                     format!(
                         "m{i}: search(type: ISSUE, query: {}) {{ issueCount }}\n",
                         quote_text(&format!(
-                            "is:pr is:merged merged:>={since} org:{org} author:{login}"
+                            "is:pr is:merged merged:{range} org:{org} author:{login}"
                         ))
                     )
                 })
@@ -389,11 +390,11 @@ async fn member_counts(
     Ok(batches.into_iter().flatten().collect())
 }
 
-/// Search texts that count PRs merged since `since` in `org` by any of
+/// Search texts that count PRs merged in the date `range` in `org` by any of
 /// `logins`: several `author:` qualifiers match any of them, but only so many
 /// fit in one search, so the logins are split across as few as will hold them.
-fn merged_by_searches(since: NaiveDate, org: &str, logins: &[String]) -> Vec<String> {
-    let start = format!("is:pr is:merged merged:>={since} org:{org}");
+fn merged_by_searches(range: &str, org: &str, logins: &[String]) -> Vec<String> {
+    let start = format!("is:pr is:merged merged:{range} org:{org}");
     let mut searches = Vec::new();
     let mut current = start.clone();
     for login in logins {
@@ -409,20 +410,40 @@ fn merged_by_searches(since: NaiveDate, org: &str, logins: &[String]) -> Vec<Str
     searches
 }
 
-/// The statistics for the last window: your merged PRs, and when a team is
-/// chosen (`org/slug`, which needs `read:org`) what its members merged.
+/// The days the merge statistics cover. An `until` makes it an earlier window,
+/// for the comparison, which skips the per-member counts: the combined
+/// searches give the team's total for a fraction of the requests.
+#[derive(Debug, Clone, Copy)]
+pub struct StatsWindow {
+    pub from: NaiveDate,
+    pub until: Option<NaiveDate>,
+}
+
+impl StatsWindow {
+    /// GitHub's `merged:` text for it.
+    fn range(&self) -> String {
+        match self.until {
+            Some(until) => format!("{}..{until}", self.from),
+            None => format!(">={}", self.from),
+        }
+    }
+}
+
+/// The statistics for the window: your merged PRs, and when a team is chosen
+/// (`org/slug`, which needs `read:org`) what its members merged.
 pub async fn fetch_stats(
     http: &reqwest::Client,
     token: &str,
     team: Option<&str>,
-    since: NaiveDate,
+    window: StatsWindow,
 ) -> Result<StatsData, FetchError> {
+    let range = window.range();
     let mine = async {
         let reply: Response<StatsMergedData> = request(
             http,
             token,
             STATS_MERGED_QUERY,
-            json!({ "q": format!("is:pr is:merged author:@me merged:>={since} sort:updated-desc") }),
+            json!({ "q": format!("is:pr is:merged author:@me merged:{range} sort:updated-desc") }),
         )
         .await?;
         let search = reply.data.search;
@@ -480,7 +501,7 @@ pub async fn fetch_stats(
         let capped = logins.len() >= MEMBERS_READ_LIMIT;
         // Your merges in the same org, so the two compare.
         let mine_in_org = async {
-            let text = format!("is:pr is:merged author:@me merged:>={since} org:{org}");
+            let text = format!("is:pr is:merged author:@me merged:{range} org:{org}");
             let query = format!(
                 "query {{ me: search(type: ISSUE, query: {}) {{ issueCount }} }}",
                 quote_text(&text)
@@ -491,11 +512,12 @@ pub async fn fetch_stats(
         // The members' merges: one by one for a team small enough, which
         // also gives the total; together, as one number, for a bigger one.
         let members_merged = async {
-            if logins.len() <= MEMBER_COUNT_CAP {
-                let counts = member_counts(http, token, since, org, &logins).await?;
+            // An earlier window is only compared in total, so no member-by-member.
+            if window.until.is_none() && logins.len() <= MEMBER_COUNT_CAP {
+                let counts = member_counts(http, token, &range, org, &logins).await?;
                 return Ok::<_, FetchError>((counts.iter().sum::<u64>(), Some(counts)));
             }
-            let searches = merged_by_searches(since, org, &logins);
+            let searches = merged_by_searches(&range, org, &logins);
             let query = format!(
                 "query {{\n{}}}",
                 searches
@@ -604,12 +626,15 @@ const REVIEW_COUNT_QUERY: &str = "query($from: DateTime!, $to: DateTime!, $org: 
 /// chosen (`org/slug`, which needs `read:org`) what each of its members
 /// reviewed in that organization. Teams over `MEMBER_COUNT_CAP` members get no
 /// member counts: GitHub counts these per person, so there is no cheaper way.
+/// Without `by_member`, as for an earlier window that's only compared with,
+/// the team's members aren't looked up at all, just your own two counts.
 pub async fn fetch_review_stats(
     http: &reqwest::Client,
     token: &str,
     team: Option<&str>,
     from: DateTime<Utc>,
     to: DateTime<Utc>,
+    by_member: bool,
 ) -> Result<ReviewStatsData, FetchError> {
     let variables = |org: Option<&str>| json!({ "from": from, "to": to, "org": org });
     let count_of = |reply: &Response<Value>| {
@@ -632,19 +657,28 @@ pub async fn fetch_review_stats(
         let needs = Needs {
             teams: [(org.to_string(), slug.to_string())].into(),
         };
-        let (found, org_id) = future::try_join(fetch_directory(http, token, &needs), async {
-            let reply: Response<Value> = request(
-                http,
-                token,
-                "query($org: String!) { organization(login: $org) { id } }",
-                json!({ "org": org }),
-            )
-            .await?;
-            reply.data["organization"]["id"]
-                .as_str()
-                .map(str::to_string)
-                .ok_or_else(|| FetchError::Api(format!("Could not find {org}.")))
-        })
+        let (found, org_id) = future::try_join(
+            async {
+                if by_member {
+                    fetch_directory(http, token, &needs).await
+                } else {
+                    Ok(Found::default())
+                }
+            },
+            async {
+                let reply: Response<Value> = request(
+                    http,
+                    token,
+                    "query($org: String!) { organization(login: $org) { id } }",
+                    json!({ "org": org }),
+                )
+                .await?;
+                reply.data["organization"]["id"]
+                    .as_str()
+                    .map(str::to_string)
+                    .ok_or_else(|| FetchError::Api(format!("Could not find {org}.")))
+            },
+        )
         .await?;
         if found.denied {
             return Err(FetchError::Api(
@@ -1295,7 +1329,7 @@ mod tests {
 
     #[test]
     fn splits_authors_across_searches_that_fit() {
-        let since = NaiveDate::from_ymd_opt(2026, 10, 1).unwrap();
+        let since = ">=2026-10-01";
         assert!(merged_by_searches(since, "o", &[]).is_empty());
 
         let few = vec!["ana".to_string(), "bo".to_string()];

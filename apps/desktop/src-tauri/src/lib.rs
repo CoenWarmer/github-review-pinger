@@ -154,18 +154,20 @@ async fn my_teams(poller: State<'_, Arc<Poller>>) -> Result<Vec<String>, String>
 async fn load_stats(
     team: Option<String>,
     days: i64,
+    previous: bool,
     poller: State<'_, Arc<Poller>>,
 ) -> Result<github::StatsData, String> {
-    poller.stats(team, days).await
+    poller.stats(team, days, previous).await
 }
 
 #[tauri::command]
 async fn load_review_stats(
     team: Option<String>,
     days: i64,
+    previous: bool,
     poller: State<'_, Arc<Poller>>,
 ) -> Result<github::ReviewStatsData, String> {
-    poller.review_stats(team, days).await
+    poller.review_stats(team, days, previous).await
 }
 
 #[tauri::command]

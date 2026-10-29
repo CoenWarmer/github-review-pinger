@@ -51,6 +51,37 @@ export function averageCodeOwners(prs: PullRequest[]): Average {
   return averageOf(reviewable(prs).map((pr) => pr.codeOwners ?? 0));
 }
 
+/** How a number moved since the window before it. */
+export interface Change {
+  direction: "up" | "down" | "same";
+  /** "▲ 56 (was 4)", "▼ 3 (was 10)" or "no change (was 7)". */
+  text: string;
+}
+
+/** Whole numbers as they are, anything else to a tenth. */
+function plain(n: number): string {
+  return Number.isInteger(n) ? String(n) : (Math.round(n * 10) / 10).toString();
+}
+
+/**
+ * How `current` compares with `previous`: the direction, the size of the
+ * move, and what it was. Sizes under `tiny` (a rounding error, or under a
+ * minute for durations) count as no change. The size, not a percentage, so a
+ * jump from 4 to 60 doesn't read as "+1400%".
+ */
+export function change(
+  current: number,
+  previous: number,
+  format: (n: number) => string = plain,
+  tiny = 0.05,
+): Change {
+  const diff = current - previous;
+  if (Math.abs(diff) < tiny) return { direction: "same", text: `no change (was ${format(previous)})` };
+  return diff > 0
+    ? { direction: "up", text: `▲ ${format(diff)} (was ${format(previous)})` }
+    : { direction: "down", text: `▼ ${format(-diff)} (was ${format(previous)})` };
+}
+
 /** PRs merged per team member, or null when there are no members to divide by. */
 export function perMember(merged: number | null, members: number): number | null {
   return merged === null || members <= 0 ? null : merged / members;
