@@ -362,6 +362,7 @@ mod tests {
             merge_enqueued_at: None,
             queued: false,
             reviewers: Vec::new(),
+            code_owners: 0,
             responses,
         }
     }

@@ -8,7 +8,14 @@ import { Switch } from "@/components/ui/switch";
 import { TeamChannelForm } from "../slack";
 import { ago } from "../format";
 import { useNow } from "../hooks";
-import type { SectionPref, SyncStatus, TeamChannel, Theme, TokenSource, View } from "../types";
+import type {
+  SectionPref,
+  SyncStatus,
+  TeamChannel,
+  Theme,
+  TokenSource,
+  View,
+} from "../types";
 import { MyPrsSections } from "./MyPrsSections";
 import { SYNC_ABOUT, SYNC_LABEL } from "./Setup";
 import { ViewsSettings } from "./ViewsSettings";

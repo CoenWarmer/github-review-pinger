@@ -277,6 +277,9 @@ pub enum CheckState {
 #[serde(rename_all = "camelCase")]
 pub struct ReviewRequest {
     pub requested_reviewer: Option<RequestedReviewer>,
+    /// The reviewer was asked because they own the files, by CODEOWNERS.
+    #[serde(default)]
+    pub as_code_owner: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]

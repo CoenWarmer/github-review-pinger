@@ -6,7 +6,7 @@ import type { Platform, Snapshot } from "@review-pinger/app";
 /** The desktop app: everything goes through the Rust shell. */
 export const tauriPlatform: Platform = {
   version: __APP_VERSION__,
-  features: { githubCli: true, autostart: true, notifications: true, sound: true },
+  features: { githubCli: true, autostart: true, notifications: true, sound: true, buildkite: true },
 
   getSnapshot: () => invoke<Snapshot>("get_snapshot"),
   onSnapshot: (callback) => {
@@ -43,6 +43,12 @@ export const tauriPlatform: Platform = {
   },
   loadMoreMerged: () => invoke("load_more_merged"),
   searchPullRequests: (text) => invoke("search_pull_requests", { text }),
+  listTeams: () => invoke("my_teams"),
+  loadStats: (team, days, previous = false) => invoke("load_stats", { team, days, previous }),
+  loadCiStats: (days, previous = false) => invoke("load_ci_stats", { days, previous }),
+  setBuildkitePipeline: (name) => invoke("set_buildkite_pipeline", { name }),
+  loadReviewStats: (team, days, previous = false) =>
+    invoke("load_review_stats", { team, days, previous }),
   addView: (name, query) => {
     invoke("add_view", { name, query });
   },

@@ -2,13 +2,14 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
   createGithub,
+  mergedBySearches,
   couldBeReady,
   FetchError,
   type Queries,
   type RawPullRequest,
 } from "./github.ts";
 
-const queries: Queries = { search: "SEARCH", details: "DETAILS", mergeState: "MERGE", mergedSearch: "MERGED", prSearch: "PRSEARCH" };
+const queries: Queries = { search: "SEARCH", details: "DETAILS", mergeState: "MERGE", mergedSearch: "MERGED", prSearch: "PRSEARCH", statsMerged: "STATS" };
 
 type Handler = (body: {
   query: string;
@@ -397,4 +398,293 @@ describe("couldBeReady", () => {
   });
   it("counts a PR without checks as green", () =>
     assert.ok(couldBeReady({ ...base, commits: { nodes: [] } })));
+});
+
+describe("statistics", () => {
+  it("splits team members across searches that fit, each login in exactly one", () => {
+    assert.deepEqual(mergedBySearches(">=2026-10-01", "o", []), []);
+    assert.deepEqual(mergedBySearches(">=2026-10-01", "o", ["ana", "bo"]), [
+      "is:pr is:merged merged:>=2026-10-01 org:o author:ana author:bo",
+    ]);
+    const many = Array.from({ length: 120 }, (_, i) => `member-number-${i}`);
+    const searches = mergedBySearches(">=2026-10-01", "o", many);
+    assert.ok(searches.length > 1);
+    assert.ok(searches.every((s) => s.length <= 250));
+    assert.equal(searches.join(" ").split(" author:").length - 1, many.length);
+  });
+
+  it("counts your merged PRs and a team's, and samples when reviews came", async () => {
+    const seen: string[] = [];
+    const gh = github(({ query, variables }) => {
+      if (query === "STATS") {
+        seen.push(String(variables.q));
+        return reply({
+          search: {
+            issueCount: 60,
+            nodes: [
+              {
+                createdAt: "2026-09-30T08:00:00Z",
+                mergedAt: "2026-10-02T08:00:00Z",
+                // Opened as a draft, then marked ready; events arrive in any order.
+                draftEvents: {
+                  nodes: [
+                    { __typename: "ConvertToDraftEvent", createdAt: "2026-10-01T09:00:00Z" },
+                    { __typename: "ReadyForReviewEvent", createdAt: "2026-09-30T12:00:00Z" },
+                    { __typename: "SomethingElse", createdAt: "2026-09-30T13:00:00Z" },
+                  ],
+                },
+                timelineItems: { nodes: [{ createdAt: "2026-10-01T10:00:00Z" }] },
+                reviews: { nodes: [{ submittedAt: "2026-10-01T12:00:00Z", author: { login: "ana" } }, { submittedAt: null, author: null }] },
+                // Each reviewer's latest opinion: only the approvals are kept.
+                approvals: {
+                  nodes: [
+                    { state: "APPROVED", submittedAt: "2026-10-01T14:00:00Z", author: { login: "ana" } },
+                    { state: "CHANGES_REQUESTED", submittedAt: "2026-10-01T13:00:00Z", author: { login: "bo" } },
+                    { state: "APPROVED", submittedAt: null, author: { login: "cy" } },
+                  ],
+                },
+              },
+              null,
+              // Not merged, so nothing to time.
+              { createdAt: "2026-10-01T00:00:00Z", mergedAt: null, draftEvents: { nodes: [] }, timelineItems: { nodes: [] }, reviews: { nodes: [] }, approvals: { nodes: [] } },
+              {
+                createdAt: "2026-10-03T08:00:00Z",
+                mergedAt: "2026-10-03T09:00:00Z",
+                draftEvents: { nodes: [] },
+                timelineItems: { nodes: [] },
+                reviews: { nodes: [] },
+                approvals: { nodes: [] },
+              },
+            ],
+          },
+        });
+      }
+      // The team lookup, then the aliased counts.
+      if (query.includes("members(first: 100")) {
+        return reply({ t0: { team: { members: { nodes: [{ login: "ana" }, { login: "bo" }], pageInfo: { hasNextPage: false, endCursor: null } } } } });
+      }
+      seen.push(query);
+      if (query.includes("me: search(")) return reply({ me: { issueCount: 14 } });
+      // A small team is counted member by member: ana 30, bo 11.
+      return reply({ m0: { issueCount: 30 }, m1: { issueCount: 11 } });
+    });
+    const stats = await gh.fetchStats("o/core", ">=2026-09-29");
+    assert.equal(stats.mergedByMe, 60);
+    // In the team's org only, the scope the team's count is in.
+    assert.equal(stats.mergedByMeInTeamOrg, 14);
+    assert.equal(stats.mergedByTeam, 41);
+    assert.equal(stats.teamMembersCapped, false);
+    assert.equal(stats.teamMemberCount, 2);
+    assert.deepEqual(stats.teamMemberMerged, [30, 11]);
+    assert.deepEqual(stats.sample, [
+      {
+        createdAt: "2026-09-30T08:00:00Z",
+        mergedAt: "2026-10-02T08:00:00Z",
+        // Oldest first, and only the kinds that matter.
+        draftEvents: [
+          { kind: "ready", at: "2026-09-30T12:00:00Z" },
+          { kind: "draft", at: "2026-10-01T09:00:00Z" },
+        ],
+        requestedAt: "2026-10-01T10:00:00Z",
+        reviews: [{ by: "ana", at: "2026-10-01T12:00:00Z" }],
+        approvals: [{ by: "ana", at: "2026-10-01T14:00:00Z" }],
+      },
+      {
+        createdAt: "2026-10-03T08:00:00Z",
+        mergedAt: "2026-10-03T09:00:00Z",
+        draftEvents: [],
+        requestedAt: null,
+        reviews: [],
+        approvals: [],
+      },
+    ]);
+    assert.ok(seen[0].startsWith("is:pr is:merged author:@me merged:>=2026-09-29"));
+    assert.ok(seen.some((q) => q.includes("org:o author:ana")));
+    assert.ok(seen.some((q) => q.includes("org:o author:bo")));
+    assert.ok(seen.some((q) => q.includes("author:@me merged:>=2026-09-29 org:o")));
+  });
+
+  it("counts a team over the cap together instead, with no per-member numbers", async () => {
+    const logins = Array.from({ length: 151 }, (_, i) => `member-${String(i).padStart(3, "0")}`);
+    const page = (nodes: string[], more: boolean) => ({
+      nodes: nodes.map((login) => ({ login })),
+      pageInfo: { hasNextPage: more, endCursor: more ? "next" : null },
+    });
+    const seen: string[] = [];
+    const gh = github(({ query, variables }) => {
+      if (query === "STATS") return reply({ search: { issueCount: 5, nodes: [] } });
+      if (query.includes("members(first: 100")) {
+        return variables.after
+          ? reply({ organization: { team: { members: page(logins.slice(100), false) } } })
+          : reply({ t0: { team: { members: page(logins.slice(0, 100), true) } } });
+      }
+      seen.push(query);
+      if (query.includes("me: search(")) return reply({ me: { issueCount: 2 } });
+      return reply(Object.fromEntries(Array.from({ length: 20 }, (_, i) => [`s${i}`, { issueCount: 10 }])));
+    });
+    const stats = await gh.fetchStats("o/big", ">=2026-09-29");
+    assert.equal(stats.teamMemberCount, 151);
+    assert.equal(stats.teamMemberMerged, null);
+    // The aliased searches each took several authors, not one.
+    assert.ok(seen.some((q) => q.includes("s0:") && q.includes("author:member-000 author:member-001")));
+    assert.ok(!seen.some((q) => q.includes("m0:")));
+    assert.ok((stats.mergedByTeam ?? 0) > 0);
+  });
+
+  it("counts an earlier window in total, not member by member", async () => {
+    const seen: string[] = [];
+    const gh = github(({ query, variables }) => {
+      if (query === "STATS") {
+        seen.push(String(variables.q));
+        return reply({ search: { issueCount: 4, nodes: [] } });
+      }
+      if (query.includes("members(first: 100")) {
+        return reply({ t0: { team: { members: { nodes: [{ login: "ana" }, { login: "bo" }], pageInfo: { hasNextPage: false, endCursor: null } } } } });
+      }
+      seen.push(query);
+      if (query.includes("me: search(")) return reply({ me: { issueCount: 2 } });
+      return reply({ s0: { issueCount: 33 } });
+    });
+    const stats = await gh.fetchStats("o/core", "2026-08-30..2026-09-28", false);
+    assert.equal(stats.mergedByMe, 4);
+    assert.equal(stats.mergedByMeInTeamOrg, 2);
+    assert.equal(stats.mergedByTeam, 33);
+    assert.equal(stats.teamMemberCount, 2);
+    assert.equal(stats.teamMemberMerged, null);
+    // The earlier dates go to every search, and no member got a search of their own.
+    assert.ok(seen.every((q) => q.includes("merged:2026-08-30..2026-09-28")));
+    assert.ok(!seen.some((q) => q.includes("m0:")));
+  });
+
+  it("skips the team count without a team, and says what a missing scope blocks", async () => {
+    const gh = github(({ query }) =>
+      query === "STATS"
+        ? reply({ search: { issueCount: 3, nodes: [] } })
+        : new Response(JSON.stringify({ data: { viewer: { login: "me", organizations: { nodes: [] } } }, errors: [{ type: "INSUFFICIENT_SCOPES", message: "needs read:org" }] }), { status: 200 }),
+    );
+    const stats = await gh.fetchStats(null, ">=2026-09-29");
+    assert.deepEqual(stats, { mergedByMe: 3, mergedByMeInTeamOrg: null, mergedByTeam: null, teamMembersCapped: false, teamMemberCount: 0, teamMemberMerged: null, sample: [] });
+    await assert.rejects(gh.fetchMyTeams(), /read:org/);
+  });
+
+  it("lists your teams across organizations as org/slug", async () => {
+    const gh = github(({ query }) =>
+      query.includes("organizations(first")
+        ? reply({ viewer: { login: "me", organizations: { nodes: [{ login: "Elastic" }, { login: "other" }] } } })
+        : reply({
+            o0: { login: "Elastic", teams: { nodes: [{ slug: "Kibana-Core" }, { slug: "ops" }] } },
+            o1: { login: "other", teams: { nodes: [] } },
+          }),
+    );
+    assert.deepEqual(await gh.fetchMyTeams(), ["elastic/kibana-core", "elastic/ops"]);
+  });
+});
+
+describe("review statistics", () => {
+  const WINDOW = ["2026-09-29T00:00:00.000Z", "2026-10-29T00:00:00.000Z"] as const;
+
+  /** A fake GitHub for a team of `logins`; `members` answers the per-member lookups. */
+  function reviewGithub(
+    logins: string[],
+    members: (batch: string) => Record<string, unknown>,
+    seen: { query: string; variables: Record<string, unknown> }[] = [],
+  ) {
+    const page = (nodes: string[], more: boolean) => ({
+      nodes: nodes.map((login) => ({ login })),
+      pageInfo: { hasNextPage: more, endCursor: more ? "next" : null },
+    });
+    return github(({ query, variables }) => {
+      seen.push({ query, variables });
+      if (query.includes("organization(login: $org) { id }")) return reply({ organization: { id: "ORG1" } });
+      if (query.includes("members(first: 100")) {
+        const big = logins.length > 100;
+        return variables.after
+          ? reply({ organization: { team: { members: page(logins.slice(100), false) } } })
+          : reply({ t0: { team: { members: page(logins.slice(0, 100), big) } } });
+      }
+      if (query.includes("u0:")) return reply(members(query));
+      // Your own count, in all repos or in the org.
+      return reply({
+        viewer: { contributionsCollection: { totalPullRequestReviewContributions: variables.org ? 30 : 37 } },
+      });
+    });
+  }
+
+  it("counts your reviews, in all repos and in the team's org, and each member's", async () => {
+    const seen: { query: string; variables: Record<string, unknown> }[] = [];
+    const gh = reviewGithub(
+      ["ana", "bo"],
+      () => ({ u0: { c: { totalPullRequestReviewContributions: 5 } }, u1: { c: { totalPullRequestReviewContributions: 9 } } }),
+      seen,
+    );
+    const stats = await gh.fetchReviewStats("o/core", ...WINDOW);
+    assert.deepEqual(stats, {
+      reviewsByMe: 37,
+      reviewsByMeInTeamOrg: 30,
+      teamMemberCount: 2,
+      teamMemberReviews: [5, 9],
+    });
+    // The window and the org id go to GitHub as variables.
+    const own = seen.filter((s) => s.query.includes("viewer {"));
+    assert.ok(own.some((s) => s.variables.org === null && s.variables.from === WINDOW[0] && s.variables.to === WINDOW[1]));
+    assert.ok(own.some((s) => s.variables.org === "ORG1"));
+    assert.ok(seen.some((s) => s.query.includes('user(login: "ana")') && s.query.includes('user(login: "bo")')));
+  });
+
+  it("leaves a login GitHub doesn't know out, rather than counting it as zero", async () => {
+    const gh = reviewGithub(["ana", "gone"], () => ({
+      u0: { c: { totalPullRequestReviewContributions: 4 } },
+      u1: null,
+    }));
+    const stats = await gh.fetchReviewStats("o/core", ...WINDOW);
+    assert.deepEqual(stats.teamMemberReviews, [4]);
+    assert.equal(stats.teamMemberCount, 2);
+  });
+
+  it("is just your own count without a team", async () => {
+    const seen: { query: string; variables: Record<string, unknown> }[] = [];
+    const gh = reviewGithub([], () => ({}), seen);
+    assert.deepEqual(await gh.fetchReviewStats(null, ...WINDOW), {
+      reviewsByMe: 37,
+      reviewsByMeInTeamOrg: null,
+      teamMemberCount: 0,
+      teamMemberReviews: null,
+    });
+    assert.equal(seen.length, 1);
+  });
+
+  it("counts no member for a team over the cap, as GitHub counts these per person", async () => {
+    const logins = Array.from({ length: 151 }, (_, i) => `member-${String(i).padStart(3, "0")}`);
+    const seen: { query: string; variables: Record<string, unknown> }[] = [];
+    const gh = reviewGithub(logins, () => ({}), seen);
+    const stats = await gh.fetchReviewStats("o/big", ...WINDOW);
+    assert.equal(stats.teamMemberCount, 151);
+    assert.equal(stats.teamMemberReviews, null);
+    assert.equal(stats.reviewsByMeInTeamOrg, 30);
+    assert.ok(!seen.some((s) => s.query.includes("u0:")));
+  });
+
+  it("counts an earlier window for you alone, without looking the team up", async () => {
+    const seen: { query: string; variables: Record<string, unknown> }[] = [];
+    const gh = reviewGithub(["ana", "bo"], () => ({}), seen);
+    const stats = await gh.fetchReviewStats("o/core", ...WINDOW, false);
+    assert.deepEqual(stats, {
+      reviewsByMe: 37,
+      reviewsByMeInTeamOrg: 30,
+      teamMemberCount: 0,
+      teamMemberReviews: null,
+    });
+    assert.ok(!seen.some((s) => s.query.includes("members(first: 100") || s.query.includes("u0:")));
+  });
+
+  it("says what a missing scope blocks", async () => {
+    const gh = github(({ query }) =>
+      query.includes("members(first: 100")
+        ? new Response(JSON.stringify({ data: {}, errors: [{ type: "INSUFFICIENT_SCOPES", message: "needs read:org" }] }), { status: 200 })
+        : query.includes("organization(login: $org) { id }")
+          ? reply({ organization: { id: "ORG1" } })
+          : reply({ viewer: { contributionsCollection: { totalPullRequestReviewContributions: 1 } } }),
+    );
+    await assert.rejects(gh.fetchReviewStats("o/core", ...WINDOW), /read:org/);
+  });
 });

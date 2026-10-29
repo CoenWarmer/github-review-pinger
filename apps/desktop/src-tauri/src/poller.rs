@@ -14,6 +14,7 @@ use tauri::{AppHandle, Emitter, Manager};
 use tokio::sync::Notify;
 
 use crate::auth::{self, AuthError, TokenSource};
+use crate::buildkite;
 use crate::card;
 use crate::directory::Directory;
 use crate::engine::{self, Fetched};
@@ -70,6 +71,8 @@ pub struct Snapshot {
     pub sync: SyncStatus,
     /// Plays a sound when one of your own PRs is merged.
     pub sound_on_merge: bool,
+    /// The Buildkite pipeline the CI statistics count builds in.
+    pub buildkite_pipeline: String,
     /// Order and visibility of "My PRs" sections.
     pub my_prs_sections: Vec<SectionPref>,
     /// Merged in the last couple of days, or further back via "Load more".
@@ -253,18 +256,132 @@ impl Poller {
         &self,
         text: &str,
     ) -> Result<Vec<review_pinger_core::github::types::FoundPullRequest>, String> {
+        let token = self.search_token().await?;
+        github::search_pull_requests(&self.http, &token, text)
+            .await
+            .map_err(fetch_error_message)
+    }
+
+    /// The teams you belong to (`org/slug`), for the statistics' team choice.
+    /// Rejects with a message to show.
+    pub async fn my_teams(&self) -> Result<Vec<String>, String> {
+        let token = self.search_token().await?;
+        github::fetch_my_teams(&self.http, &token)
+            .await
+            .map_err(fetch_error_message)
+    }
+
+    /// The statistics for the last `days`, with `team` (`org/slug`) counted
+    /// too when chosen. Rejects with a message to show.
+    pub async fn stats(
+        &self,
+        team: Option<String>,
+        days: i64,
+        previous: bool,
+    ) -> Result<github::StatsData, String> {
+        let token = self.search_token().await?;
+        let today = Utc::now().date_naive();
+        // The window before it is the same length and ends the day before.
+        let window = if previous {
+            github::StatsWindow {
+                from: today - chrono::Duration::days(2 * days),
+                until: Some(today - chrono::Duration::days(days + 1)),
+            }
+        } else {
+            github::StatsWindow {
+                from: today - chrono::Duration::days(days),
+                until: None,
+            }
+        };
+        github::fetch_stats(&self.http, &token, team.as_deref(), window)
+            .await
+            .map_err(fetch_error_message)
+    }
+
+    /// The reviews submitted in the last `days`, with `team` (`org/slug`)
+    /// counted too when chosen. Rejects with a message to show.
+    pub async fn review_stats(
+        &self,
+        team: Option<String>,
+        days: i64,
+        previous: bool,
+    ) -> Result<github::ReviewStatsData, String> {
+        let token = self.search_token().await?;
+        let now = Utc::now();
+        // The earlier window is the same length and ends where this one starts.
+        let to = if previous {
+            now - chrono::Duration::days(days)
+        } else {
+            now
+        };
+        let from = to - chrono::Duration::days(days);
+        github::fetch_review_stats(&self.http, &token, team.as_deref(), from, to, !previous)
+            .await
+            .map_err(fetch_error_message)
+    }
+
+    /// Statistics over the builds on PRs you authored, from the Buildkite CLI,
+    /// for the last `days` or with `previous` the same number of days before
+    /// those. Always answers: a missing CLI or login is part of the answer.
+    ///
+    /// The PRs come from GitHub and their builds from `bk`, found by branch
+    /// (builds are created by a bot, so there's no creator to filter on). One
+    /// fetch covers both windows and is reused for a few minutes.
+    pub async fn ci_stats(&self, days: i64, previous: bool) -> buildkite::CiStats {
+        use crate::buildkite::CiStats;
+        let pipeline = self.memory.lock().unwrap().buildkite_pipeline().to_string();
+        if let Some(builds) = buildkite::recent(days, &pipeline) {
+            return buildkite::summarize(&builds, Utc::now(), days, previous);
+        }
+        let ready = tauri::async_runtime::spawn_blocking(buildkite::ready).await;
+        let bk = match ready {
+            Ok(Ok(bk)) => bk,
+            Ok(Err(answer)) => return answer,
+            Err(e) => {
+                return CiStats::Error {
+                    message: e.to_string(),
+                };
+            }
+        };
+        let token = match self.search_token().await {
+            Ok(token) => token,
+            Err(message) => return CiStats::Error { message },
+        };
+        // PRs updated since the earlier window began are the ones that can have builds in it.
+        let since = (Utc::now() - chrono::Duration::days(2 * days)).date_naive();
+        let prs = match github::fetch_my_pr_branches(&self.http, &token, since).await {
+            Ok(prs) => prs,
+            Err(e) => {
+                return CiStats::Error {
+                    message: fetch_error_message(e),
+                };
+            }
+        };
+        let named = pipeline.clone();
+        let fetched = tauri::async_runtime::spawn_blocking(move || {
+            buildkite::my_builds(&bk, &prs, days, &named)
+        })
+        .await;
+        match fetched {
+            Ok(Ok(builds)) => {
+                buildkite::remember(days, &pipeline, &builds);
+                buildkite::summarize(&builds, Utc::now(), days, previous)
+            }
+            Ok(Err(message)) => CiStats::Error { message },
+            Err(e) => CiStats::Error {
+                message: e.to_string(),
+            },
+        }
+    }
+
+    /// A token for a request the user asked for, or the message to show.
+    async fn search_token(&self) -> Result<String, String> {
         let chosen = self.auth_source();
-        let token = tauri::async_runtime::spawn_blocking(move || auth::resolve_token(chosen))
+        tauri::async_runtime::spawn_blocking(move || auth::resolve_token(chosen))
             .await
             .map_err(|e| e.to_string())?
-            .map_err(|_| "Could not get a GitHub token to search with.".to_string())?;
-        github::search_pull_requests(&self.http, &token.value, text)
-            .await
-            .map_err(|e| match e {
-                github::FetchError::RateLimited { .. } => "GitHub's rate limit was reached.".into(),
-                github::FetchError::Unauthorized => "GitHub rejected the token.".into(),
-                github::FetchError::Network(m) | github::FetchError::Api(m) => m,
-            })
+            .map(|token| token.value)
+            .map_err(|_| "Could not get a GitHub token.".to_string())
     }
 
     /// Whether a token pasted but not yet saved can use gists.
@@ -400,13 +517,18 @@ impl Poller {
     /// Updates the snapshot from the last fetch, after snoozes or a single
     /// PR changed.
     fn rederive(&self, app: &AppHandle) {
-        let (sections, views) = {
+        let (sections, views, pipeline) = {
             let memory = self.memory.lock().unwrap();
-            (memory.my_prs_sections(), memory.views.clone())
+            (
+                memory.my_prs_sections(),
+                memory.views.clone(),
+                memory.buildkite_pipeline().to_string(),
+            )
         };
         self.update(app, |s| {
             s.my_prs_sections = sections;
             s.views = views;
+            s.buildkite_pipeline = pipeline;
         });
         let latest = self.latest.lock().unwrap();
         if let Some(fetched) = latest.as_ref() {
@@ -421,6 +543,25 @@ impl Poller {
                 s.team_lookup_denied = denied;
             });
         }
+    }
+
+    /// Chooses the Buildkite pipeline the CI statistics count builds in, and
+    /// shares it with other devices. Rejects with a message to show when it
+    /// isn't a pipeline name.
+    pub fn set_buildkite_pipeline(&self, app: &AppHandle, name: &str) -> Result<(), String> {
+        let pipeline = {
+            let mut memory = self.memory.lock().unwrap();
+            if !memory.set_buildkite_pipeline(name, Utc::now()) {
+                return Err(
+                    "A pipeline name is letters, digits, dashes, underscores and dots.".to_string(),
+                );
+            }
+            self.save(&memory);
+            memory.buildkite_pipeline().to_string()
+        };
+        self.update(app, |s| s.buildkite_pipeline = pipeline);
+        self.sync_wake.notify_one();
+        Ok(())
     }
 
     /// Saves the order and visibility of "My PRs" sections, and refreshes
@@ -618,6 +759,7 @@ pub fn start(app: &AppHandle) -> Arc<Poller> {
                 error: None,
             },
             sound_on_merge: memory.sound.pr_merged,
+            buildkite_pipeline: memory.buildkite_pipeline().to_string(),
             my_prs_sections: memory.my_prs_sections(),
             merged_pull_requests: Vec::new(),
             merged_can_load_more: false,
@@ -954,6 +1096,15 @@ async fn fetch_and_sync(
         poller.sync(app, &token.value)
     );
     fetched
+}
+
+/// What to tell the user about a failed request they asked for.
+fn fetch_error_message(error: FetchError) -> String {
+    match error {
+        FetchError::RateLimited { .. } => "GitHub's rate limit was reached.".into(),
+        FetchError::Unauthorized => "GitHub rejected the token.".into(),
+        FetchError::Network(message) | FetchError::Api(message) => message,
+    }
 }
 
 /// Waits for a snooze or channel to change, then shares it.

@@ -1,5 +1,14 @@
 import { createContext, useContext, type ReactNode } from "react";
-import type { FoundPr, SectionPref, Snapshot, Theme, TokenSource } from "./types";
+import type {
+  CiStats,
+  FoundPr,
+  ReviewStatsData,
+  SectionPref,
+  Snapshot,
+  StatsData,
+  Theme,
+  TokenSource,
+} from "./types";
 
 /**
  * What the UI needs from whatever hosts it: the desktop app talks to its Rust
@@ -19,6 +28,8 @@ export interface Platform {
     notifications: boolean;
     /** A sound can be played for events, such as one of your PRs merging. */
     sound: boolean;
+    /** CI build statistics can be loaded, through the Buildkite CLI. */
+    buildkite: boolean;
   };
 
   getSnapshot(): Promise<Snapshot>;
@@ -47,6 +58,33 @@ export interface Platform {
    * search qualifiers). Rejects with a message to show.
    */
   searchPullRequests(text: string): Promise<FoundPr[]>;
+
+  /** The teams you belong to (`org/slug`). Rejects with a message to show. */
+  listTeams(): Promise<string[]>;
+  /**
+   * Your merged PRs over the last `days`, and a team's (`org/slug`) when one
+   * is given. Rejects with a message to show.
+   */
+  loadStats(team: string | null, days: number, previous?: boolean): Promise<StatsData>;
+  /**
+   * The reviews submitted over the last `days`: yours, and each member's of
+   * a team (`org/slug`) when one is given and it's small enough. Rejects with
+   * a message to show.
+   */
+  loadReviewStats(team: string | null, days: number, previous?: boolean): Promise<ReviewStatsData>;
+
+  /**
+   * Builds you created in the last `days` (or with `previous` in the same
+   * number of days before), counted and timed by the Buildkite CLI. Only where
+   * `features.buildkite`. Always answers: no CLI or login is part of it.
+   */
+  loadCiStats(days: number, previous?: boolean): Promise<CiStats>;
+  /**
+   * Chooses the Buildkite pipeline the CI statistics count builds in. It's
+   * saved and synced with your other devices. Rejects with a message to show
+   * when what was typed isn't a pipeline name.
+   */
+  setBuildkitePipeline(name: string): Promise<void>;
 
   /** Adds a custom view and shows it right away. */
   addView(name: string, query: string): void;

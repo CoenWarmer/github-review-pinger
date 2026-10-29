@@ -64,6 +64,7 @@ fragment PullRequestFields on PullRequest {
   }
   reviewRequests(first: 25) {
     nodes {
+      asCodeOwner
       requestedReviewer {
         __typename
         ... on User {

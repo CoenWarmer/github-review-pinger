@@ -37,6 +37,62 @@ export interface FoundPr {
   updatedAt: string;
 }
 
+/** What the Statistics section is drawn from, over a window of days. */
+export interface StatsData {
+  /** All of your PRs merged in the window, in any repo. */
+  mergedByMe: number;
+  /** Your PRs merged in the window in the chosen team's organization, the
+   * scope the team's count is in too; null with no team. */
+  mergedByMeInTeamOrg: number | null;
+  /** PRs merged by the chosen team's members in the window; null with no team. */
+  mergedByTeam: number | null;
+  /** The team has more members than are looked up, so its count is short. */
+  teamMembersCapped: boolean;
+  /** How many members of the team were looked up; 0 with no team. */
+  teamMemberCount: number;
+  /** What each member merged, in no particular order, for a team small
+   * enough to count member by member; null otherwise. */
+  teamMemberMerged: number[] | null;
+  /** Up to 100 of your merged PRs, newest first. */
+  sample: {
+    /** When the PR was opened. */
+    createdAt: string;
+    /** When it was merged. */
+    mergedAt: string;
+    /** Each time it was marked ready for review or turned back into a draft,
+     * oldest first. A PR opened as a draft starts with a ready event. */
+    draftEvents: { kind: "ready" | "draft"; at: string }[];
+    requestedAt: string | null;
+    reviews: { by: string | null; at: string }[];
+    /** The approvals still in effect when it merged, one per reviewer. */
+    approvals: { by: string | null; at: string }[];
+  }[];
+}
+
+/** What the review chart is drawn from, over a window of days. */
+export interface ReviewStatsData {
+  /** Reviews you submitted, in any repo. */
+  reviewsByMe: number;
+  /** Reviews you submitted in the chosen team's organization, the scope the
+   * team's counts are in; null with no team. */
+  reviewsByMeInTeamOrg: number | null;
+  /** How many members of the team were looked up; 0 with no team. */
+  teamMemberCount: number;
+  /** What each member reviewed in the org, in no particular order, for a
+   * team small enough to count member by member; null otherwise. */
+  teamMemberReviews: number[] | null;
+}
+
+/**
+ * CI build statistics from the Buildkite CLI, over builds you created. A
+ * missing CLI or login is an answer, not a failure, so the UI can explain it.
+ */
+export type CiStats =
+  | { kind: "ok"; builds: number }
+  | { kind: "notInstalled" }
+  | { kind: "notLoggedIn" }
+  | { kind: "error"; message: string };
+
 /** How the UI looks: a fixed appearance, or whatever the system uses. */
 export type Theme = "system" | "light" | "dark";
 
@@ -107,6 +163,9 @@ export interface PullRequest {
   /** When it entered the merge queue. */
   mergeEnqueuedAt: string | null;
   reviewers: Reviewer[];
+  /** Pending review requests made because of CODEOWNERS. Missing in lists
+   * saved before it existed. */
+  codeOwners?: number;
 }
 
 export interface ReviewRequest {
@@ -186,6 +245,8 @@ export interface Snapshot {
   theme: Theme;
   /** Plays a sound when one of your own PRs is merged. */
   soundOnMerge: boolean;
+  /** The Buildkite pipeline the CI statistics count builds in. */
+  buildkitePipeline: string;
   /** The team lookup was refused for lack of the `read:org` scope. */
   teamLookupDenied: boolean;
   /** The first load is under way and only My PRs has arrived, so a list that

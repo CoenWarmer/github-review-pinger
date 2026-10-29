@@ -1,4 +1,5 @@
 mod auth;
+mod buildkite;
 mod card;
 mod gist;
 mod github;
@@ -143,6 +144,53 @@ async fn search_pull_requests(
     poller: State<'_, Arc<Poller>>,
 ) -> Result<Vec<review_pinger_core::github::types::FoundPullRequest>, String> {
     poller.search_pull_requests(&text).await
+}
+
+#[tauri::command]
+async fn my_teams(poller: State<'_, Arc<Poller>>) -> Result<Vec<String>, String> {
+    poller.my_teams().await
+}
+
+#[tauri::command]
+async fn load_stats(
+    team: Option<String>,
+    days: i64,
+    previous: bool,
+    poller: State<'_, Arc<Poller>>,
+) -> Result<github::StatsData, String> {
+    poller.stats(team, days, previous).await
+}
+
+#[tauri::command]
+async fn load_review_stats(
+    team: Option<String>,
+    days: i64,
+    previous: bool,
+    poller: State<'_, Arc<Poller>>,
+) -> Result<github::ReviewStatsData, String> {
+    poller.review_stats(team, days, previous).await
+}
+
+/// Statistics over the builds on PRs you authored, from the Buildkite CLI.
+/// Always answers: a missing CLI or login is part of the answer, for the UI to
+/// explain.
+#[tauri::command]
+async fn load_ci_stats(
+    days: i64,
+    previous: bool,
+    poller: State<'_, Arc<Poller>>,
+) -> Result<buildkite::CiStats, ()> {
+    Ok(poller.ci_stats(days, previous).await)
+}
+
+/// Chooses the Buildkite pipeline the CI statistics count builds in.
+#[tauri::command]
+fn set_buildkite_pipeline(
+    app: AppHandle,
+    poller: State<Arc<Poller>>,
+    name: String,
+) -> Result<(), String> {
+    poller.set_buildkite_pipeline(&app, &name)
 }
 
 #[tauri::command]
@@ -297,6 +345,11 @@ pub fn run() {
             set_my_prs_sections,
             load_more_merged,
             search_pull_requests,
+            my_teams,
+            load_stats,
+            load_review_stats,
+            load_ci_stats,
+            set_buildkite_pipeline,
             add_view,
             update_view,
             remove_view,

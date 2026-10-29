@@ -1,7 +1,7 @@
 pub use review_pinger_core::github::types;
 use review_pinger_core::github::{
     DETAILS_QUERY, MERGE_STATE_QUERY, MERGED_QUERY, MERGED_SEARCH, MERGED_SEARCH_QUERY,
-    PR_SEARCH_QUERY, SEARCH_QUERY,
+    PR_SEARCH_QUERY, SEARCH_QUERY, STATS_MERGED_QUERY,
 };
 
 use std::collections::{HashMap, HashSet};
@@ -286,6 +286,700 @@ pub async fn search_pull_requests(
 #[derive(Deserialize)]
 struct PrSearchData {
     search: Nodes<SearchedPullRequest>,
+}
+
+/// What the Statistics section is drawn from. Averages are worked out by the
+/// UI from `sample`, the same way for every host.
+#[derive(Debug, Default, serde::Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct StatsData {
+    /// All of your PRs merged in the window, in any repo.
+    pub merged_by_me: u64,
+    /// Your PRs merged in the window in the chosen team's organization, which
+    /// is the scope the team's count is in too; `None` with no team.
+    pub merged_by_me_in_team_org: Option<u64>,
+    /// PRs merged by the team's members in the window, when a team is chosen.
+    pub merged_by_team: Option<u64>,
+    /// The team has more members than are looked up, so its count is short.
+    pub team_members_capped: bool,
+    /// How many members of the team were looked up; 0 with no team.
+    pub team_member_count: usize,
+    /// What each member merged, in no particular order, for a team small
+    /// enough to count member by member; `None` otherwise.
+    pub team_member_merged: Option<Vec<u64>>,
+    /// Up to 100 of your merged PRs, newest first.
+    pub sample: Vec<StatsSample>,
+}
+
+#[derive(Debug, serde::Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct StatsSample {
+    /// When the PR was opened.
+    pub created_at: DateTime<Utc>,
+    /// When it was merged.
+    pub merged_at: DateTime<Utc>,
+    /// Each time it was marked ready for review or turned back into a draft,
+    /// oldest first. A PR opened as a draft starts with a ready event.
+    pub draft_events: Vec<StatsDraftEvent>,
+    /// When the first review was asked for, if ever.
+    pub requested_at: Option<DateTime<Utc>>,
+    pub reviews: Vec<StatsReview>,
+    /// The approvals still in effect when it merged, one per reviewer.
+    pub approvals: Vec<StatsReview>,
+}
+
+#[derive(Debug, serde::Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct StatsDraftEvent {
+    /// `ready` or `draft`.
+    pub kind: &'static str,
+    pub at: DateTime<Utc>,
+}
+
+#[derive(Debug, serde::Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct StatsReview {
+    pub by: Option<String>,
+    pub at: DateTime<Utc>,
+}
+
+/// GitHub rejects search text over 256 characters.
+const MAX_SEARCH_CHARS: usize = 250;
+/// How many members of a team are looked up: `MAX_MEMBER_PAGES` of 100.
+const MEMBERS_READ_LIMIT: usize = MAX_MEMBER_PAGES * 100;
+/// Teams up to this size are counted member by member, which the median
+/// needs. Bigger ones are counted together in a few searches, as one number.
+const MEMBER_COUNT_CAP: usize = 150;
+/// Measured against a real account: members per query and queries at once.
+const MEMBERS_PER_QUERY: usize = 8;
+const MEMBER_QUERIES_AT_ONCE: usize = 10;
+
+fn quote_text(text: &str) -> String {
+    serde_json::to_string(text).expect("a string serializes")
+}
+
+/// What each of `logins` merged in `org` in the date `range` (GitHub's
+/// `merged:` syntax, such as `>=2026-10-01`), in no particular
+/// order: one aliased search per member, several to a request.
+async fn member_counts(
+    http: &reqwest::Client,
+    token: &str,
+    range: &str,
+    org: &str,
+    logins: &[String],
+) -> Result<Vec<u64>, FetchError> {
+    // Owned queries keep the stream's closure free of borrowed arguments,
+    // which a Send future spawned on the runtime can't express.
+    let queries: Vec<(String, usize)> = logins
+        .chunks(MEMBERS_PER_QUERY)
+        .map(|chunk| {
+            let aliases: String = chunk
+                .iter()
+                .enumerate()
+                .map(|(i, login)| {
+                    format!(
+                        "m{i}: search(type: ISSUE, query: {}) {{ issueCount }}\n",
+                        quote_text(&format!(
+                            "is:pr is:merged merged:{range} org:{org} author:{login}"
+                        ))
+                    )
+                })
+                .collect();
+            (format!("query {{\n{aliases}}}"), chunk.len())
+        })
+        .collect();
+    let batches: Vec<Vec<u64>> = stream::iter(queries)
+        .map(|(query, len)| async move {
+            let reply: Response<Value> = request(http, token, &query, json!({})).await?;
+            Ok::<_, FetchError>(
+                (0..len)
+                    .map(|i| {
+                        reply.data[format!("m{i}")]["issueCount"]
+                            .as_u64()
+                            .unwrap_or(0)
+                    })
+                    .collect::<Vec<u64>>(),
+            )
+        })
+        .buffer_unordered(MEMBER_QUERIES_AT_ONCE)
+        .try_collect()
+        .await?;
+    Ok(batches.into_iter().flatten().collect())
+}
+
+/// Search texts that count PRs merged in the date `range` in `org` by any of
+/// `logins`: several `author:` qualifiers match any of them, but only so many
+/// fit in one search, so the logins are split across as few as will hold them.
+fn merged_by_searches(range: &str, org: &str, logins: &[String]) -> Vec<String> {
+    let start = format!("is:pr is:merged merged:{range} org:{org}");
+    let mut searches = Vec::new();
+    let mut current = start.clone();
+    for login in logins {
+        let author = format!(" author:{login}");
+        if current != start && current.len() + author.len() > MAX_SEARCH_CHARS {
+            searches.push(std::mem::replace(&mut current, start.clone()));
+        }
+        current += &author;
+    }
+    if current != start {
+        searches.push(current);
+    }
+    searches
+}
+
+/// The days the merge statistics cover. An `until` makes it an earlier window,
+/// for the comparison, which skips the per-member counts: the combined
+/// searches give the team's total for a fraction of the requests.
+#[derive(Debug, Clone, Copy)]
+pub struct StatsWindow {
+    pub from: NaiveDate,
+    pub until: Option<NaiveDate>,
+}
+
+impl StatsWindow {
+    /// GitHub's `merged:` text for it.
+    fn range(&self) -> String {
+        match self.until {
+            Some(until) => format!("{}..{until}", self.from),
+            None => format!(">={}", self.from),
+        }
+    }
+}
+
+/// The statistics for the window: your merged PRs, and when a team is chosen
+/// (`org/slug`, which needs `read:org`) what its members merged.
+pub async fn fetch_stats(
+    http: &reqwest::Client,
+    token: &str,
+    team: Option<&str>,
+    window: StatsWindow,
+) -> Result<StatsData, FetchError> {
+    let range = window.range();
+    let mine = async {
+        let reply: Response<StatsMergedData> = request(
+            http,
+            token,
+            STATS_MERGED_QUERY,
+            json!({ "q": format!("is:pr is:merged author:@me merged:{range} sort:updated-desc") }),
+        )
+        .await?;
+        let search = reply.data.search;
+        let sample = search
+            .nodes
+            .into_iter()
+            .flatten()
+            // A PR with no merge time can't have merged; there's nothing to time.
+            .filter_map(|pr| {
+                let merged_at = pr.merged_at?;
+                Some((pr, merged_at))
+            })
+            .map(|(pr, merged_at)| StatsSample {
+                created_at: pr.created_at,
+                merged_at,
+                draft_events: {
+                    let mut events: Vec<StatsDraftEvent> = pr
+                        .draft_events
+                        .nodes
+                        .into_iter()
+                        .flatten()
+                        .filter_map(|event| {
+                            let kind = match event.typename.as_str() {
+                                "ReadyForReviewEvent" => "ready",
+                                "ConvertToDraftEvent" => "draft",
+                                _ => return None,
+                            };
+                            Some(StatsDraftEvent {
+                                kind,
+                                at: event.created_at?,
+                            })
+                        })
+                        .collect();
+                    events.sort_by_key(|event| event.at);
+                    events
+                },
+                requested_at: pr
+                    .timeline_items
+                    .nodes
+                    .into_iter()
+                    .flatten()
+                    .find_map(|event| event.created_at),
+                reviews: pr
+                    .reviews
+                    .nodes
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|review| {
+                        Some(StatsReview {
+                            by: review.author.map(|author| author.login),
+                            at: review.submitted_at?,
+                        })
+                    })
+                    .collect(),
+                approvals: pr
+                    .approvals
+                    .nodes
+                    .into_iter()
+                    .flatten()
+                    .filter(|review| review.state == "APPROVED")
+                    .filter_map(|review| {
+                        Some(StatsReview {
+                            by: review.author.map(|author| author.login),
+                            at: review.submitted_at?,
+                        })
+                    })
+                    .collect(),
+            })
+            .collect();
+        Ok::<_, FetchError>((search.issue_count, sample))
+    };
+    let team_count = async {
+        let Some(team) = team else {
+            return Ok(TeamStats::default());
+        };
+        let Some((org, slug)) = team.split_once('/') else {
+            return Err(FetchError::Api(format!("Not a team: {team}")));
+        };
+        let needs = Needs {
+            teams: [(org.to_string(), slug.to_string())].into(),
+        };
+        let found = fetch_directory(http, token, &needs).await?;
+        if found.denied {
+            return Err(FetchError::Api(
+                "Counting a team's merges needs the read:org scope.".into(),
+            ));
+        }
+        let mut logins: Vec<String> = found
+            .teams
+            .get(&Directory::key(org, slug))
+            .map(|members| members.iter().cloned().collect())
+            .unwrap_or_default();
+        logins.sort();
+        // Members are read a page at a time up to a limit, so a team that
+        // reaches it may have more.
+        let capped = logins.len() >= MEMBERS_READ_LIMIT;
+        // Your merges in the same org, so the two compare.
+        let mine_in_org = async {
+            let text = format!("is:pr is:merged author:@me merged:{range} org:{org}");
+            let query = format!(
+                "query {{ me: search(type: ISSUE, query: {}) {{ issueCount }} }}",
+                quote_text(&text)
+            );
+            let reply: Response<Value> = request(http, token, &query, json!({})).await?;
+            Ok::<_, FetchError>(reply.data["me"]["issueCount"].as_u64())
+        };
+        // The members' merges: one by one for a team small enough, which
+        // also gives the total; together, as one number, for a bigger one.
+        let members_merged = async {
+            // An earlier window is only compared in total, so no member-by-member.
+            if window.until.is_none() && logins.len() <= MEMBER_COUNT_CAP {
+                let counts = member_counts(http, token, &range, org, &logins).await?;
+                return Ok::<_, FetchError>((counts.iter().sum::<u64>(), Some(counts)));
+            }
+            let searches = merged_by_searches(&range, org, &logins);
+            let query = format!(
+                "query {{\n{}}}",
+                searches
+                    .iter()
+                    .enumerate()
+                    .map(|(i, text)| format!(
+                        "s{i}: search(type: ISSUE, query: {}) {{ issueCount }}\n",
+                        quote_text(text)
+                    ))
+                    .collect::<String>()
+            );
+            let reply: Response<Value> = request(http, token, &query, json!({})).await?;
+            let total = (0..searches.len())
+                .filter_map(|i| reply.data[format!("s{i}")]["issueCount"].as_u64())
+                .sum();
+            Ok((total, None))
+        };
+        let (mine_in_org, (total, counts)) = future::try_join(mine_in_org, members_merged).await?;
+        Ok(TeamStats {
+            merged: Some(total),
+            capped,
+            members: logins.len(),
+            mine_in_org,
+            member_counts: counts,
+        })
+    };
+    let ((merged_by_me, sample), team_stats) = future::try_join(mine, team_count).await?;
+    Ok(StatsData {
+        merged_by_me,
+        merged_by_me_in_team_org: team_stats.mine_in_org,
+        merged_by_team: team_stats.merged,
+        team_members_capped: team_stats.capped,
+        team_member_count: team_stats.members,
+        team_member_merged: team_stats.member_counts,
+        sample,
+    })
+}
+
+/// What the team part of the statistics found.
+#[derive(Default)]
+struct TeamStats {
+    merged: Option<u64>,
+    capped: bool,
+    members: usize,
+    mine_in_org: Option<u64>,
+    member_counts: Option<Vec<u64>>,
+}
+
+#[derive(Deserialize)]
+struct StatsMergedData {
+    search: StatsMergedSearch,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct StatsMergedSearch {
+    issue_count: u64,
+    nodes: Vec<Option<StatsMergedPr>>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct StatsMergedPr {
+    created_at: DateTime<Utc>,
+    merged_at: Option<DateTime<Utc>>,
+    draft_events: Nodes<StatsDraftNode>,
+    timeline_items: Nodes<StatsRequested>,
+    reviews: Nodes<StatsReviewNode>,
+    approvals: Nodes<StatsApprovalNode>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct StatsApprovalNode {
+    state: String,
+    submitted_at: Option<DateTime<Utc>>,
+    author: Option<StatsLogin>,
+}
+
+#[derive(Deserialize)]
+struct StatsDraftNode {
+    #[serde(rename = "__typename")]
+    typename: String,
+    #[serde(rename = "createdAt")]
+    created_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct StatsRequested {
+    created_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct StatsReviewNode {
+    submitted_at: Option<DateTime<Utc>>,
+    author: Option<StatsLogin>,
+}
+
+#[derive(Deserialize)]
+struct StatsLogin {
+    login: String,
+}
+
+/// What the review chart is drawn from: reviews people submitted in a window,
+/// as GitHub counts them in its contribution data.
+#[derive(Debug, Default, serde::Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ReviewStatsData {
+    /// Reviews you submitted, in any repo.
+    pub reviews_by_me: u64,
+    /// Reviews you submitted in the chosen team's organization, the scope the
+    /// team's counts are in; `None` with no team.
+    pub reviews_by_me_in_team_org: Option<u64>,
+    /// How many members of the team were looked up; 0 with no team.
+    pub team_member_count: usize,
+    /// What each member reviewed in the org, in no particular order, for a
+    /// team small enough to count member by member; `None` otherwise.
+    pub team_member_reviews: Option<Vec<u64>>,
+}
+
+const REVIEW_COUNT_QUERY: &str = "query($from: DateTime!, $to: DateTime!, $org: ID) { viewer { contributionsCollection(from: $from, to: $to, organizationID: $org) { totalPullRequestReviewContributions } } }";
+
+/// The reviews submitted in the last window: yours, and when a team is
+/// chosen (`org/slug`, which needs `read:org`) what each of its members
+/// reviewed in that organization. Teams over `MEMBER_COUNT_CAP` members get no
+/// member counts: GitHub counts these per person, so there is no cheaper way.
+/// Without `by_member`, as for an earlier window that's only compared with,
+/// the team's members aren't looked up at all, just your own two counts.
+pub async fn fetch_review_stats(
+    http: &reqwest::Client,
+    token: &str,
+    team: Option<&str>,
+    from: DateTime<Utc>,
+    to: DateTime<Utc>,
+    by_member: bool,
+) -> Result<ReviewStatsData, FetchError> {
+    let variables = |org: Option<&str>| json!({ "from": from, "to": to, "org": org });
+    let count_of = |reply: &Response<Value>| {
+        reply.data["viewer"]["contributionsCollection"]["totalPullRequestReviewContributions"]
+            .as_u64()
+            .unwrap_or(0)
+    };
+    let mine = async {
+        let reply: Response<Value> =
+            request(http, token, REVIEW_COUNT_QUERY, variables(None)).await?;
+        Ok::<_, FetchError>(count_of(&reply))
+    };
+    let team_part = async {
+        let Some(team) = team else {
+            return Ok((None, 0, None));
+        };
+        let Some((org, slug)) = team.split_once('/') else {
+            return Err(FetchError::Api(format!("Not a team: {team}")));
+        };
+        let needs = Needs {
+            teams: [(org.to_string(), slug.to_string())].into(),
+        };
+        let (found, org_id) = future::try_join(
+            async {
+                if by_member {
+                    fetch_directory(http, token, &needs).await
+                } else {
+                    Ok(Found::default())
+                }
+            },
+            async {
+                let reply: Response<Value> = request(
+                    http,
+                    token,
+                    "query($org: String!) { organization(login: $org) { id } }",
+                    json!({ "org": org }),
+                )
+                .await?;
+                reply.data["organization"]["id"]
+                    .as_str()
+                    .map(str::to_string)
+                    .ok_or_else(|| FetchError::Api(format!("Could not find {org}.")))
+            },
+        )
+        .await?;
+        if found.denied {
+            return Err(FetchError::Api(
+                "Counting a team's reviews needs the read:org scope.".into(),
+            ));
+        }
+        let mut logins: Vec<String> = found
+            .teams
+            .get(&Directory::key(org, slug))
+            .map(|members| members.iter().cloned().collect())
+            .unwrap_or_default();
+        logins.sort();
+        let in_org = async {
+            let reply: Response<Value> =
+                request(http, token, REVIEW_COUNT_QUERY, variables(Some(&org_id))).await?;
+            Ok::<_, FetchError>(count_of(&reply))
+        };
+        let members = async {
+            if logins.len() > MEMBER_COUNT_CAP {
+                return Ok::<_, FetchError>(None);
+            }
+            Ok(Some(
+                member_reviews(http, token, &org_id, from, to, &logins).await?,
+            ))
+        };
+        let (mine_in_org, counts) = future::try_join(in_org, members).await?;
+        Ok((Some(mine_in_org), logins.len(), counts))
+    };
+    let (reviews_by_me, (reviews_by_me_in_team_org, team_member_count, team_member_reviews)) =
+        future::try_join(mine, team_part).await?;
+    Ok(ReviewStatsData {
+        reviews_by_me,
+        reviews_by_me_in_team_org,
+        team_member_count,
+        team_member_reviews,
+    })
+}
+
+/// What each of `logins` reviewed in the organization `org_id`, in no
+/// particular order: one aliased lookup per member, several to a request.
+/// A login GitHub doesn't know is left out rather than counted as zero.
+async fn member_reviews(
+    http: &reqwest::Client,
+    token: &str,
+    org_id: &str,
+    from: DateTime<Utc>,
+    to: DateTime<Utc>,
+    logins: &[String],
+) -> Result<Vec<u64>, FetchError> {
+    // Owned queries keep the stream's closure free of borrowed arguments,
+    // which a Send future spawned on the runtime can't express.
+    let queries: Vec<(String, usize)> = logins
+        .chunks(MEMBERS_PER_QUERY)
+        .map(|chunk| {
+            let aliases: String = chunk
+                .iter()
+                .enumerate()
+                .map(|(i, login)| {
+                    format!(
+                        "u{i}: user(login: {}) {{ c: contributionsCollection(from: $from, to: $to, organizationID: $org) {{ totalPullRequestReviewContributions }} }}\n",
+                        quote_text(login)
+                    )
+                })
+                .collect();
+            (
+                format!("query($from: DateTime!, $to: DateTime!, $org: ID!) {{\n{aliases}}}"),
+                chunk.len(),
+            )
+        })
+        .collect();
+    let org_id = org_id.to_string();
+    let batches: Vec<Vec<u64>> = stream::iter(queries)
+        .map(|(query, len)| {
+            let org_id = org_id.clone();
+            async move {
+                let reply: Response<Value> = request(
+                    http,
+                    token,
+                    &query,
+                    json!({ "from": from, "to": to, "org": org_id }),
+                )
+                .await?;
+                Ok::<_, FetchError>(
+                    (0..len)
+                        .filter_map(|i| {
+                            reply.data[format!("u{i}")]["c"]["totalPullRequestReviewContributions"]
+                                .as_u64()
+                        })
+                        .collect::<Vec<u64>>(),
+                )
+            }
+        })
+        .buffer_unordered(MEMBER_QUERIES_AT_ONCE)
+        .try_collect()
+        .await?;
+    Ok(batches.into_iter().flatten().collect())
+}
+
+/// A PR of yours as its CI builds name it, for finding those builds.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PrBranch {
+    pub number: u64,
+    /// The branch as Buildkite records it: `owner:ref` for a PR from a fork,
+    /// the plain ref for one from the same repository.
+    pub branch: String,
+    /// The repository the branch is in, lowercase `owner/name`.
+    pub head_repo: String,
+}
+
+/// How many PRs are looked at, `PR_BRANCH_PAGES` of 100.
+const PR_BRANCH_PAGES: usize = 3;
+
+/// The PRs you authored that were updated since `since`, newest first, as
+/// their CI builds name them. Builds on a PR are created by a bot, not by the
+/// person, so these are how a person's builds are found.
+pub async fn fetch_my_pr_branches(
+    http: &reqwest::Client,
+    token: &str,
+    since: NaiveDate,
+) -> Result<Vec<PrBranch>, FetchError> {
+    const QUERY: &str = "query($q: String!, $cursor: String) { search(type: ISSUE, query: $q, first: 100, after: $cursor) { pageInfo { hasNextPage endCursor } nodes { ... on PullRequest { number headRefName isCrossRepository headRepository { nameWithOwner } headRepositoryOwner { login } } } } }";
+    let text = format!("is:pr author:@me updated:>={since} sort:updated-desc");
+    let mut found = Vec::new();
+    let mut cursor: Option<String> = None;
+    for _ in 0..PR_BRANCH_PAGES {
+        let reply: Response<Value> =
+            request(http, token, QUERY, json!({ "q": text, "cursor": cursor })).await?;
+        let search = &reply.data["search"];
+        for node in search["nodes"].as_array().into_iter().flatten() {
+            let (Some(number), Some(head_ref), Some(repo)) = (
+                node["number"].as_u64(),
+                node["headRefName"].as_str(),
+                node["headRepository"]["nameWithOwner"].as_str(),
+            ) else {
+                // The fork was deleted, so there's no branch to look for.
+                continue;
+            };
+            let branch = match node["headRepositoryOwner"]["login"].as_str() {
+                Some(owner) if node["isCrossRepository"].as_bool() == Some(true) => {
+                    format!("{owner}:{head_ref}")
+                }
+                _ => head_ref.to_string(),
+            };
+            found.push(PrBranch {
+                number,
+                branch,
+                head_repo: repo.to_lowercase(),
+            });
+        }
+        let page = &search["pageInfo"];
+        match page["endCursor"].as_str() {
+            Some(next) if page["hasNextPage"].as_bool() == Some(true) => {
+                cursor = Some(next.to_string());
+            }
+            _ => break,
+        }
+    }
+    Ok(found)
+}
+
+/// The teams you belong to, as `org/slug`, across your organizations. Needs
+/// `read:org`; without it the answer is an error saying so.
+pub async fn fetch_my_teams(
+    http: &reqwest::Client,
+    token: &str,
+) -> Result<Vec<String>, FetchError> {
+    let orgs: Response<Value> = request(
+        http,
+        token,
+        "query { viewer { login organizations(first: 50) { nodes { login } } } }",
+        json!({}),
+    )
+    .await?;
+    if orgs.scope_missing {
+        return Err(FetchError::Api(
+            "Listing your teams needs the read:org scope.".into(),
+        ));
+    }
+    let viewer = orgs.data["viewer"]["login"]
+        .as_str()
+        .unwrap_or_default()
+        .to_string();
+    let org_logins: Vec<String> = orgs.data["viewer"]["organizations"]["nodes"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|org| org["login"].as_str().map(str::to_string))
+        .collect();
+    if org_logins.is_empty() {
+        return Ok(Vec::new());
+    }
+    let quote = |s: &str| serde_json::to_string(s).expect("a string serializes");
+    let query = format!(
+        "query {{\n{}}}",
+        org_logins
+            .iter()
+            .enumerate()
+            .map(|(i, org)| format!(
+                "o{i}: organization(login: {}) {{ login teams(first: 100, userLogins: [{}]) {{ nodes {{ slug }} }} }}\n",
+                quote(org),
+                quote(&viewer)
+            ))
+            .collect::<String>()
+    );
+    let reply: Response<Value> = request(http, token, &query, json!({})).await?;
+    let mut teams: Vec<String> = (0..org_logins.len())
+        .flat_map(|i| {
+            let org = &reply.data[format!("o{i}")];
+            let login = org["login"].as_str().unwrap_or_default().to_lowercase();
+            org["teams"]["nodes"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(move |team| {
+                    team["slug"]
+                        .as_str()
+                        .map(|slug| Directory::key(&login, slug))
+                })
+                .collect::<Vec<_>>()
+        })
+        .collect();
+    teams.sort();
+    Ok(teams)
 }
 
 /// Fetches the details of specific pull requests, for refreshing a few
@@ -772,6 +1466,26 @@ fn rate_limit_reset(
 mod tests {
     use super::*;
     use crate::{auth, prs};
+
+    #[test]
+    fn splits_authors_across_searches_that_fit() {
+        let since = ">=2026-10-01";
+        assert!(merged_by_searches(since, "o", &[]).is_empty());
+
+        let few = vec!["ana".to_string(), "bo".to_string()];
+        assert_eq!(
+            merged_by_searches(since, "o", &few),
+            ["is:pr is:merged merged:>=2026-10-01 org:o author:ana author:bo"]
+        );
+
+        let many: Vec<String> = (0..120).map(|i| format!("member-number-{i}")).collect();
+        let searches = merged_by_searches(since, "o", &many);
+        assert!(searches.len() > 1);
+        assert!(searches.iter().all(|s| s.len() <= MAX_SEARCH_CHARS));
+        // Every login is in exactly one search.
+        let counted: usize = searches.iter().map(|s| s.matches(" author:").count()).sum();
+        assert_eq!(counted, many.len());
+    }
 
     fn pr(overrides: Value) -> PullRequest {
         let mut pr = json!({

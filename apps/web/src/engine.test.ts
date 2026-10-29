@@ -116,6 +116,15 @@ class FakeGithub implements Github {
   async searchPullRequests() {
     return [];
   }
+  async fetchMyTeams() {
+    return [];
+  }
+  async fetchReviewStats() {
+    return { reviewsByMe: 0, reviewsByMeInTeamOrg: null, teamMemberCount: 0, teamMemberReviews: null };
+  }
+  async fetchStats() {
+    return { mergedByMe: 0, mergedByMeInTeamOrg: null, mergedByTeam: null, teamMembersCapped: false, teamMemberCount: 0, teamMemberMerged: null, sample: [] };
+  }
   async addMergeStates() {}
   async fetchDirectory() {
     this.directoryCalls++;
@@ -224,6 +233,28 @@ describe("the web engine", () => {
     // Once there is something to show, a refresh just replaces it.
     await engine.refresh();
     assert.equal(github.partialCalls, 1);
+  });
+
+  it("uses the default Buildkite pipeline until one is chosen, then remembers it", async () => {
+    const { engine, storage } = makeEngine();
+    await engine.start();
+    assert.equal(engine.getSnapshot().buildkitePipeline, "kibana-pull-request");
+
+    engine.setBuildkitePipeline(" Kibana-On-Merge ");
+    assert.equal(engine.getSnapshot().buildkitePipeline, "kibana-on-merge");
+
+    const { engine: next } = makeEngine({ storage });
+    await next.start();
+    assert.equal(next.getSnapshot().buildkitePipeline, "kibana-on-merge");
+  });
+
+  it("rejects a Buildkite pipeline that can't be a name, and keeps the one in effect", async () => {
+    const { engine } = makeEngine();
+    await engine.start();
+    for (const bad of ["", "has space", "$(x)", "a/b"]) {
+      assert.throws(() => engine.setBuildkitePipeline(bad), /pipeline name/);
+    }
+    assert.equal(engine.getSnapshot().buildkitePipeline, "kibana-pull-request");
   });
 
   it("follows the system theme until one is chosen, then remembers it", async () => {

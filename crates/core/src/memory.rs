@@ -55,6 +55,26 @@ pub struct Memory {
     /// Custom "My PRs" sections backed by your own GitHub search queries.
     #[serde(default)]
     pub views: Vec<View>,
+    /// The Buildkite pipeline the CI statistics count builds in, once chosen;
+    /// read through [`Memory::buildkite_pipeline`], which has the default.
+    #[serde(default)]
+    pub buildkite_pipeline: Option<String>,
+}
+
+/// The pipeline the CI statistics look at until another is chosen.
+pub const DEFAULT_BUILDKITE_PIPELINE: &str = "kibana-pull-request";
+
+/// A pipeline slug from what was typed: trimmed and lowercase, or `None` when
+/// it can't be one. Buildkite slugs are letters, digits, dashes, underscores
+/// and dots, and a hand-edited gist shouldn't put anything else on a command line.
+pub fn clean_pipeline(text: &str) -> Option<String> {
+    let slug = text.trim().to_lowercase();
+    let valid = !slug.is_empty()
+        && slug.len() <= 100
+        && slug
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'));
+    valid.then_some(slug)
 }
 
 /// How the UI looks: a fixed light or dark appearance, or the system's.
@@ -210,6 +230,27 @@ impl Memory {
         self.sync.sections_changed_at = Some(now);
     }
 
+    /// The Buildkite pipeline the CI statistics count builds in.
+    pub fn buildkite_pipeline(&self) -> &str {
+        self.buildkite_pipeline
+            .as_deref()
+            .unwrap_or(DEFAULT_BUILDKITE_PIPELINE)
+    }
+
+    /// Chooses the pipeline, from what was typed. Returns whether it was a
+    /// pipeline name; one that's already in effect is accepted and changes
+    /// nothing, so it doesn't count as a change to sync.
+    pub fn set_buildkite_pipeline(&mut self, name: &str, now: DateTime<Utc>) -> bool {
+        let Some(slug) = clean_pipeline(name) else {
+            return false;
+        };
+        if slug != self.buildkite_pipeline() {
+            self.buildkite_pipeline = Some(slug);
+            self.sync.buildkite_pipeline_changed_at = Some(now);
+        }
+        true
+    }
+
     /// Adds a custom view and returns it, so the caller can show it right away.
     pub fn add_view(&mut self, name: String, query: String, now: DateTime<Utc>) -> &View {
         let id = format!("v{}", now.timestamp_nanos_opt().unwrap_or_default());
@@ -239,5 +280,64 @@ impl Memory {
             });
         }
         self.sync.views.insert(id.to_string(), now);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn at(s: &str) -> DateTime<Utc> {
+        s.parse().unwrap()
+    }
+
+    #[test]
+    fn the_pipeline_is_the_default_until_one_is_chosen() {
+        let mut memory = Memory::default();
+        assert_eq!(memory.buildkite_pipeline(), "kibana-pull-request");
+
+        assert!(memory.set_buildkite_pipeline("  Kibana-On-Merge ", at("2026-10-29T09:00:00Z")));
+        assert_eq!(memory.buildkite_pipeline(), "kibana-on-merge");
+        assert_eq!(
+            memory.sync.buildkite_pipeline_changed_at,
+            Some(at("2026-10-29T09:00:00Z"))
+        );
+    }
+
+    #[test]
+    fn choosing_what_is_already_in_effect_isnt_a_change() {
+        let mut memory = Memory::default();
+        assert!(memory.set_buildkite_pipeline("kibana-pull-request", at("2026-10-29T09:00:00Z")));
+        assert_eq!(memory.buildkite_pipeline, None);
+        assert_eq!(memory.sync.buildkite_pipeline_changed_at, None);
+
+        memory.set_buildkite_pipeline("other", at("2026-10-29T09:00:00Z"));
+        // Going back to the default is a change, so it syncs.
+        memory.set_buildkite_pipeline("kibana-pull-request", at("2026-10-29T10:00:00Z"));
+        assert_eq!(memory.buildkite_pipeline(), "kibana-pull-request");
+        assert_eq!(
+            memory.sync.buildkite_pipeline_changed_at,
+            Some(at("2026-10-29T10:00:00Z"))
+        );
+    }
+
+    #[test]
+    fn only_a_pipeline_slug_is_accepted() {
+        for bad in [
+            "",
+            "   ",
+            "has space",
+            "a/b",
+            "semi;colon",
+            "$(x)",
+            &"a".repeat(101),
+        ] {
+            assert_eq!(clean_pipeline(bad), None, "{bad:?}");
+            assert!(!Memory::default().set_buildkite_pipeline(bad, at("2026-10-29T09:00:00Z")));
+        }
+        assert_eq!(
+            clean_pipeline("Kibana_PR.v2"),
+            Some("kibana_pr.v2".to_string())
+        );
     }
 }

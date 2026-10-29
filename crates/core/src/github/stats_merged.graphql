@@ -1,0 +1,59 @@
+# The statistics' sample: your PRs merged in a window, newest first. Only what
+# the averages need: when the first review was asked for, who reviewed when,
+# who approved when (the approvals in effect at the merge), and when the PR
+# was opened, marked ready for review, and merged.
+# `issueCount` is the whole count, beyond the 100 sampled.
+query MergedForStats($q: String!) {
+  search(type: ISSUE, query: $q, first: 100) {
+    issueCount
+    nodes {
+      ... on PullRequest {
+        createdAt
+        mergedAt
+        # Opened as a draft shows as a first "ready" event, so these say whether
+        # it was, and when it was first ready.
+        draftEvents: timelineItems(
+          first: 10
+          itemTypes: [READY_FOR_REVIEW_EVENT, CONVERT_TO_DRAFT_EVENT]
+        ) {
+          nodes {
+            __typename
+            ... on ReadyForReviewEvent {
+              createdAt
+            }
+            ... on ConvertToDraftEvent {
+              createdAt
+            }
+          }
+        }
+        timelineItems(first: 1, itemTypes: [REVIEW_REQUESTED_EVENT]) {
+          nodes {
+            ... on ReviewRequestedEvent {
+              createdAt
+            }
+          }
+        }
+        # The latest approval or objection of each reviewer, so the approvals that
+        # were in effect when it merged. The last of them is when the final
+        # approval, including every required code owner's, came in.
+        approvals: latestOpinionatedReviews(first: 20) {
+          nodes {
+            state
+            submittedAt
+            author {
+              login
+            }
+          }
+        }
+        reviews(first: 10) {
+          nodes {
+            submittedAt
+            author {
+              login
+            }
+          }
+        }
+      }
+    }
+  }
+}

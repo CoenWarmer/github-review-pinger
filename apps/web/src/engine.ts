@@ -20,6 +20,8 @@ import {
   type Fetched,
   type Found,
   type FoundPullRequest,
+  type ReviewStatsData,
+  type StatsData,
   type Github,
   type Needs,
   type RawMergedPullRequest,
@@ -83,6 +85,8 @@ export interface PingerLike {
   removeTeamChannel(team: string, now: string): void;
   myPrsSections(): string;
   setMyPrsSections(sections: string, now: string): void;
+  buildkitePipeline(): string;
+  setBuildkitePipeline(name: string, now: string): boolean;
   mergedDerive(page: string, loadedMore: string, now: string): string;
   views(): string;
   addView(name: string, query: string, now: string): string;
@@ -187,6 +191,7 @@ export class Engine {
       slackOpensIn: "app",
       sync: { enabled: false, available: null, lastSyncedAt: null, gistUrl: null, error: null },
       myPrsSections: [],
+      buildkitePipeline: "kibana-pull-request",
       mergedPullRequests: [],
       mergedCanLoadMore: false,
       views: [],
@@ -241,6 +246,7 @@ export class Engine {
     this.publish({
       views: JSON.parse(this.pinger.views()) as View[],
       myPrsSections: JSON.parse(this.pinger.myPrsSections()) as SectionPref[],
+      buildkitePipeline: this.pinger.buildkitePipeline(),
     });
   }
 
@@ -262,6 +268,7 @@ export class Engine {
       },
       myPrsSections: JSON.parse(this.pinger.myPrsSections()) as SectionPref[],
       views: JSON.parse(this.pinger.views()) as View[],
+      buildkitePipeline: this.pinger.buildkitePipeline(),
     });
     if (this.token) await this.poll();
     else this.publish({ status: { kind: "error", problem: { code: "noToken" } } });
@@ -481,6 +488,21 @@ export class Engine {
     void this.refresh();
   }
 
+  /**
+   * Chooses the Buildkite pipeline the CI statistics count builds in, and
+   * shares it. Rejects with a message to show when it isn't a pipeline name.
+   * Nothing in the browser shows it, but a device that does reads it from
+   * the same gist.
+   */
+  setBuildkitePipeline(name: string) {
+    if (!this.pinger.setBuildkitePipeline(name, this.nowIso())) {
+      throw "A pipeline name is letters, digits, dashes, underscores and dots.";
+    }
+    this.persist();
+    this.publish({ buildkitePipeline: this.pinger.buildkitePipeline() });
+    this.syncSoon();
+  }
+
   /** Adds a view and refreshes right away, so it shows without waiting for
    * the next poll. */
   addView(name: string, query: string) {
@@ -543,6 +565,54 @@ export class Engine {
     if (!this.github) throw "There's no token to search with.";
     try {
       return await this.github.searchPullRequests(text);
+    } catch (e) {
+      throw e instanceof Error ? e.message : String(e);
+    }
+  }
+
+  /** The teams you belong to, for the statistics. Rejects with a message to show. */
+  async listTeams(): Promise<string[]> {
+    if (!this.github) throw "There's no token to look teams up with.";
+    try {
+      return await this.github.fetchMyTeams();
+    } catch (e) {
+      throw e instanceof Error ? e.message : String(e);
+    }
+  }
+
+  /**
+   * The statistics for the last `days`, or with `previous` for the same
+   * number of days before those, which is only compared with. Rejects with a
+   * message to show.
+   */
+  async loadStats(team: string | null, days: number, previous = false): Promise<StatsData> {
+    if (!this.github) throw "There's no token to load statistics with.";
+    const day = (back: number) =>
+      new Date(this.now().getTime() - back * 86_400_000).toISOString().slice(0, 10);
+    // The earlier window is the same length and ends the day before this one starts.
+    const range = previous ? `${day(2 * days)}..${day(days + 1)}` : `>=${day(days)}`;
+    try {
+      return await this.github.fetchStats(team, range, !previous);
+    } catch (e) {
+      throw e instanceof Error ? e.message : String(e);
+    }
+  }
+
+  /**
+   * The reviews submitted in the last `days`, or with `previous` in the same
+   * number of days before those. Rejects with a message to show.
+   */
+  async loadReviewStats(
+    team: string | null,
+    days: number,
+    previous = false,
+  ): Promise<ReviewStatsData> {
+    if (!this.github) throw "There's no token to load statistics with.";
+    // The earlier window is the same length and ends where this one starts.
+    const to = new Date(this.now().getTime() - (previous ? days * 86_400_000 : 0));
+    const from = new Date(to.getTime() - days * 86_400_000);
+    try {
+      return await this.github.fetchReviewStats(team, from.toISOString(), to.toISOString(), !previous);
     } catch (e) {
       throw e instanceof Error ? e.message : String(e);
     }
