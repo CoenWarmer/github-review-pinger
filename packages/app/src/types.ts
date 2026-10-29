@@ -64,6 +64,8 @@ export interface StatsData {
     draftEvents: { kind: "ready" | "draft"; at: string }[];
     requestedAt: string | null;
     reviews: { by: string | null; at: string }[];
+    /** The approvals still in effect when it merged, one per reviewer. */
+    approvals: { by: string | null; at: string }[];
   }[];
 }
 

@@ -19,6 +19,7 @@ import {
 import { usePlatform } from "../platform";
 import {
   STATS_DAYS,
+  averageApproval,
   averageCodeOwners,
   averageReadyToMerged,
   averageReviewWait,
@@ -602,7 +603,7 @@ export function StatsSettings({
 
       <div className="grid grid-cols-2 gap-2">
         <Figure
-          label="Avg time to get approval"
+          label="Avg time to first review"
           value={data ? averageReviewWait(data.sample, viewer) : null}
           previous={before ? averageReviewWait(before.sample, viewer) : null}
           format={duration}
@@ -611,10 +612,13 @@ export function StatsSettings({
           loading={stats.kind === "loading"}
         />
         <Figure
-          label="Code owners per PR"
-          value={averageCodeOwners(pullRequests)}
-          format={(n) => (Math.round(n * 10) / 10).toString()}
-          basis="open PR"
+          label="Avg time to get approval"
+          value={data ? averageApproval(data.sample, viewer) : null}
+          previous={before ? averageApproval(before.sample, viewer) : null}
+          format={duration}
+          hint="request to last approval"
+          basis="merged PR"
+          loading={stats.kind === "loading"}
         />
         <Figure
           label="Avg time to deliver PR"
@@ -624,6 +628,12 @@ export function StatsSettings({
           hint="ready for review to merge"
           basis="merged PR"
           loading={stats.kind === "loading"}
+        />
+        <Figure
+          label="Code owners per PR"
+          value={averageCodeOwners(pullRequests)}
+          format={(n) => (Math.round(n * 10) / 10).toString()}
+          basis="open PR"
         />
         {hasCi && (
           <>
@@ -643,9 +653,12 @@ export function StatsSettings({
       {hasCi && <PipelineSetting value={buildkitePipeline} />}
       {hasCi && ciNow && ciNow.kind !== "ok" && <CiHelp stats={ciNow} />}
       <p className="m-0 -mt-2 text-[11px] leading-snug text-muted-foreground">
-        Avg time to get approval is the time from a merged PR's first review
-        request to the first review by someone else (any review, not only an
-        approval), over your latest 100 merged PRs. Code
+        Avg time to first review runs from a merged PR's first review request to
+        the first review by someone else (any review), and Avg time to get
+        approval to the last approval still in effect when it merged, so every
+        approver is waited for, code owners included (GitHub doesn't record who
+        a merged PR's code owners were, so an approval from someone not required
+        counts too). Both are over your latest 100 merged PRs. Code
         owners are the pending requests GitHub made from CODEOWNERS, on open PRs
         that aren't drafts. Avg time to deliver PR is the time from a merged PR first
         being ready for review (when it was opened, or first marked ready if it

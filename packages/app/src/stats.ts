@@ -43,6 +43,29 @@ export function averageReviewWait(sample: StatsData["sample"], viewer: string | 
 }
 
 /**
+ * How long your merged PRs took to be approved, in milliseconds: from the
+ * first review request to the last approval still in effect when it merged,
+ * by someone other than `viewer`. That is when the final approval came in,
+ * which includes every required code owner's: GitHub keeps no record of who
+ * the code owners of a merged PR were, so this can't pick them out, and an
+ * approval from someone who wasn't required counts too. PRs merged without a
+ * request or without an approval don't count.
+ */
+export function averageApproval(sample: StatsData["sample"], viewer: string | null): Average {
+  const times = sample.flatMap((pr) => {
+    if (!pr.requestedAt) return [];
+    const requested = Date.parse(pr.requestedAt);
+    const approvals = pr.approvals
+      .filter((approval) => approval.by !== null && approval.by.toLowerCase() !== viewer?.toLowerCase())
+      .map((approval) => Date.parse(approval.at))
+      // An approval from before the request can't be a response to it.
+      .filter((at) => at >= requested);
+    return approvals.length > 0 ? [Math.max(...approvals) - requested] : [];
+  });
+  return averageOf(times);
+}
+
+/**
  * When a merged PR was first ready for review: when it was opened, or for one
  * opened as a draft (its first draft event is a "ready") when it was first
  * marked ready.

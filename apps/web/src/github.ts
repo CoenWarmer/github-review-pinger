@@ -137,6 +137,8 @@ export interface StatsData {
     draftEvents: { kind: "ready" | "draft"; at: string }[];
     requestedAt: string | null;
     reviews: { by: string | null; at: string }[];
+    /** The approvals still in effect when it merged, one per reviewer. */
+    approvals: { by: string | null; at: string }[];
   }[];
 }
 
@@ -708,6 +710,9 @@ export function createGithub({
             draftEvents: { nodes: ({ __typename: string; createdAt?: string } | null)[] };
             timelineItems: { nodes: ({ createdAt?: string } | null)[] };
             reviews: { nodes: ({ submittedAt: string | null; author: { login: string } | null } | null)[] };
+            approvals: {
+              nodes: ({ state: string; submittedAt: string | null; author: { login: string } | null } | null)[];
+            };
           } | null)[];
         };
       }
@@ -736,6 +741,11 @@ export function createGithub({
                   requestedAt: pr.timelineItems.nodes.find((event) => event?.createdAt)?.createdAt ?? null,
                   reviews: pr.reviews.nodes.flatMap((review) =>
                     review?.submittedAt ? [{ by: review.author?.login ?? null, at: review.submittedAt }] : [],
+                  ),
+                  approvals: pr.approvals.nodes.flatMap((review) =>
+                    review?.state === "APPROVED" && review.submittedAt
+                      ? [{ by: review.author?.login ?? null, at: review.submittedAt }]
+                      : [],
                   ),
                 },
               ]

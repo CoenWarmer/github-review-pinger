@@ -324,6 +324,8 @@ pub struct StatsSample {
     /// When the first review was asked for, if ever.
     pub requested_at: Option<DateTime<Utc>>,
     pub reviews: Vec<StatsReview>,
+    /// The approvals still in effect when it merged, one per reviewer.
+    pub approvals: Vec<StatsReview>,
 }
 
 #[derive(Debug, serde::Serialize, PartialEq)]
@@ -513,6 +515,19 @@ pub async fn fetch_stats(
                         })
                     })
                     .collect(),
+                approvals: pr
+                    .approvals
+                    .nodes
+                    .into_iter()
+                    .flatten()
+                    .filter(|review| review.state == "APPROVED")
+                    .filter_map(|review| {
+                        Some(StatsReview {
+                            by: review.author.map(|author| author.login),
+                            at: review.submitted_at?,
+                        })
+                    })
+                    .collect(),
             })
             .collect();
         Ok::<_, FetchError>((search.issue_count, sample))
@@ -629,6 +644,15 @@ struct StatsMergedPr {
     draft_events: Nodes<StatsDraftNode>,
     timeline_items: Nodes<StatsRequested>,
     reviews: Nodes<StatsReviewNode>,
+    approvals: Nodes<StatsApprovalNode>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct StatsApprovalNode {
+    state: String,
+    submitted_at: Option<DateTime<Utc>>,
+    author: Option<StatsLogin>,
 }
 
 #[derive(Deserialize)]

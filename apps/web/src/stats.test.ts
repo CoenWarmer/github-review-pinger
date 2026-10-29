@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { PullRequest } from "@review-pinger/app";
 import {
+  averageApproval,
   averageCodeOwners,
   averageReadyToMerged,
   averageReviewWait,
@@ -24,6 +25,7 @@ describe("review wait on merged PRs", () => {
     draftEvents: [],
     requestedAt,
     reviews: reviews.map(([by, at]) => ({ by, at })),
+    approvals: [],
   });
 
   it("is the time from the first request to the first review by someone else", () => {
@@ -133,7 +135,7 @@ describe("ready for review to merged", () => {
     createdAt: string,
     mergedAt: string,
     draftEvents: { kind: "ready" | "draft"; at: string }[] = [],
-  ) => ({ createdAt, mergedAt, draftEvents, requestedAt: null, reviews: [] });
+  ) => ({ createdAt, mergedAt, draftEvents, requestedAt: null, reviews: [], approvals: [] });
   const HOUR = 3_600_000;
 
   it("counts from opening for a PR that was never a draft", () => {
@@ -175,5 +177,43 @@ describe("ready for review to merged", () => {
     assert.deepEqual(averageReadyToMerged([]), { average: null, count: 0 });
     const odd = [pr(hoursAgo(1), hoursAgo(5))];
     assert.deepEqual(averageReadyToMerged(odd), { average: null, count: 0 });
+  });
+});
+
+describe("time to get approved", () => {
+  const HOUR = 3_600_000;
+  const pr = (requestedAt: string | null, approvals: [string | null, string][]) => ({
+    createdAt: hoursAgo(200),
+    mergedAt: hoursAgo(0),
+    draftEvents: [],
+    requestedAt,
+    reviews: [],
+    approvals: approvals.map(([by, at]) => ({ by, at })),
+  });
+
+  it("runs from the first request to the last approval in effect, so every approver is waited for", () => {
+    const merged = [
+      // Asked 10h ago; ana approved at 8h, bo at 3h: the last is 7h after the request.
+      pr(hoursAgo(10), [["ana", hoursAgo(8)], ["bo", hoursAgo(3)]]),
+      // One approver, 1h after the request.
+      pr(hoursAgo(5), [["cy", hoursAgo(4)]]),
+    ];
+    assert.deepEqual(averageApproval(merged, "me"), { average: 4 * HOUR, count: 2 });
+  });
+
+  it("leaves out your own approvals, approvals from before the request, and PRs with none", () => {
+    const merged = [
+      pr(hoursAgo(10), [["ME", hoursAgo(5)]]),
+      pr(hoursAgo(10), [["ana", hoursAgo(12)]]),
+      pr(hoursAgo(10), []),
+      pr(null, [["ana", hoursAgo(5)]]),
+      pr(hoursAgo(10), [["ana", hoursAgo(12)], ["bo", hoursAgo(6)]]),
+    ];
+    // Only the last counts, from bo's approval: 4h after the request.
+    assert.deepEqual(averageApproval(merged, "me"), { average: 4 * HOUR, count: 1 });
+  });
+
+  it("is nothing for no PRs", () => {
+    assert.deepEqual(averageApproval([], "me"), { average: null, count: 0 });
   });
 });

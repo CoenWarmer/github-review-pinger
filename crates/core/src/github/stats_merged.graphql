@@ -1,6 +1,7 @@
 # The statistics' sample: your PRs merged in a window, newest first. Only what
 # the averages need: when the first review was asked for, who reviewed when,
-# and when the PR was opened, marked ready for review, and merged.
+# who approved when (the approvals in effect at the merge), and when the PR
+# was opened, marked ready for review, and merged.
 # `issueCount` is the whole count, beyond the 100 sampled.
 query MergedForStats($q: String!) {
   search(type: ISSUE, query: $q, first: 100) {
@@ -29,6 +30,18 @@ query MergedForStats($q: String!) {
           nodes {
             ... on ReviewRequestedEvent {
               createdAt
+            }
+          }
+        }
+        # The latest approval or objection of each reviewer, so the approvals that
+        # were in effect when it merged. The last of them is when the final
+        # approval, including every required code owner's, came in.
+        approvals: latestOpinionatedReviews(first: 20) {
+          nodes {
+            state
+            submittedAt
+            author {
+              login
             }
           }
         }

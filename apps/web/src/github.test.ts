@@ -435,16 +435,25 @@ describe("statistics", () => {
                 },
                 timelineItems: { nodes: [{ createdAt: "2026-10-01T10:00:00Z" }] },
                 reviews: { nodes: [{ submittedAt: "2026-10-01T12:00:00Z", author: { login: "ana" } }, { submittedAt: null, author: null }] },
+                // Each reviewer's latest opinion: only the approvals are kept.
+                approvals: {
+                  nodes: [
+                    { state: "APPROVED", submittedAt: "2026-10-01T14:00:00Z", author: { login: "ana" } },
+                    { state: "CHANGES_REQUESTED", submittedAt: "2026-10-01T13:00:00Z", author: { login: "bo" } },
+                    { state: "APPROVED", submittedAt: null, author: { login: "cy" } },
+                  ],
+                },
               },
               null,
               // Not merged, so nothing to time.
-              { createdAt: "2026-10-01T00:00:00Z", mergedAt: null, draftEvents: { nodes: [] }, timelineItems: { nodes: [] }, reviews: { nodes: [] } },
+              { createdAt: "2026-10-01T00:00:00Z", mergedAt: null, draftEvents: { nodes: [] }, timelineItems: { nodes: [] }, reviews: { nodes: [] }, approvals: { nodes: [] } },
               {
                 createdAt: "2026-10-03T08:00:00Z",
                 mergedAt: "2026-10-03T09:00:00Z",
                 draftEvents: { nodes: [] },
                 timelineItems: { nodes: [] },
                 reviews: { nodes: [] },
+                approvals: { nodes: [] },
               },
             ],
           },
@@ -478,6 +487,7 @@ describe("statistics", () => {
         ],
         requestedAt: "2026-10-01T10:00:00Z",
         reviews: [{ by: "ana", at: "2026-10-01T12:00:00Z" }],
+        approvals: [{ by: "ana", at: "2026-10-01T14:00:00Z" }],
       },
       {
         createdAt: "2026-10-03T08:00:00Z",
@@ -485,6 +495,7 @@ describe("statistics", () => {
         draftEvents: [],
         requestedAt: null,
         reviews: [],
+        approvals: [],
       },
     ]);
     assert.ok(seen[0].startsWith("is:pr is:merged author:@me merged:>=2026-09-29"));
