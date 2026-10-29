@@ -5,10 +5,12 @@ export { SECTION_TITLES, viewSearch } from "./sections";
 export type {
   CardNotification,
   FoundPr,
+  StatsData,
   MergedPr,
   Problem,
   PullRequest,
   ReviewRequest,
+  Reviewer,
   Section,
   SectionPref,
   Snapshot,

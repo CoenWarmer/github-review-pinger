@@ -35,6 +35,7 @@ export interface Queries {
   mergeState: string;
   mergedSearch: string;
   prSearch: string;
+  statsMerged: string;
 }
 
 export type FailureKind = "unauthorized" | "rateLimited" | "network" | "api";
@@ -109,6 +110,42 @@ export interface FoundPullRequest {
   updatedAt: string;
 }
 
+/** What the Statistics section is drawn from; the UI works the averages out. */
+export interface StatsData {
+  /** All of your PRs merged in the window. */
+  mergedByMe: number;
+  /** PRs merged by the team's members in the window, when a team is chosen. */
+  mergedByTeam: number | null;
+  /** The team has more members than are looked up, so its count is short. */
+  teamMembersCapped: boolean;
+  /** Up to 100 of your merged PRs, newest first. */
+  sample: { requestedAt: string | null; reviews: { by: string | null; at: string }[] }[];
+}
+
+/** GitHub rejects search text over 256 characters. */
+const MAX_SEARCH_CHARS = 250;
+
+/**
+ * Search texts that count PRs merged since `since` (a date) by any of
+ * `logins`: several `author:` qualifiers match any of them, but only so many
+ * fit in one search, so the logins are split across as few as will hold them.
+ */
+export function mergedBySearches(since: string, logins: string[]): string[] {
+  const start = `is:pr is:merged merged:>=${since}`;
+  const searches: string[] = [];
+  let current = start;
+  for (const login of logins) {
+    const author = ` author:${login}`;
+    if (current !== start && current.length + author.length > MAX_SEARCH_CHARS) {
+      searches.push(current);
+      current = start;
+    }
+    current += author;
+  }
+  if (current !== start) searches.push(current);
+  return searches;
+}
+
 /** What a team lookup found: lowercase member logins by `org/slug`. */
 export interface Found {
   teams: Record<string, string[]>;
@@ -139,6 +176,10 @@ export interface Github {
   fetchMergedPage(cursor: string | null, count: number): Promise<MergedPage>;
   /** The first page of PRs, in any state, matching the text and any qualifiers in it. */
   searchPullRequests(text: string): Promise<FoundPullRequest[]>;
+  /** The teams you belong to, as `org/slug`. Needs `read:org`. */
+  fetchMyTeams(): Promise<string[]>;
+  /** The statistics since `since` (a date), with `team` (`org/slug`) counted too when chosen. */
+  fetchStats(team: string | null, since: string): Promise<StatsData>;
   addMergeStates(pullRequests: RawPullRequest[]): Promise<void>;
   fetchDirectory(needs: Needs): Promise<Found>;
   /** The token's scopes as GitHub lists them; `null` for tokens that have none, such as fine-grained ones. */
@@ -501,6 +542,84 @@ export function createGithub({
           state: pr.state === "MERGED" ? "merged" : pr.state === "CLOSED" ? "closed" : pr.isDraft ? "draft" : "open",
           updatedAt: pr.updatedAt,
         }));
+    },
+
+    async fetchMyTeams() {
+      const orgs = await request<{
+        viewer: { login: string; organizations: { nodes: ({ login: string } | null)[] } };
+      }>("query { viewer { login organizations(first: 50) { nodes { login } } } }");
+      if (orgs.scopeMissing) throw new FetchError("api", "Listing your teams needs the read:org scope.");
+      const logins = orgs.data.viewer.organizations.nodes.flatMap((org) => (org ? [org.login] : []));
+      if (logins.length === 0) return [];
+      const text = `query {\n${logins
+        .map(
+          (org, i) =>
+            `o${i}: organization(login: ${JSON.stringify(org)}) { login teams(first: 100, userLogins: [${JSON.stringify(orgs.data.viewer.login)}]) { nodes { slug } } }`,
+        )
+        .join("\n")}\n}`;
+      const reply = await request<
+        Record<string, { login: string; teams: { nodes: ({ slug: string } | null)[] } } | null>
+      >(text);
+      return logins
+        .flatMap((_, i) => {
+          const org = reply.data[`o${i}`];
+          return (org?.teams.nodes ?? []).flatMap((team) =>
+            team ? [`${org!.login.toLowerCase()}/${team.slug.toLowerCase()}`] : [],
+          );
+        })
+        .sort();
+    },
+
+    async fetchStats(team, since) {
+      interface Mine {
+        search: {
+          issueCount: number;
+          nodes: ({
+            timelineItems: { nodes: ({ createdAt?: string } | null)[] };
+            reviews: { nodes: ({ submittedAt: string | null; author: { login: string } | null } | null)[] };
+          } | null)[];
+        };
+      }
+      const mine = async () => {
+        const reply = await request<Mine>(queries.statsMerged, {
+          q: `is:pr is:merged author:@me merged:>=${since} sort:updated-desc`,
+        });
+        const sample = reply.data.search.nodes.flatMap((pr) =>
+          pr
+            ? [
+                {
+                  requestedAt: pr.timelineItems.nodes.find((event) => event?.createdAt)?.createdAt ?? null,
+                  reviews: pr.reviews.nodes.flatMap((review) =>
+                    review?.submittedAt ? [{ by: review.author?.login ?? null, at: review.submittedAt }] : [],
+                  ),
+                },
+              ]
+            : [],
+        );
+        return { mergedByMe: reply.data.search.issueCount, sample };
+      };
+      const teamCount = async (): Promise<{ merged: number | null; capped: boolean }> => {
+        if (!team) return { merged: null, capped: false };
+        const [org, slug] = team.split("/");
+        if (!org || !slug) throw new FetchError("api", `Not a team: ${team}`);
+        const found = await github.fetchDirectory({ teams: [[org, slug]] });
+        if (found.denied) throw new FetchError("api", "Counting a team's merges needs the read:org scope.");
+        const logins = [...(found.teams[`${org.toLowerCase()}/${slug.toLowerCase()}`] ?? [])].sort();
+        // Members are read a page at a time up to a limit, so a team that
+        // reaches it may have more.
+        const capped = logins.length >= MAX_MEMBER_PAGES * 100;
+        const searches = mergedBySearches(since, logins);
+        if (searches.length === 0) return { merged: 0, capped };
+        // One request for all the counts, each its own aliased search.
+        const text = `query {\n${searches
+          .map((s, i) => `s${i}: search(type: ISSUE, query: ${JSON.stringify(s)}) { issueCount }`)
+          .join("\n")}\n}`;
+        const reply = await request<Record<string, { issueCount: number }>>(text);
+        const merged = searches.reduce((sum, _, i) => sum + (reply.data[`s${i}`]?.issueCount ?? 0), 0);
+        return { merged, capped };
+      };
+      const [mineResult, team_] = await Promise.all([mine(), teamCount()]);
+      return { ...mineResult, mergedByTeam: team_.merged, teamMembersCapped: team_.capped };
     },
 
     async addMergeStates(pullRequests) {

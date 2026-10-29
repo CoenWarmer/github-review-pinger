@@ -8,7 +8,16 @@ import { Switch } from "@/components/ui/switch";
 import { TeamChannelForm } from "../slack";
 import { ago } from "../format";
 import { useNow } from "../hooks";
-import type { SectionPref, SyncStatus, TeamChannel, Theme, TokenSource, View } from "../types";
+import type {
+  PullRequest,
+  SectionPref,
+  SyncStatus,
+  TeamChannel,
+  Theme,
+  TokenSource,
+  View,
+} from "../types";
+import { StatsSettings } from "./StatsSettings";
 import { MyPrsSections } from "./MyPrsSections";
 import { SYNC_ABOUT, SYNC_LABEL } from "./Setup";
 import { ViewsSettings } from "./ViewsSettings";
@@ -30,6 +39,7 @@ export function SettingsPanel({
   sync,
   myPrsSections,
   views,
+  pullRequests,
 }: {
   /** Who is signed in. */
   account: string | null;
@@ -50,6 +60,8 @@ export function SettingsPanel({
   myPrsSections: SectionPref[];
   /** Your custom views. */
   views: View[];
+  /** Your open PRs, which some of the statistics are worked out from. */
+  pullRequests: PullRequest[];
 }) {
   const platform = usePlatform();
   const {
@@ -252,6 +264,10 @@ export function SettingsPanel({
       <Section>
         <Heading>Sync</Heading>
         <SyncSetting sync={sync} />
+      </Section>
+      <Section>
+        <Heading>Statistics</Heading>
+        <StatsSettings pullRequests={pullRequests} viewer={account} />
       </Section>
       <SlackChannels channels={channels} />
       <p className="m-0 px-3 py-3 text-center text-xs text-muted-foreground">

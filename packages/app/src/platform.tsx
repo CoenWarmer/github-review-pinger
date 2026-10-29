@@ -1,5 +1,5 @@
 import { createContext, useContext, type ReactNode } from "react";
-import type { FoundPr, SectionPref, Snapshot, Theme, TokenSource } from "./types";
+import type { FoundPr, SectionPref, Snapshot, StatsData, Theme, TokenSource } from "./types";
 
 /**
  * What the UI needs from whatever hosts it: the desktop app talks to its Rust
@@ -47,6 +47,14 @@ export interface Platform {
    * search qualifiers). Rejects with a message to show.
    */
   searchPullRequests(text: string): Promise<FoundPr[]>;
+
+  /** The teams you belong to (`org/slug`). Rejects with a message to show. */
+  listTeams(): Promise<string[]>;
+  /**
+   * Your merged PRs over the last `days`, and a team's (`org/slug`) when one
+   * is given. Rejects with a message to show.
+   */
+  loadStats(team: string | null, days: number): Promise<StatsData>;
 
   /** Adds a custom view and shows it right away. */
   addView(name: string, query: string): void;

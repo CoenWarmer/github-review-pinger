@@ -253,18 +253,43 @@ impl Poller {
         &self,
         text: &str,
     ) -> Result<Vec<review_pinger_core::github::types::FoundPullRequest>, String> {
+        let token = self.search_token().await?;
+        github::search_pull_requests(&self.http, &token, text)
+            .await
+            .map_err(fetch_error_message)
+    }
+
+    /// The teams you belong to (`org/slug`), for the statistics' team choice.
+    /// Rejects with a message to show.
+    pub async fn my_teams(&self) -> Result<Vec<String>, String> {
+        let token = self.search_token().await?;
+        github::fetch_my_teams(&self.http, &token)
+            .await
+            .map_err(fetch_error_message)
+    }
+
+    /// The statistics for the last `days`, with `team` (`org/slug`) counted
+    /// too when chosen. Rejects with a message to show.
+    pub async fn stats(
+        &self,
+        team: Option<String>,
+        days: i64,
+    ) -> Result<github::StatsData, String> {
+        let token = self.search_token().await?;
+        let since = (Utc::now() - chrono::Duration::days(days)).date_naive();
+        github::fetch_stats(&self.http, &token, team.as_deref(), since)
+            .await
+            .map_err(fetch_error_message)
+    }
+
+    /// A token for a request the user asked for, or the message to show.
+    async fn search_token(&self) -> Result<String, String> {
         let chosen = self.auth_source();
-        let token = tauri::async_runtime::spawn_blocking(move || auth::resolve_token(chosen))
+        tauri::async_runtime::spawn_blocking(move || auth::resolve_token(chosen))
             .await
             .map_err(|e| e.to_string())?
-            .map_err(|_| "Could not get a GitHub token to search with.".to_string())?;
-        github::search_pull_requests(&self.http, &token.value, text)
-            .await
-            .map_err(|e| match e {
-                github::FetchError::RateLimited { .. } => "GitHub's rate limit was reached.".into(),
-                github::FetchError::Unauthorized => "GitHub rejected the token.".into(),
-                github::FetchError::Network(m) | github::FetchError::Api(m) => m,
-            })
+            .map(|token| token.value)
+            .map_err(|_| "Could not get a GitHub token.".to_string())
     }
 
     /// Whether a token pasted but not yet saved can use gists.
@@ -954,6 +979,15 @@ async fn fetch_and_sync(
         poller.sync(app, &token.value)
     );
     fetched
+}
+
+/// What to tell the user about a failed request they asked for.
+fn fetch_error_message(error: FetchError) -> String {
+    match error {
+        FetchError::RateLimited { .. } => "GitHub's rate limit was reached.".into(),
+        FetchError::Unauthorized => "GitHub rejected the token.".into(),
+        FetchError::Network(message) | FetchError::Api(message) => message,
+    }
 }
 
 /// Waits for a snooze or channel to change, then shares it.

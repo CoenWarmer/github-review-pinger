@@ -20,6 +20,7 @@ import {
   type Fetched,
   type Found,
   type FoundPullRequest,
+  type StatsData,
   type Github,
   type Needs,
   type RawMergedPullRequest,
@@ -543,6 +544,27 @@ export class Engine {
     if (!this.github) throw "There's no token to search with.";
     try {
       return await this.github.searchPullRequests(text);
+    } catch (e) {
+      throw e instanceof Error ? e.message : String(e);
+    }
+  }
+
+  /** The teams you belong to, for the statistics. Rejects with a message to show. */
+  async listTeams(): Promise<string[]> {
+    if (!this.github) throw "There's no token to look teams up with.";
+    try {
+      return await this.github.fetchMyTeams();
+    } catch (e) {
+      throw e instanceof Error ? e.message : String(e);
+    }
+  }
+
+  /** The statistics for the last `days`. Rejects with a message to show. */
+  async loadStats(team: string | null, days: number): Promise<StatsData> {
+    if (!this.github) throw "There's no token to load statistics with.";
+    const since = new Date(this.now().getTime() - days * 86_400_000).toISOString().slice(0, 10);
+    try {
+      return await this.github.fetchStats(team, since);
     } catch (e) {
       throw e instanceof Error ? e.message : String(e);
     }

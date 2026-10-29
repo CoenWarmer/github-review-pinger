@@ -37,6 +37,18 @@ export interface FoundPr {
   updatedAt: string;
 }
 
+/** What the Statistics section is drawn from, over a window of days. */
+export interface StatsData {
+  /** All of your PRs merged in the window. */
+  mergedByMe: number;
+  /** PRs merged by the chosen team's members in the window; null with no team. */
+  mergedByTeam: number | null;
+  /** The team has more members than are looked up, so its count is short. */
+  teamMembersCapped: boolean;
+  /** Up to 100 of your merged PRs, newest first. */
+  sample: { requestedAt: string | null; reviews: { by: string | null; at: string }[] }[];
+}
+
 /** How the UI looks: a fixed appearance, or whatever the system uses. */
 export type Theme = "system" | "light" | "dark";
 
@@ -107,6 +119,9 @@ export interface PullRequest {
   /** When it entered the merge queue. */
   mergeEnqueuedAt: string | null;
   reviewers: Reviewer[];
+  /** Pending review requests made because of CODEOWNERS. Missing in lists
+   * saved before it existed. */
+  codeOwners?: number;
 }
 
 export interface ReviewRequest {

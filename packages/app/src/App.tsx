@@ -349,6 +349,7 @@ function AppContent() {
               sync={snapshot.sync}
               myPrsSections={snapshot.myPrsSections}
               views={snapshot.views}
+              pullRequests={prs}
             />
           ) : tab === "mine" ? (
             prs.length === 0 &&

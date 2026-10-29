@@ -1,0 +1,27 @@
+# The statistics' sample: your PRs merged in a window, newest first. Only what
+# the review-time average needs: when the first review was asked for, and who
+# reviewed when. `issueCount` is the whole count, beyond the 100 sampled.
+query MergedForStats($q: String!) {
+  search(type: ISSUE, query: $q, first: 100) {
+    issueCount
+    nodes {
+      ... on PullRequest {
+        timelineItems(first: 1, itemTypes: [REVIEW_REQUESTED_EVENT]) {
+          nodes {
+            ... on ReviewRequestedEvent {
+              createdAt
+            }
+          }
+        }
+        reviews(first: 10) {
+          nodes {
+            submittedAt
+            author {
+              login
+            }
+          }
+        }
+      }
+    }
+  }
+}

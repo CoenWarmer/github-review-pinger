@@ -1,0 +1,92 @@
+import assert from "node:assert/strict";
+import { describe, it } from "node:test";
+import type { PullRequest, Reviewer } from "@review-pinger/app";
+import {
+  averageCodeOwners,
+  averageReviewWait,
+  averageWaitingNow,
+  duration,
+} from "../../../packages/app/src/stats.ts";
+
+const NOW = Date.parse("2026-10-10T12:00:00Z");
+const hoursAgo = (h: number) => new Date(NOW - h * 3_600_000).toISOString();
+
+const reviewer = (over: Partial<Reviewer> = {}): Reviewer =>
+  ({ login: "ana", kind: "user", state: "pending", requestedAt: null, ...over }) as Reviewer;
+
+const pr = (over: Partial<PullRequest> = {}): PullRequest =>
+  ({ id: "p", group: "waiting", openSince: hoursAgo(100), reviewers: [], codeOwners: 0, ...over }) as PullRequest;
+
+describe("waiting on review now", () => {
+  it("counts from the oldest pending request on each PR", () => {
+    const prs = [
+      pr({ reviewers: [reviewer({ requestedAt: hoursAgo(10) }), reviewer({ login: "bo", requestedAt: hoursAgo(2) })] }),
+      pr({ reviewers: [reviewer({ requestedAt: hoursAgo(4) })] }),
+    ];
+    assert.deepEqual(averageWaitingNow(prs, NOW), { average: 7 * 3_600_000, count: 2 });
+  });
+
+  it("counts an undated request from when the PR opened", () => {
+    const prs = [pr({ openSince: hoursAgo(6), reviewers: [reviewer()] })];
+    assert.equal(averageWaitingNow(prs, NOW).average, 6 * 3_600_000);
+  });
+
+  it("leaves out drafts, bots, and reviewers who've already responded", () => {
+    const prs = [
+      pr({ group: "draft", reviewers: [reviewer({ requestedAt: hoursAgo(50) })] }),
+      pr({ reviewers: [reviewer({ kind: "bot", requestedAt: hoursAgo(50) })] }),
+      pr({ reviewers: [reviewer({ state: "approved", requestedAt: hoursAgo(50) })] }),
+      pr({ reviewers: [] }),
+    ];
+    assert.deepEqual(averageWaitingNow(prs, NOW), { average: null, count: 0 });
+  });
+});
+
+describe("review wait on merged PRs", () => {
+  const sample = (requestedAt: string | null, reviews: [string | null, string][]) => ({
+    requestedAt,
+    reviews: reviews.map(([by, at]) => ({ by, at })),
+  });
+
+  it("is the time from the first request to the first review by someone else", () => {
+    const merged = [
+      sample(hoursAgo(10), [["me", hoursAgo(9)], ["ana", hoursAgo(6)], ["bo", hoursAgo(3)]]),
+      sample(hoursAgo(5), [["bo", hoursAgo(4)]]),
+    ];
+    // 4h and 1h.
+    assert.deepEqual(averageReviewWait(merged, "ME"), { average: 2.5 * 3_600_000, count: 2 });
+  });
+
+  it("skips PRs merged without a request or without a review, and reviews from before the request", () => {
+    const merged = [
+      sample(null, [["ana", hoursAgo(3)]]),
+      sample(hoursAgo(10), []),
+      sample(hoursAgo(10), [["ana", hoursAgo(12)]]),
+      sample(hoursAgo(10), [["me", hoursAgo(8)]]),
+    ];
+    assert.deepEqual(averageReviewWait(merged, "me"), { average: null, count: 0 });
+  });
+});
+
+describe("code owners", () => {
+  it("averages the pending code-owner requests over open PRs that aren't drafts", () => {
+    const prs = [pr({ codeOwners: 2 }), pr({ codeOwners: 1 }), pr({ codeOwners: 0 }), pr({ group: "draft", codeOwners: 9 })];
+    assert.deepEqual(averageCodeOwners(prs), { average: 1, count: 3 });
+  });
+
+  it("treats PRs from lists saved before the count existed as having none", () => {
+    const old = { ...pr(), codeOwners: undefined } as PullRequest;
+    assert.deepEqual(averageCodeOwners([old, pr({ codeOwners: 3 })]), { average: 1.5, count: 2 });
+  });
+});
+
+describe("durations", () => {
+  it("reads at a glance", () => {
+    assert.equal(duration(0), "0m");
+    assert.equal(duration(12 * 60_000), "12m");
+    assert.equal(duration(60 * 60_000), "1h");
+    assert.equal(duration(5.5 * 3_600_000), "5h 30m");
+    assert.equal(duration(24 * 3_600_000), "1d");
+    assert.equal(duration(52 * 3_600_000), "2d 4h");
+  });
+});

@@ -43,6 +43,8 @@ export const tauriPlatform: Platform = {
   },
   loadMoreMerged: () => invoke("load_more_merged"),
   searchPullRequests: (text) => invoke("search_pull_requests", { text }),
+  listTeams: () => invoke("my_teams"),
+  loadStats: (team, days) => invoke("load_stats", { team, days }),
   addView: (name, query) => {
     invoke("add_view", { name, query });
   },

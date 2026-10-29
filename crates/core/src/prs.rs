@@ -126,6 +126,10 @@ pub struct PrView {
     pub merge_enqueued_at: Option<DateTime<Utc>>,
     pub queued: bool,
     pub reviewers: Vec<Reviewer>,
+    /// How many of the pending review requests are code owners, who GitHub
+    /// asked because they own the files. A request ends once they review, so
+    /// this counts the owners still to respond.
+    pub code_owners: usize,
     /// Reviews and comments from other humans, oldest first, for notifications.
     #[serde(skip)]
     pub responses: Vec<Response>,
@@ -278,6 +282,12 @@ fn view(pr: &PullRequest, people: &People, rules: &Rules, now: DateTime<Utc>) ->
         merge_enqueued_at: pr.merge_queue_entry.as_ref().and_then(|e| e.enqueued_at),
         queued: pr.merge_queue_entry.is_some(),
         reviewers,
+        code_owners: pr
+            .review_requests
+            .iter()
+            .flat_map(|requests| requests.iter())
+            .filter(|request| request.as_code_owner)
+            .count(),
         responses,
     }
 }
@@ -892,6 +902,22 @@ mod tests {
         );
         assert_eq!(chip("waiter").at, None);
         assert!(chip("waiter").teams.is_empty());
+    }
+
+    #[test]
+    fn counts_the_pending_requests_that_are_code_owners() {
+        let pr = derive_one(json!({
+            "reviewRequests": { "nodes": [
+                { "asCodeOwner": true, "requestedReviewer": user("ana") },
+                { "asCodeOwner": true, "requestedReviewer": {
+                    "__typename": "Team", "slug": "core", "combinedSlug": "o/core" } },
+                { "asCodeOwner": false, "requestedReviewer": user("bo") },
+                // GitHub always sends the flag, but older data may not have it.
+                { "requestedReviewer": user("cy") },
+            ] },
+        }));
+        assert_eq!(pr.code_owners, 2);
+        assert_eq!(derive_one(json!({})).code_owners, 0);
     }
 
     #[test]

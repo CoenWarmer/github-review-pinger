@@ -146,6 +146,20 @@ async fn search_pull_requests(
 }
 
 #[tauri::command]
+async fn my_teams(poller: State<'_, Arc<Poller>>) -> Result<Vec<String>, String> {
+    poller.my_teams().await
+}
+
+#[tauri::command]
+async fn load_stats(
+    team: Option<String>,
+    days: i64,
+    poller: State<'_, Arc<Poller>>,
+) -> Result<github::StatsData, String> {
+    poller.stats(team, days).await
+}
+
+#[tauri::command]
 fn add_view(app: AppHandle, poller: State<Arc<Poller>>, name: String, query: String) {
     poller.add_view(&app, name, query);
 }
@@ -297,6 +311,8 @@ pub fn run() {
             set_my_prs_sections,
             load_more_merged,
             search_pull_requests,
+            my_teams,
+            load_stats,
             add_view,
             update_view,
             remove_view,

@@ -2,13 +2,14 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
   createGithub,
+  mergedBySearches,
   couldBeReady,
   FetchError,
   type Queries,
   type RawPullRequest,
 } from "./github.ts";
 
-const queries: Queries = { search: "SEARCH", details: "DETAILS", mergeState: "MERGE", mergedSearch: "MERGED", prSearch: "PRSEARCH" };
+const queries: Queries = { search: "SEARCH", details: "DETAILS", mergeState: "MERGE", mergedSearch: "MERGED", prSearch: "PRSEARCH", statsMerged: "STATS" };
 
 type Handler = (body: {
   query: string;
@@ -397,4 +398,79 @@ describe("couldBeReady", () => {
   });
   it("counts a PR without checks as green", () =>
     assert.ok(couldBeReady({ ...base, commits: { nodes: [] } })));
+});
+
+describe("statistics", () => {
+  it("splits team members across searches that fit, each login in exactly one", () => {
+    assert.deepEqual(mergedBySearches("2026-10-01", []), []);
+    assert.deepEqual(mergedBySearches("2026-10-01", ["ana", "bo"]), [
+      "is:pr is:merged merged:>=2026-10-01 author:ana author:bo",
+    ]);
+    const many = Array.from({ length: 120 }, (_, i) => `member-number-${i}`);
+    const searches = mergedBySearches("2026-10-01", many);
+    assert.ok(searches.length > 1);
+    assert.ok(searches.every((s) => s.length <= 250));
+    assert.equal(searches.join(" ").split(" author:").length - 1, many.length);
+  });
+
+  it("counts your merged PRs and a team's, and samples when reviews came", async () => {
+    const seen: string[] = [];
+    const gh = github(({ query, variables }) => {
+      if (query === "STATS") {
+        seen.push(String(variables.q));
+        return reply({
+          search: {
+            issueCount: 60,
+            nodes: [
+              {
+                timelineItems: { nodes: [{ createdAt: "2026-10-01T10:00:00Z" }] },
+                reviews: { nodes: [{ submittedAt: "2026-10-01T12:00:00Z", author: { login: "ana" } }, { submittedAt: null, author: null }] },
+              },
+              null,
+              { timelineItems: { nodes: [] }, reviews: { nodes: [] } },
+            ],
+          },
+        });
+      }
+      // The team lookup, then the aliased counts.
+      if (query.includes("members(first: 100")) {
+        return reply({ t0: { team: { members: { nodes: [{ login: "ana" }, { login: "bo" }], pageInfo: { hasNextPage: false, endCursor: null } } } } });
+      }
+      seen.push(query);
+      return reply({ s0: { issueCount: 41 } });
+    });
+    const stats = await gh.fetchStats("o/core", "2026-09-29");
+    assert.equal(stats.mergedByMe, 60);
+    assert.equal(stats.mergedByTeam, 41);
+    assert.equal(stats.teamMembersCapped, false);
+    assert.deepEqual(stats.sample, [
+      { requestedAt: "2026-10-01T10:00:00Z", reviews: [{ by: "ana", at: "2026-10-01T12:00:00Z" }] },
+      { requestedAt: null, reviews: [] },
+    ]);
+    assert.ok(seen[0].startsWith("is:pr is:merged author:@me merged:>=2026-09-29"));
+    assert.ok(seen.some((q) => q.includes("author:ana author:bo")));
+  });
+
+  it("skips the team count without a team, and says what a missing scope blocks", async () => {
+    const gh = github(({ query }) =>
+      query === "STATS"
+        ? reply({ search: { issueCount: 3, nodes: [] } })
+        : new Response(JSON.stringify({ data: { viewer: { login: "me", organizations: { nodes: [] } } }, errors: [{ type: "INSUFFICIENT_SCOPES", message: "needs read:org" }] }), { status: 200 }),
+    );
+    const stats = await gh.fetchStats(null, "2026-09-29");
+    assert.deepEqual(stats, { mergedByMe: 3, mergedByTeam: null, teamMembersCapped: false, sample: [] });
+    await assert.rejects(gh.fetchMyTeams(), /read:org/);
+  });
+
+  it("lists your teams across organizations as org/slug", async () => {
+    const gh = github(({ query }) =>
+      query.includes("organizations(first")
+        ? reply({ viewer: { login: "me", organizations: { nodes: [{ login: "Elastic" }, { login: "other" }] } } })
+        : reply({
+            o0: { login: "Elastic", teams: { nodes: [{ slug: "Kibana-Core" }, { slug: "ops" }] } },
+            o1: { login: "other", teams: { nodes: [] } },
+          }),
+    );
+    assert.deepEqual(await gh.fetchMyTeams(), ["elastic/kibana-core", "elastic/ops"]);
+  });
 });
