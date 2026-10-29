@@ -18,6 +18,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { usePlatform } from "../platform";
+import { RingsLoader } from "./RingsLoader";
 import {
   STATS_DAYS,
   averageApproval,
@@ -588,7 +589,7 @@ export function StatsSettings({
         <h4 className="m-0 mb-1 text-xs font-medium">
           PRs merged, last {STATS_DAYS} days
         </h4>
-        {stats.kind === "loading" && <Placeholder>Loading…</Placeholder>}
+        {stats.kind === "loading" && <ChartLoading bars={team ? 5 : 1} />}
         {stats.kind === "error" && (
           <Placeholder error>{stats.message}</Placeholder>
         )}
@@ -630,7 +631,7 @@ export function StatsSettings({
         <h4 className="m-0 mb-1 text-xs font-medium">
           Reviews done, last {STATS_DAYS} days
         </h4>
-        {reviews.kind === "loading" && <Placeholder>Loading…</Placeholder>}
+        {reviews.kind === "loading" && <ChartLoading bars={team ? 5 : 1} />}
         {reviews.kind === "error" && (
           <Placeholder error>{reviews.message}</Placeholder>
         )}
@@ -738,6 +739,22 @@ export function StatsSettings({
 
 function Note({ children }: { children: React.ReactNode }) {
   return <p className="m-0 mt-1 text-xs text-muted-foreground">{children}</p>;
+}
+
+/**
+ * The rings, centred where the chart will be, with about the height it will
+ * have (a bar is 32 px, plus the margins) so the page doesn't jump when the
+ * numbers arrive. A team has up to five bars; no team just yours.
+ */
+function ChartLoading({ bars }: { bars: number }) {
+  return (
+    <div
+      className="flex items-center justify-center"
+      style={{ height: 36 + bars * 32 }}
+    >
+      <RingsLoader size={48} />
+    </div>
+  );
 }
 
 function Placeholder({
