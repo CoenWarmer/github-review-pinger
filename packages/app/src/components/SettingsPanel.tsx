@@ -19,7 +19,7 @@ import type {
 import { MyPrsSections } from "./MyPrsSections";
 import { SYNC_ABOUT, SYNC_LABEL } from "./Setup";
 import { ViewsSettings } from "./ViewsSettings";
-import { RingsLoader } from "./RingsLoader";
+import { Credits } from "./Credits";
 
 const AUTH_OPTIONS: { source: TokenSource; label: string }[] = [
   { source: "gh", label: "GitHub CLI" },
@@ -262,25 +262,7 @@ export function SettingsPanel({
         <SyncSetting sync={sync} />
       </Section>
       <SlackChannels channels={channels} />
-      <div className="flex items-center justify-center gap-1">
-        <RingsLoader size={20} />
-        <p className="m-0 py-3 text-center text-xs text-muted-foreground">
-          Review Pinger v{platform.version}
-        </p>
-      </div>
-      <div className="flex items-center justify-center mb-4">
-        <p className="text-muted-foreground">
-          Got feedback?&nbsp;
-          <a
-            className="underline"
-            target="_blank"
-            href="https://github.com/CoenWarmer/github-review-pinger/issues"
-          >
-            Open an issue
-          </a>
-          .
-        </p>
-      </div>
+      <Credits platform={platform} />
     </div>
   );
 }

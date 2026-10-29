@@ -39,6 +39,7 @@ import type {
   ReviewStatsData,
   StatsData,
 } from "../types";
+import { Credits } from "./Credits";
 
 const TEAM_KEY = "reviewPinger.statsTeam";
 /** Teams up to this size are counted member by member, which the median needs. */
@@ -861,6 +862,9 @@ function PipelineSetting({ value }: { value: string }) {
         CI builds are counted in this pipeline only.
       </p>
       {error && <p className="m-0 text-xs text-destructive">{error}</p>}
+      <div className="mt-5 mb-2 p-2 border-t">
+        <Credits platform={platform} />
+      </div>
     </div>
   );
 }
