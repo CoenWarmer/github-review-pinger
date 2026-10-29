@@ -2,9 +2,11 @@ name: CI
 
 # Checks only, on one platform, when a pull request is opened or updated. The
 # per-platform builds happen when a release is tagged (release.yml), and the
-# web app is built when it's deployed (pages.yml).
+# web app is built when it's deployed (pages.yml). To check macOS and Windows
+# too, run this workflow by hand from the Actions tab, on the branch.
 on:
   pull_request:
+  workflow_dispatch:
 
 # A newer push to the same pull request makes the older run pointless.
 concurrency:
@@ -13,11 +15,16 @@ concurrency:
 
 jobs:
   check:
-    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        os: ${{ fromJSON(github.event_name == 'workflow_dispatch' && '["ubuntu-22.04", "macos-latest", "windows-latest"]' || '["ubuntu-22.04"]') }}
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
 
       - name: Install Linux dependencies
+        if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libdbus-1-dev libasound2-dev
