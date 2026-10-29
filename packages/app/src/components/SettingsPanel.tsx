@@ -103,6 +103,10 @@ export function SettingsPanel({
 
   return (
     <div className="flex flex-col">
+      <Section>
+        <Heading>Statistics</Heading>
+        <StatsSettings pullRequests={pullRequests} viewer={account} />
+      </Section>
       {hasAutostart && (
         <Section>
           <Heading>Startup</Heading>
@@ -264,10 +268,6 @@ export function SettingsPanel({
       <Section>
         <Heading>Sync</Heading>
         <SyncSetting sync={sync} />
-      </Section>
-      <Section>
-        <Heading>Statistics</Heading>
-        <StatsSettings pullRequests={pullRequests} viewer={account} />
       </Section>
       <SlackChannels channels={channels} />
       <p className="m-0 px-3 py-3 text-center text-xs text-muted-foreground">
