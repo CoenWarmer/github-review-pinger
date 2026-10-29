@@ -1,14 +1,24 @@
 //! Who is in which team, for the reviewer hover cards. Looked up from GitHub
-//! (which needs the `read:org` scope), cached for an hour, and read when the
-//! lists are derived.
+//! (which needs the `read:org` scope), kept for a day, and read when the lists
+//! are derived. A stale lookup is still read while it's refreshed, so the
+//! cards never wait for GitHub.
 
 use std::collections::{BTreeSet, HashMap, HashSet};
+use std::fs;
+use std::io;
+use std::path::Path;
 
 use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
 
-/// How long a lookup is trusted. Memberships rarely change.
-const TTL: Duration = Duration::hours(1);
+/// How long a team's members are trusted before they're looked up again.
+/// Memberships rarely change.
+const TTL: Duration = Duration::hours(24);
+
+/// How long to wait before asking again after a refusal, or about a team
+/// GitHub had nothing on: either can be fixed in a moment (a scope added, an
+/// SSO authorization), so these shouldn't wait a day.
+const RETRY: Duration = Duration::hours(1);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -67,11 +77,29 @@ pub struct Directory {
     denied_at: Option<DateTime<Utc>>,
 }
 
-fn is_fresh(at: DateTime<Utc>, now: DateTime<Utc>) -> bool {
-    now - at < TTL
+fn is_fresh(at: DateTime<Utc>, now: DateTime<Utc>, ttl: Duration) -> bool {
+    now - at < ttl
 }
 
 impl Directory {
+    /// Reads what was saved earlier. Anything unreadable starts fresh.
+    pub fn load(path: &Path) -> Self {
+        fs::read_to_string(path)
+            .ok()
+            .and_then(|contents| serde_json::from_str(&contents).ok())
+            .unwrap_or_default()
+    }
+
+    /// Writes via a temporary file so a crash mid-write can't corrupt it.
+    pub fn save(&self, path: &Path) -> io::Result<()> {
+        if let Some(dir) = path.parent() {
+            fs::create_dir_all(dir)?;
+        }
+        let tmp = path.with_extension("json.tmp");
+        fs::write(&tmp, serde_json::to_vec(self)?)?;
+        fs::rename(tmp, path)
+    }
+
     /// Lowercase `org/slug`, how teams are keyed.
     pub fn key(org: &str, slug: &str) -> String {
         format!("{}/{}", org.to_lowercase(), slug.to_lowercase())
@@ -90,7 +118,7 @@ impl Directory {
     /// What of `needs` isn't cached or has gone stale. Nothing while a recent
     /// lookup was refused, since asking again wouldn't change the answer.
     pub fn missing(&self, needs: &Needs, now: DateTime<Utc>) -> Needs {
-        if self.denied_at.is_some_and(|at| is_fresh(at, now)) {
+        if self.denied_at.is_some_and(|at| is_fresh(at, now, RETRY)) {
             return Needs::default();
         }
         Needs {
@@ -98,10 +126,10 @@ impl Directory {
                 .teams
                 .iter()
                 .filter(|(org, slug)| {
-                    !self
-                        .teams
-                        .get(&Self::key(org, slug))
-                        .is_some_and(|entry| is_fresh(entry.at, now))
+                    !self.teams.get(&Self::key(org, slug)).is_some_and(|entry| {
+                        let ttl = if entry.members.is_some() { TTL } else { RETRY };
+                        is_fresh(entry.at, now, ttl)
+                    })
                 })
                 .cloned()
                 .collect(),
@@ -173,24 +201,44 @@ mod tests {
     }
 
     #[test]
-    fn lookups_go_stale_after_an_hour() {
+    fn lookups_go_stale_after_a_day_but_are_still_read() {
         let mut directory = Directory::default();
         let wanted = needs(&[("o", "core")]);
         directory.merge(
             &wanted,
-            found(&[("o/core", &[])]),
+            found(&[("o/core", &["ana"])]),
             at("2026-10-01T09:00:00Z"),
         );
 
         assert!(
             directory
-                .missing(&wanted, at("2026-10-01T09:59:00Z"))
+                .missing(&wanted, at("2026-10-02T08:59:00Z"))
                 .is_empty()
         );
         assert_eq!(
-            directory.missing(&wanted, at("2026-10-01T10:01:00Z")),
+            directory.missing(&wanted, at("2026-10-02T09:01:00Z")),
             wanted
         );
+        // Stale, so it's asked for again, but the cards keep what they know meanwhile.
+        assert!(directory.team_members("o/core").unwrap().contains("ana"));
+    }
+
+    #[test]
+    fn what_was_saved_is_read_back() {
+        let path = std::env::temp_dir().join(format!("directory-test-{}.json", std::process::id()));
+        let mut directory = Directory::default();
+        let wanted = needs(&[("o", "core")]);
+        let now = at("2026-10-01T09:00:00Z");
+        directory.merge(&wanted, found(&[("o/core", &["ana"])]), now);
+        directory.save(&path).unwrap();
+
+        let loaded = Directory::load(&path);
+        assert!(loaded.team_members("o/core").unwrap().contains("ana"));
+        assert!(loaded.missing(&wanted, now).is_empty());
+
+        fs::write(&path, "not json").unwrap();
+        assert!(Directory::load(&path).team_members("o/core").is_none());
+        fs::remove_file(&path).unwrap();
     }
 
     #[test]

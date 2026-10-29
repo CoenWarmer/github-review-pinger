@@ -13,6 +13,7 @@ use reqwest::{StatusCode, header};
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
+use tokio::sync::Semaphore;
 
 use crate::directory::{Directory, Found, Needs};
 use types::{
@@ -68,12 +69,18 @@ pub fn http_client() -> reqwest::Client {
 ///
 /// `reviewed_since` bounds the PRs the viewer reviewed earlier by last update;
 /// requested reviews are never bounded, since they're still waiting.
+///
+/// With `on_partial`, the viewer's own PRs are fetched first and passed to it
+/// as soon as they're in (without merge states, and with nothing else yet),
+/// then everything else is fetched while the merge states are. That lets the
+/// first screen show My PRs in roughly a third of the time.
 pub async fn fetch_open_pull_requests(
     http: &reqwest::Client,
     token: &str,
     reviewed_since: NaiveDate,
     include_authored: bool,
     views: &[(String, String)],
+    on_partial: Option<&(dyn Fn(&Fetched) + Send + Sync)>,
 ) -> Result<Fetched, FetchError> {
     let reviewed = format!(
         "is:pr is:open reviewed-by:@me -author:@me archived:false updated:>={reviewed_since}"
@@ -125,17 +132,54 @@ pub async fn fetch_open_pull_requests(
         .filter(|id| seen.insert(id.clone()))
         .collect();
 
-    let all = fetch_details(http, token, &ids).await?;
-    let mut by_id: HashMap<String, PullRequest> =
-        all.into_iter().map(|pr| (pr.id.clone(), pr)).collect();
+    let viewer = if authored.viewer.is_empty() {
+        requested.viewer.clone()
+    } else {
+        authored.viewer.clone()
+    };
 
+    let mut by_id: HashMap<String, PullRequest>;
     // Only your own PRs get the expensive merge state; write it back before
     // anything clones from `by_id`, so a PR that's also in a view carries it.
-    let mut pull_requests: Vec<PullRequest> = authored_ids
-        .iter()
-        .filter_map(|id| by_id.get(id).cloned())
-        .collect();
-    add_merge_states(http, token, &mut pull_requests).await?;
+    let mut pull_requests: Vec<PullRequest>;
+    match on_partial.filter(|_| !authored.ids.is_empty()) {
+        Some(on_partial) => {
+            // Your own PRs and the rest share the request slots, with your
+            // own asked for first: they finish first, and the rest starts in
+            // the slots they leave idle instead of waiting for all of them.
+            let limiter = Semaphore::new(MAX_CONCURRENT);
+            let rest_ids: Vec<String> = ids
+                .iter()
+                .filter(|id| !authored_ids.contains(*id))
+                .cloned()
+                .collect();
+            let mine = async {
+                let mut own = details_sharing(http, token, &authored.ids, &limiter).await?;
+                on_partial(&Fetched {
+                    viewer: viewer.clone(),
+                    pull_requests: own.clone(),
+                    review_pull_requests: Vec::new(),
+                    view_pull_requests: HashMap::new(),
+                    sso_partial,
+                });
+                add_merge_states(http, token, &mut own).await?;
+                Ok::<_, FetchError>(own)
+            };
+            let (own, rest) =
+                future::try_join(mine, details_sharing(http, token, &rest_ids, &limiter)).await?;
+            pull_requests = own;
+            by_id = rest.into_iter().map(|pr| (pr.id.clone(), pr)).collect();
+        }
+        None => {
+            let all = fetch_details(http, token, &ids).await?;
+            by_id = all.into_iter().map(|pr| (pr.id.clone(), pr)).collect();
+            pull_requests = authored_ids
+                .iter()
+                .filter_map(|id| by_id.get(id).cloned())
+                .collect();
+            add_merge_states(http, token, &mut pull_requests).await?;
+        }
+    }
     for pr in pull_requests.iter().cloned() {
         by_id.insert(pr.id.clone(), pr);
     }
@@ -166,11 +210,7 @@ pub async fn fetch_open_pull_requests(
     Ok(Fetched {
         // The authored search may have been skipped; the other two always
         // know who the viewer is.
-        viewer: if authored.viewer.is_empty() {
-            requested.viewer
-        } else {
-            authored.viewer
-        },
+        viewer,
         pull_requests,
         review_pull_requests,
         view_pull_requests,
@@ -313,8 +353,11 @@ pub async fn fetch_merged(
 }
 
 /// Aliases per directory query, which keeps each query light.
-const DIRECTORY_BATCH: usize = 15;
-const DIRECTORY_CONCURRENT: usize = 2;
+/// Measured against a real account: 8 teams per query and 10 queries at once
+/// looked up 75 teams in about 3.5 s, where 15 per query and 2 at once took
+/// about 10 s.
+const DIRECTORY_BATCH: usize = 8;
+const DIRECTORY_CONCURRENT: usize = 10;
 /// Members are read 100 at a time, so this reads teams of up to 500.
 const MAX_MEMBER_PAGES: usize = 5;
 
@@ -488,6 +531,31 @@ async fn search_ids(
         }
     }
     Ok(result)
+}
+
+/// Fetches details in batches that wait their turn for one of `limiter`'s
+/// slots, in the order they were asked for, so several callers can share the
+/// slots with the first to ask finishing first.
+async fn details_sharing(
+    http: &reqwest::Client,
+    token: &str,
+    ids: &[String],
+    limiter: &Semaphore,
+) -> Result<Vec<PullRequest>, FetchError> {
+    let batches: Vec<Response<Nodes<PullRequest>>> =
+        future::try_join_all(ids.chunks(BATCH_SIZE).map(|chunk| async move {
+            let _slot = limiter
+                .acquire()
+                .await
+                .expect("the semaphore is never closed");
+            request(http, token, DETAILS_QUERY, json!({ "ids": chunk })).await
+        }))
+        .await?;
+    Ok(batches
+        .into_iter()
+        .flat_map(|batch| batch.data.nodes)
+        .flatten()
+        .collect())
 }
 
 /// Runs `query` for `ids` in concurrent batches and collects the non-null nodes.
@@ -770,6 +838,7 @@ mod tests {
             since,
             true,
             &[],
+            None,
         ))
         .expect("fetch succeeds");
         let needs = prs::directory_needs(
@@ -807,6 +876,7 @@ mod tests {
             since,
             true,
             &[],
+            None,
         ))
         .expect("fetch succeeds");
         println!(
@@ -911,6 +981,7 @@ mod tests {
             since,
             true,
             &views,
+            None,
         ))
         .expect("fetch succeeds");
         let matched = fetched.view_pull_requests.get("v1").expect("the view ran");

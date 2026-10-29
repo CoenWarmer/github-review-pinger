@@ -55,6 +55,9 @@ pub struct Snapshot {
     pub theme: Theme,
     /// The team lookup was refused for lack of the `read:org` scope.
     pub team_lookup_denied: bool,
+    /// The first load is under way and only My PRs has arrived, so the lists
+    /// that are empty aren't known to be.
+    pub partial: bool,
     /// Wall-clock time, so staleness survives the machine sleeping.
     pub fetched_at: Option<DateTime<Utc>>,
     pub sso_partial: bool,
@@ -136,8 +139,10 @@ pub struct Poller {
     latest: Mutex<Option<Fetched>>,
     memory: Mutex<Memory>,
     memory_path: Option<PathBuf>,
-    /// Team members and users' teams, for the reviewer hover cards.
+    /// Team members and users' teams, for the reviewer hover cards. Kept
+    /// between launches, since memberships rarely change.
     directory: Mutex<Directory>,
+    directory_path: Option<PathBuf>,
     /// Pull requests the user opened on GitHub since the popover last
     /// showed; refreshed first when it next opens. Not persisted.
     visited: Mutex<HashSet<String>>,
@@ -579,6 +584,13 @@ pub fn start(app: &AppHandle) -> Arc<Poller> {
         .ok()
         .map(|dir| dir.join("state.json"));
     let memory = memory_path.as_deref().map(Memory::load).unwrap_or_default();
+    let directory_path = memory_path
+        .as_deref()
+        .map(|path| path.with_file_name("directory.json"));
+    let directory = directory_path
+        .as_deref()
+        .map(Directory::load)
+        .unwrap_or_default();
 
     let poller = Arc::new(Poller {
         snapshot: Mutex::new(Snapshot {
@@ -590,7 +602,8 @@ pub fn start(app: &AppHandle) -> Arc<Poller> {
             has_saved_token: false,
             notifications_muted: memory.notifications_muted,
             theme: memory.theme,
-            team_lookup_denied: false,
+            team_lookup_denied: directory.is_denied(),
+            partial: false,
             fetched_at: None,
             sso_partial: false,
             pull_requests: Vec::new(),
@@ -614,7 +627,8 @@ pub fn start(app: &AppHandle) -> Arc<Poller> {
         latest: Mutex::new(None),
         memory: Mutex::new(memory),
         memory_path,
-        directory: Mutex::new(Directory::default()),
+        directory: Mutex::new(directory),
+        directory_path,
         visited: Mutex::new(HashSet::new()),
         first_poll: AtomicBool::new(true),
         wake: Notify::new(),
@@ -729,7 +743,9 @@ async fn poll_once(app: &AppHandle, poller: &Poller) -> Result<(), Problem> {
 
     let settings = settings::load(app);
     let reviewed_since = (Utc::now() - engine::dormant_after(&settings)).date_naive();
-    let fetched = match fetch_and_sync(app, poller, reviewed_since).await {
+    // With nothing to show yet, My PRs is fetched and shown first.
+    let first_load = poller.snapshot.lock().unwrap().fetched_at.is_none();
+    let fetched = match fetch_and_sync(app, poller, reviewed_since, first_load).await {
         Ok(fetched) => fetched,
         Err(problem) => {
             // Keep showing the last good data alongside the problem.
@@ -786,6 +802,7 @@ async fn poll_once(app: &AppHandle, poller: &Poller) -> Result<(), Problem> {
 
     poller.update(app, |s| {
         s.refreshing = false;
+        s.partial = false;
         s.status = Status::Ok;
         s.viewer = Some(fetched.viewer.clone());
         s.token_source = Some(fetched.token_source);
@@ -885,11 +902,16 @@ async fn refresh_directory(app: &AppHandle, poller: &Poller) {
     };
     match github::fetch_directory(&poller.http, &token.value, &missing).await {
         Ok(found) => {
-            let changed = poller
-                .directory
-                .lock()
-                .unwrap()
-                .merge(&missing, found, Utc::now());
+            let changed = {
+                let mut directory = poller.directory.lock().unwrap();
+                let changed = directory.merge(&missing, found, Utc::now());
+                if let Some(path) = &poller.directory_path
+                    && let Err(e) = directory.save(path)
+                {
+                    log::warn!("Could not save {}: {e}", path.display());
+                }
+                changed
+            };
             if changed {
                 poller.rederive(app);
             }
@@ -899,15 +921,36 @@ async fn refresh_directory(app: &AppHandle, poller: &Poller) {
 }
 
 /// Fetches the PRs while the snoozes and channels sync, so the lists are
-/// derived with both.
+/// derived with both. On the first load, My PRs is shown as soon as it's in,
+/// ahead of the rest. That's display only: notifications and what's
+/// remembered wait for the complete fetch.
 async fn fetch_and_sync(
     app: &AppHandle,
     poller: &Poller,
     reviewed_since: NaiveDate,
+    first_load: bool,
 ) -> Result<Fetched, Problem> {
     let token = resolve_token(poller).await?;
+    let show_partial = |partial: Fetched| {
+        let now = Utc::now();
+        let (views, _) = poller.derive(app, &partial, now);
+        poller.update(app, |s| {
+            s.partial = true;
+            s.status = Status::Ok;
+            s.viewer = Some(partial.viewer);
+            s.token_source = Some(partial.token_source);
+            s.fetched_at = Some(now);
+            s.sso_partial = partial.sso_partial;
+            s.pull_requests = views;
+        });
+    };
     let (fetched, ()) = tokio::join!(
-        fetch(poller, &token, reviewed_since),
+        fetch(
+            poller,
+            &token,
+            reviewed_since,
+            first_load.then_some(&show_partial as &(dyn Fn(Fetched) + Send + Sync)),
+        ),
         poller.sync(app, &token.value)
     );
     fetched
@@ -946,6 +989,7 @@ async fn fetch(
     poller: &Poller,
     token: &auth::Token,
     reviewed_since: NaiveDate,
+    on_partial: Option<&(dyn Fn(Fetched) + Send + Sync)>,
 ) -> Result<Fetched, Problem> {
     let (include_authored, view_queries) = {
         let memory = poller.memory.lock().unwrap();
@@ -958,12 +1002,27 @@ async fn fetch(
             .collect();
         (needs.open, queries)
     };
+    let adapter = on_partial.map(|show| {
+        move |partial: &github::Fetched| {
+            show(Fetched {
+                viewer: partial.viewer.clone(),
+                token_source: token.source,
+                sso_partial: partial.sso_partial,
+                pull_requests: partial.pull_requests.clone(),
+                review_pull_requests: Vec::new(),
+                view_pull_requests: HashMap::new(),
+            })
+        }
+    });
     let fetched = github::fetch_open_pull_requests(
         &poller.http,
         &token.value,
         reviewed_since,
         include_authored,
         &view_queries,
+        adapter
+            .as_ref()
+            .map(|adapter| adapter as &(dyn Fn(&github::Fetched) + Send + Sync)),
     )
     .await
     .map_err(|e| match e {
