@@ -72,6 +72,9 @@ impl From<SearchedPullRequest> for FoundPullRequest {
 #[derive(Debug, Clone, Deserialize)]
 pub struct Nodes<T> {
     pub nodes: Vec<Option<T>>,
+    /// Set where the query asks for it: how many exist, if `nodes` is a page.
+    #[serde(default, rename = "totalCount")]
+    pub total_count: Option<usize>,
 }
 
 impl<T> Nodes<T> {
@@ -82,7 +85,10 @@ impl<T> Nodes<T> {
 
 impl<T> Default for Nodes<T> {
     fn default() -> Self {
-        Self { nodes: Vec::new() }
+        Self {
+            nodes: Vec::new(),
+            total_count: None,
+        }
     }
 }
 
@@ -239,6 +245,9 @@ pub enum CheckContext {
     /// A GitHub Actions or other check run. Keeps its `started_at` once done.
     CheckRun {
         status: CheckRunStatus,
+        /// How it ended, once completed.
+        #[serde(default)]
+        conclusion: Option<String>,
         started_at: Option<DateTime<Utc>>,
         completed_at: Option<DateTime<Utc>>,
     },
@@ -246,6 +255,9 @@ pub enum CheckContext {
     /// `created_at` is when it last changed state, so it marks the start while
     /// pending and the finish once done.
     StatusContext {
+        /// The status's name, such as `buildkite/kibana-pull-request`.
+        #[serde(default)]
+        context: String,
         state: CheckState,
         created_at: DateTime<Utc>,
     },
