@@ -1,10 +1,9 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import type { PullRequest, Reviewer } from "@review-pinger/app";
+import type { PullRequest } from "@review-pinger/app";
 import {
   averageCodeOwners,
   averageReviewWait,
-  averageWaitingNow,
   duration,
   perMember,
 } from "../../../packages/app/src/stats.ts";
@@ -12,36 +11,8 @@ import {
 const NOW = Date.parse("2026-10-10T12:00:00Z");
 const hoursAgo = (h: number) => new Date(NOW - h * 3_600_000).toISOString();
 
-const reviewer = (over: Partial<Reviewer> = {}): Reviewer =>
-  ({ login: "ana", kind: "user", state: "pending", requestedAt: null, ...over }) as Reviewer;
-
 const pr = (over: Partial<PullRequest> = {}): PullRequest =>
   ({ id: "p", group: "waiting", openSince: hoursAgo(100), reviewers: [], codeOwners: 0, ...over }) as PullRequest;
-
-describe("waiting on review now", () => {
-  it("counts from the oldest pending request on each PR", () => {
-    const prs = [
-      pr({ reviewers: [reviewer({ requestedAt: hoursAgo(10) }), reviewer({ login: "bo", requestedAt: hoursAgo(2) })] }),
-      pr({ reviewers: [reviewer({ requestedAt: hoursAgo(4) })] }),
-    ];
-    assert.deepEqual(averageWaitingNow(prs, NOW), { average: 7 * 3_600_000, count: 2 });
-  });
-
-  it("counts an undated request from when the PR opened", () => {
-    const prs = [pr({ openSince: hoursAgo(6), reviewers: [reviewer()] })];
-    assert.equal(averageWaitingNow(prs, NOW).average, 6 * 3_600_000);
-  });
-
-  it("leaves out drafts, bots, and reviewers who've already responded", () => {
-    const prs = [
-      pr({ group: "draft", reviewers: [reviewer({ requestedAt: hoursAgo(50) })] }),
-      pr({ reviewers: [reviewer({ kind: "bot", requestedAt: hoursAgo(50) })] }),
-      pr({ reviewers: [reviewer({ state: "approved", requestedAt: hoursAgo(50) })] }),
-      pr({ reviewers: [] }),
-    ];
-    assert.deepEqual(averageWaitingNow(prs, NOW), { average: null, count: 0 });
-  });
-});
 
 describe("review wait on merged PRs", () => {
   const sample = (requestedAt: string | null, reviews: [string | null, string][]) => ({

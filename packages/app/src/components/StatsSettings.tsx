@@ -14,13 +14,11 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { useNow } from "../hooks";
 import { usePlatform } from "../platform";
 import {
   STATS_DAYS,
   averageCodeOwners,
   averageReviewWait,
-  averageWaitingNow,
   duration,
   perMember,
   type Average,
@@ -85,7 +83,6 @@ export function StatsSettings({
   viewer: string | null;
 }) {
   const platform = usePlatform();
-  const now = useNow();
   const [team, setTeam] = useState<string | null>(savedTeam);
   const [teams, setTeams] = useState<Loaded<string[]>>(
     teamsCache && Date.now() - teamsCache.at < CACHE_MS
@@ -272,13 +269,7 @@ export function StatsSettings({
         )}
       </section>
 
-      <div className="grid grid-cols-3 gap-2">
-        <Figure
-          label="Waiting on review now"
-          value={averageWaitingNow(pullRequests, now)}
-          format={duration}
-          basis="open PR"
-        />
+      <div className="grid grid-cols-2 gap-2">
         <Figure
           label="Review wait, merged"
           value={data ? averageReviewWait(data.sample, viewer) : null}
@@ -294,9 +285,9 @@ export function StatsSettings({
         />
       </div>
       <p className="m-0 -mt-2 text-[11px] leading-snug text-muted-foreground">
-        Waiting is counted from the oldest pending review request. Code owners are the pending
-        requests GitHub made from CODEOWNERS, on open PRs that aren't drafts. Merged-PR numbers
-        cover your latest 100 merged PRs.
+        Review wait is the time from a merged PR's first review request to its first review by
+        someone else, over your latest 100 merged PRs. Code owners are the pending requests
+        GitHub made from CODEOWNERS, on open PRs that aren't drafts.
       </p>
     </div>
   );

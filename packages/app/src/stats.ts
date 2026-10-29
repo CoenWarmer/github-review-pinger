@@ -25,24 +25,6 @@ function reviewable(prs: PullRequest[]): PullRequest[] {
 }
 
 /**
- * How long your open PRs have been waiting on a review, in milliseconds: for
- * each non-draft PR with a person or team still to review, the time since the
- * oldest of those requests (the PR's longest outstanding wait).
- */
-export function averageWaitingNow(prs: PullRequest[], now: number): Average {
-  const waits = reviewable(prs).flatMap((pr) => {
-    const pending = pr.reviewers.filter((r) => r.state === "pending" && r.kind !== "bot");
-    if (pending.length === 0) return [];
-    // A request GitHub didn't date counts from when the PR opened.
-    const since = Math.min(
-      ...pending.map((r) => Date.parse(r.requestedAt ?? pr.openSince)),
-    );
-    return [Math.max(0, now - since)];
-  });
-  return averageOf(waits);
-}
-
-/**
  * How long reviews took on your merged PRs, in milliseconds: from the first
  * review request to the first review by someone else after it. PRs merged
  * without a request or without a review don't count.
