@@ -112,8 +112,11 @@ export interface FoundPullRequest {
 
 /** What the Statistics section is drawn from; the UI works the averages out. */
 export interface StatsData {
-  /** All of your PRs merged in the window. */
+  /** All of your PRs merged in the window, in any repo. */
   mergedByMe: number;
+  /** Your PRs merged in the window in the chosen team's organization, the
+   * scope the team's count is in too; null with no team. */
+  mergedByMeInTeamOrg: number | null;
   /** PRs merged by the team's members in the window, when a team is chosen. */
   mergedByTeam: number | null;
   /** The team has more members than are looked up, so its count is short. */
@@ -128,12 +131,13 @@ export interface StatsData {
 const MAX_SEARCH_CHARS = 250;
 
 /**
- * Search texts that count PRs merged since `since` (a date) by any of
- * `logins`: several `author:` qualifiers match any of them, but only so many
- * fit in one search, so the logins are split across as few as will hold them.
+ * Search texts that count PRs merged since `since` (a date) in `org` by any
+ * of `logins`: several `author:` qualifiers match any of them, but only so
+ * many fit in one search, so the logins are split across as few as will hold
+ * them.
  */
-export function mergedBySearches(since: string, logins: string[]): string[] {
-  const start = `is:pr is:merged merged:>=${since}`;
+export function mergedBySearches(since: string, org: string, logins: string[]): string[] {
+  const start = `is:pr is:merged merged:>=${since} org:${org}`;
   const searches: string[] = [];
   let current = start;
   for (const login of logins) {
@@ -600,8 +604,13 @@ export function createGithub({
         );
         return { mergedByMe: reply.data.search.issueCount, sample };
       };
-      const teamCount = async (): Promise<{ merged: number | null; capped: boolean; members: number }> => {
-        if (!team) return { merged: null, capped: false, members: 0 };
+      const teamCount = async (): Promise<{
+        merged: number | null;
+        capped: boolean;
+        members: number;
+        mineInOrg: number | null;
+      }> => {
+        if (!team) return { merged: null, capped: false, members: 0, mineInOrg: null };
         const [org, slug] = team.split("/");
         if (!org || !slug) throw new FetchError("api", `Not a team: ${team}`);
         const found = await github.fetchDirectory({ teams: [[org, slug]] });
@@ -610,19 +619,21 @@ export function createGithub({
         // Members are read a page at a time up to a limit, so a team that
         // reaches it may have more.
         const capped = logins.length >= MAX_MEMBER_PAGES * 100;
-        const searches = mergedBySearches(since, logins);
-        if (searches.length === 0) return { merged: 0, capped, members: logins.length };
-        // One request for all the counts, each its own aliased search.
-        const text = `query {\n${searches
+        const searches = mergedBySearches(since, org, logins);
+        // One request for all the counts, each its own aliased search: the
+        // team's members in the org, and you in the same org.
+        const mine = `is:pr is:merged author:@me merged:>=${since} org:${org}`;
+        const text = `query {\nme: search(type: ISSUE, query: ${JSON.stringify(mine)}) { issueCount }\n${searches
           .map((s, i) => `s${i}: search(type: ISSUE, query: ${JSON.stringify(s)}) { issueCount }`)
           .join("\n")}\n}`;
         const reply = await request<Record<string, { issueCount: number }>>(text);
         const merged = searches.reduce((sum, _, i) => sum + (reply.data[`s${i}`]?.issueCount ?? 0), 0);
-        return { merged, capped, members: logins.length };
+        return { merged, capped, members: logins.length, mineInOrg: reply.data.me?.issueCount ?? null };
       };
       const [mineResult, team_] = await Promise.all([mine(), teamCount()]);
       return {
         ...mineResult,
+        mergedByMeInTeamOrg: team_.mineInOrg,
         mergedByTeam: team_.merged,
         teamMembersCapped: team_.capped,
         teamMemberCount: team_.members,

@@ -154,7 +154,17 @@ export function StatsSettings({
   const perMemberAverage = data && team ? perMember(data.mergedByTeam, data.teamMemberCount) : null;
   const bars = data
     ? [
-        { who: "You", merged: data.mergedByMe, fill: "var(--info)" },
+        { who: "You (all repos)", merged: data.mergedByMe, fill: "var(--info)" },
+        // Counted in the team's org, like the team, so the two compare.
+        ...(team && data.mergedByMeInTeamOrg !== null
+          ? [
+              {
+                who: "You (compared to team)",
+                merged: data.mergedByMeInTeamOrg,
+                fill: "var(--info)",
+              },
+            ]
+          : []),
         ...(data.mergedByTeam !== null && team
           ? [{ who: team.split("/")[1] ?? team, merged: data.mergedByTeam, fill: "var(--muted-foreground)" }]
           : []),
@@ -224,7 +234,7 @@ export function StatsSettings({
                   dataKey="who"
                   tickLine={false}
                   axisLine={false}
-                  width={112}
+                  width={140}
                   tick={{ fontSize: 11 }}
                   interval={0}
                 />
@@ -257,6 +267,12 @@ export function StatsSettings({
             {!team && (
               <p className="m-0 mt-1 text-xs text-muted-foreground">
                 Choose a team to compare with its members' merges.
+              </p>
+            )}
+            {team && (
+              <p className="m-0 mt-1 text-xs text-muted-foreground">
+                "You (compared to team)" and the team's bars count merges in {team.split("/")[0]}{" "}
+                only.
               </p>
             )}
             {team && data.teamMembersCapped && (

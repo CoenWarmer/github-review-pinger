@@ -39,8 +39,11 @@ export interface FoundPr {
 
 /** What the Statistics section is drawn from, over a window of days. */
 export interface StatsData {
-  /** All of your PRs merged in the window. */
+  /** All of your PRs merged in the window, in any repo. */
   mergedByMe: number;
+  /** Your PRs merged in the window in the chosen team's organization, the
+   * scope the team's count is in too; null with no team. */
+  mergedByMeInTeamOrg: number | null;
   /** PRs merged by the chosen team's members in the window; null with no team. */
   mergedByTeam: number | null;
   /** The team has more members than are looked up, so its count is short. */

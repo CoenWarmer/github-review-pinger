@@ -402,12 +402,12 @@ describe("couldBeReady", () => {
 
 describe("statistics", () => {
   it("splits team members across searches that fit, each login in exactly one", () => {
-    assert.deepEqual(mergedBySearches("2026-10-01", []), []);
-    assert.deepEqual(mergedBySearches("2026-10-01", ["ana", "bo"]), [
-      "is:pr is:merged merged:>=2026-10-01 author:ana author:bo",
+    assert.deepEqual(mergedBySearches("2026-10-01", "o", []), []);
+    assert.deepEqual(mergedBySearches("2026-10-01", "o", ["ana", "bo"]), [
+      "is:pr is:merged merged:>=2026-10-01 org:o author:ana author:bo",
     ]);
     const many = Array.from({ length: 120 }, (_, i) => `member-number-${i}`);
-    const searches = mergedBySearches("2026-10-01", many);
+    const searches = mergedBySearches("2026-10-01", "o", many);
     assert.ok(searches.length > 1);
     assert.ok(searches.every((s) => s.length <= 250));
     assert.equal(searches.join(" ").split(" author:").length - 1, many.length);
@@ -437,10 +437,12 @@ describe("statistics", () => {
         return reply({ t0: { team: { members: { nodes: [{ login: "ana" }, { login: "bo" }], pageInfo: { hasNextPage: false, endCursor: null } } } } });
       }
       seen.push(query);
-      return reply({ s0: { issueCount: 41 } });
+      return reply({ me: { issueCount: 14 }, s0: { issueCount: 41 } });
     });
     const stats = await gh.fetchStats("o/core", "2026-09-29");
     assert.equal(stats.mergedByMe, 60);
+    // In the team's org only, the scope the team's count is in.
+    assert.equal(stats.mergedByMeInTeamOrg, 14);
     assert.equal(stats.mergedByTeam, 41);
     assert.equal(stats.teamMembersCapped, false);
     assert.equal(stats.teamMemberCount, 2);
@@ -449,7 +451,8 @@ describe("statistics", () => {
       { requestedAt: null, reviews: [] },
     ]);
     assert.ok(seen[0].startsWith("is:pr is:merged author:@me merged:>=2026-09-29"));
-    assert.ok(seen.some((q) => q.includes("author:ana author:bo")));
+    assert.ok(seen.some((q) => q.includes("org:o author:ana author:bo")));
+    assert.ok(seen.some((q) => q.includes("author:@me merged:>=2026-09-29 org:o")));
   });
 
   it("skips the team count without a team, and says what a missing scope blocks", async () => {
@@ -459,7 +462,7 @@ describe("statistics", () => {
         : new Response(JSON.stringify({ data: { viewer: { login: "me", organizations: { nodes: [] } } }, errors: [{ type: "INSUFFICIENT_SCOPES", message: "needs read:org" }] }), { status: 200 }),
     );
     const stats = await gh.fetchStats(null, "2026-09-29");
-    assert.deepEqual(stats, { mergedByMe: 3, mergedByTeam: null, teamMembersCapped: false, teamMemberCount: 0, sample: [] });
+    assert.deepEqual(stats, { mergedByMe: 3, mergedByMeInTeamOrg: null, mergedByTeam: null, teamMembersCapped: false, teamMemberCount: 0, sample: [] });
     await assert.rejects(gh.fetchMyTeams(), /read:org/);
   });
 

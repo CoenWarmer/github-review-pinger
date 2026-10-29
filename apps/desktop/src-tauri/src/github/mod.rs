@@ -293,8 +293,11 @@ struct PrSearchData {
 #[derive(Debug, Default, serde::Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct StatsData {
-    /// All of your PRs merged in the window.
+    /// All of your PRs merged in the window, in any repo.
     pub merged_by_me: u64,
+    /// Your PRs merged in the window in the chosen team's organization, which
+    /// is the scope the team's count is in too; `None` with no team.
+    pub merged_by_me_in_team_org: Option<u64>,
     /// PRs merged by the team's members in the window, when a team is chosen.
     pub merged_by_team: Option<u64>,
     /// The team has more members than are looked up, so its count is short.
@@ -325,11 +328,11 @@ const MAX_SEARCH_CHARS: usize = 250;
 /// How many members of a team are looked up: `MAX_MEMBER_PAGES` of 100.
 const MEMBERS_READ_LIMIT: usize = MAX_MEMBER_PAGES * 100;
 
-/// Search texts that count PRs merged since `since` by any of `logins`:
-/// several `author:` qualifiers match any of them, but only so many fit in
-/// one search, so the logins are split across as few as will hold them.
-fn merged_by_searches(since: NaiveDate, logins: &[String]) -> Vec<String> {
-    let start = format!("is:pr is:merged merged:>={since}");
+/// Search texts that count PRs merged since `since` in `org` by any of
+/// `logins`: several `author:` qualifiers match any of them, but only so many
+/// fit in one search, so the logins are split across as few as will hold them.
+fn merged_by_searches(since: NaiveDate, org: &str, logins: &[String]) -> Vec<String> {
+    let start = format!("is:pr is:merged merged:>={since} org:{org}");
     let mut searches = Vec::new();
     let mut current = start.clone();
     for login in logins {
@@ -391,7 +394,7 @@ pub async fn fetch_stats(
     };
     let team_count = async {
         let Some(team) = team else {
-            return Ok((None, false, 0));
+            return Ok(TeamStats::default());
         };
         let Some((org, slug)) = team.split_once('/') else {
             return Err(FetchError::Api(format!("Not a team: {team}")));
@@ -414,37 +417,52 @@ pub async fn fetch_stats(
         // Members are read a page at a time up to a limit, so a team that
         // reaches it may have more.
         let capped = logins.len() >= MEMBERS_READ_LIMIT;
-        let searches = merged_by_searches(since, &logins);
-        // One request for all the counts, each its own aliased search.
+        let searches = merged_by_searches(since, org, &logins);
+        // One request for all the counts, each its own aliased search: the
+        // team's members in the org, and you in the same org.
+        let mine = format!("is:pr is:merged author:@me merged:>={since} org:{org}");
+        let quote = |text: &str| serde_json::to_string(text).expect("a string serializes");
         let query = format!(
-            "query {{\n{}}}",
+            "query {{\nme: search(type: ISSUE, query: {}) {{ issueCount }}\n{}}}",
+            quote(&mine),
             searches
                 .iter()
                 .enumerate()
                 .map(|(i, text)| format!(
                     "s{i}: search(type: ISSUE, query: {}) {{ issueCount }}\n",
-                    serde_json::to_string(text).expect("a string serializes")
+                    quote(text)
                 ))
                 .collect::<String>()
         );
-        if searches.is_empty() {
-            return Ok((Some(0), capped, logins.len()));
-        }
         let reply: Response<Value> = request(http, token, &query, json!({})).await?;
         let total = (0..searches.len())
             .filter_map(|i| reply.data[format!("s{i}")]["issueCount"].as_u64())
             .sum();
-        Ok((Some(total), capped, logins.len()))
+        Ok(TeamStats {
+            merged: Some(total),
+            capped,
+            members: logins.len(),
+            mine_in_org: reply.data["me"]["issueCount"].as_u64(),
+        })
     };
-    let ((merged_by_me, sample), (merged_by_team, team_members_capped, team_member_count)) =
-        future::try_join(mine, team_count).await?;
+    let ((merged_by_me, sample), team_stats) = future::try_join(mine, team_count).await?;
     Ok(StatsData {
         merged_by_me,
-        merged_by_team,
-        team_members_capped,
-        team_member_count,
+        merged_by_me_in_team_org: team_stats.mine_in_org,
+        merged_by_team: team_stats.merged,
+        team_members_capped: team_stats.capped,
+        team_member_count: team_stats.members,
         sample,
     })
+}
+
+/// What the team part of the statistics found.
+#[derive(Default)]
+struct TeamStats {
+    merged: Option<u64>,
+    capped: bool,
+    members: usize,
+    mine_in_org: Option<u64>,
 }
 
 #[derive(Deserialize)]
@@ -1037,16 +1055,16 @@ mod tests {
     #[test]
     fn splits_authors_across_searches_that_fit() {
         let since = NaiveDate::from_ymd_opt(2026, 10, 1).unwrap();
-        assert!(merged_by_searches(since, &[]).is_empty());
+        assert!(merged_by_searches(since, "o", &[]).is_empty());
 
         let few = vec!["ana".to_string(), "bo".to_string()];
         assert_eq!(
-            merged_by_searches(since, &few),
-            ["is:pr is:merged merged:>=2026-10-01 author:ana author:bo"]
+            merged_by_searches(since, "o", &few),
+            ["is:pr is:merged merged:>=2026-10-01 org:o author:ana author:bo"]
         );
 
         let many: Vec<String> = (0..120).map(|i| format!("member-number-{i}")).collect();
-        let searches = merged_by_searches(since, &many);
+        let searches = merged_by_searches(since, "o", &many);
         assert!(searches.len() > 1);
         assert!(searches.iter().all(|s| s.len() <= MAX_SEARCH_CHARS));
         // Every login is in exactly one search.
