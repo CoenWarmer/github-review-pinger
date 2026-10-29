@@ -1,16 +1,24 @@
 name: CI
 
+# Checks only, on one platform, when a pull request is opened or updated. The
+# per-platform builds happen when a release is tagged (release.yml), and the
+# web app is built when it's deployed (pages.yml). To check macOS and Windows
+# too, run this workflow by hand from the Actions tab, on the branch.
 on:
   pull_request:
-  push:
-    branches: [main]
+  workflow_dispatch:
+
+# A newer push to the same pull request makes the older run pointless.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   check:
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-latest, ubuntu-22.04, windows-latest]
+        os: ${{ fromJSON(github.event_name == 'workflow_dispatch' && '["ubuntu-22.04", "macos-latest", "windows-latest"]' || '["ubuntu-22.04"]') }}
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -42,7 +50,7 @@ jobs:
           cargo test --workspace
 
   # The browser build: compile the core logic to WebAssembly and run it through
-  # Node, which the Rust tests can't do, then test and build the web app on it.
+  # Node, which the Rust tests can't do, then test and typecheck the web app on it.
   wasm:
     runs-on: ubuntu-22.04
     steps:
@@ -64,4 +72,4 @@ jobs:
       - run: pnpm --filter @review-pinger/wasm typecheck
       - run: pnpm --filter @review-pinger/wasm smoke
       - run: pnpm --filter @review-pinger/web test
-      - run: pnpm --filter @review-pinger/web build
+      - run: pnpm --filter @review-pinger/web exec tsc --noEmit
