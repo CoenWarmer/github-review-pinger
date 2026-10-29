@@ -162,6 +162,7 @@ export class Engine {
   private failures = 0;
   private visible = true;
   private started = false;
+  private stopped = false;
   private deps: EngineDeps;
 
   constructor(deps: EngineDeps) {
@@ -273,6 +274,7 @@ export class Engine {
   }
 
   private schedule(delayMs: number) {
+    if (this.stopped) return;
     if (this.timer) clearTimeout(this.timer);
     this.timer = setTimeout(() => {
       this.timer = null;
@@ -305,8 +307,9 @@ export class Engine {
     }
   }
 
-  /** Stops polling. */
+  /** Stops polling for good, including a poll that's still in flight. */
   stop() {
+    this.stopped = true;
     if (this.timer) clearTimeout(this.timer);
     this.timer = null;
     if (this.syncTimer) clearTimeout(this.syncTimer);
@@ -565,7 +568,7 @@ export class Engine {
 
   /** Shares a change, after a moment so several go out together. */
   private syncSoon(delayMs = this.deps.syncDelayMs ?? SYNC_DELAY_MS) {
-    if (!this.pinger.syncEnabled()) return;
+    if (this.stopped || !this.pinger.syncEnabled()) return;
     if (this.syncTimer) clearTimeout(this.syncTimer);
     this.syncTimer = setTimeout(() => {
       this.syncTimer = null;
