@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import { ArrowDownWideNarrow, ChevronDown, ChevronRight, RefreshCw, Settings } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -20,6 +20,7 @@ import { RingsLoader } from "./components/RingsLoader";
 import { SettingsPanel } from "./components/SettingsPanel";
 import { Setup, problemMessage } from "./components/Setup";
 import { elapsed } from "./format";
+import { clearSavedLists } from "./cache";
 import { useApplyTheme, useNow, useSnapshot } from "./hooks";
 import { MergedRow } from "./components/MergedRow";
 import { PlatformProvider, usePlatform, type Platform } from "./platform";
@@ -189,7 +190,7 @@ function Footer({ snapshot, now }: { snapshot: Snapshot; now: number }) {
   return (
     <footer className="flex items-center justify-between gap-2 border-t px-3 py-1 text-xs text-muted-background">
       <span>
-        {snapshot.refreshing
+        {snapshot.refreshing || (snapshot.stale && snapshot.status.kind !== "error")
           ? "Refreshing…"
           : snapshot.fetchedAt && `Updated ${elapsed(snapshot.fetchedAt, now)} ago`}
       </span>
@@ -427,8 +428,28 @@ function AppContent() {
 
 /** The whole popover UI, for a host that supplies what it can do. */
 export function App({ platform }: { platform: Platform }) {
+  // Lists saved for one account mustn't show for another, so anything that
+  // changes who's signed in forgets them first.
+  const guarded = useMemo<Platform>(
+    () => ({
+      ...platform,
+      saveToken: (token, sync) => {
+        clearSavedLists();
+        return platform.saveToken(token, sync);
+      },
+      clearToken: () => {
+        clearSavedLists();
+        return platform.clearToken();
+      },
+      setAuthSource: (source) => {
+        clearSavedLists();
+        platform.setAuthSource(source);
+      },
+    }),
+    [platform],
+  );
   return (
-    <PlatformProvider platform={platform}>
+    <PlatformProvider platform={guarded}>
       <AppContent />
     </PlatformProvider>
   );

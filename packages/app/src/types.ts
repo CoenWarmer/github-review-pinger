@@ -191,6 +191,9 @@ export interface Snapshot {
   /** The first load is under way and only My PRs has arrived, so a list that
    * is empty isn't known to be. */
   partial: boolean;
+  /** Set by the UI, not the host: the lists are the ones saved from an
+   * earlier run, shown until the first fetch of this one lands. */
+  stale?: boolean;
   fetchedAt: string | null;
   ssoPartial: boolean;
   pullRequests: PullRequest[];
