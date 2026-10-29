@@ -1,10 +1,23 @@
-import { useEffect, useLayoutEffect, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useState } from "react";
+import {
+  listsOf,
+  loadSavedLists,
+  onSavedListsCleared,
+  saveLists,
+  withSavedLists,
+} from "./cache";
 import { usePlatform } from "./platform";
 import type { Snapshot, Theme } from "./types";
 
+/**
+ * The host's snapshot, with the lists saved from the last run standing in
+ * until the first fetch of this one has something to show.
+ */
 export function useSnapshot(): Snapshot | null {
   const platform = usePlatform();
-  const [snapshot, setSnapshot] = useState<Snapshot | null>(null);
+  const [host, setSnapshot] = useState<Snapshot | null>(null);
+  const [saved, setSaved] = useState(() => loadSavedLists());
+  useEffect(() => onSavedListsCleared(() => setSaved(null)), []);
 
   useEffect(() => {
     let cancelled = false;
@@ -19,7 +32,15 @@ export function useSnapshot(): Snapshot | null {
     };
   }, [platform]);
 
-  return snapshot;
+  // Kept after a moment, so a burst of snapshots writes once.
+  useEffect(() => {
+    const lists = host && listsOf(host);
+    if (!lists) return;
+    const id = setTimeout(() => saveLists(lists), 1000);
+    return () => clearTimeout(id);
+  }, [host]);
+
+  return useMemo(() => host && withSavedLists(host, saved), [host, saved]);
 }
 
 /** Re-renders periodically so relative times stay current between polls. */
