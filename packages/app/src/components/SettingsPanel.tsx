@@ -254,6 +254,9 @@ export function SettingsPanel({
         <SyncSetting sync={sync} />
       </Section>
       <SlackChannels channels={channels} />
+      <p className="m-0 px-3 py-3 text-center text-xs text-muted-foreground">
+        Review Pinger v{platform.version}
+      </p>
     </div>
   );
 }

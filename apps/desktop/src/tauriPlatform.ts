@@ -5,6 +5,7 @@ import type { Platform, Snapshot } from "@review-pinger/app";
 
 /** The desktop app: everything goes through the Rust shell. */
 export const tauriPlatform: Platform = {
+  version: __APP_VERSION__,
   features: { githubCli: true, autostart: true, notifications: true, sound: true },
 
   getSnapshot: () => invoke<Snapshot>("get_snapshot"),
