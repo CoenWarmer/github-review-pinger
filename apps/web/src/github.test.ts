@@ -443,6 +443,7 @@ describe("statistics", () => {
     assert.equal(stats.mergedByMe, 60);
     assert.equal(stats.mergedByTeam, 41);
     assert.equal(stats.teamMembersCapped, false);
+    assert.equal(stats.teamMemberCount, 2);
     assert.deepEqual(stats.sample, [
       { requestedAt: "2026-10-01T10:00:00Z", reviews: [{ by: "ana", at: "2026-10-01T12:00:00Z" }] },
       { requestedAt: null, reviews: [] },
@@ -458,7 +459,7 @@ describe("statistics", () => {
         : new Response(JSON.stringify({ data: { viewer: { login: "me", organizations: { nodes: [] } } }, errors: [{ type: "INSUFFICIENT_SCOPES", message: "needs read:org" }] }), { status: 200 }),
     );
     const stats = await gh.fetchStats(null, "2026-09-29");
-    assert.deepEqual(stats, { mergedByMe: 3, mergedByTeam: null, teamMembersCapped: false, sample: [] });
+    assert.deepEqual(stats, { mergedByMe: 3, mergedByTeam: null, teamMembersCapped: false, teamMemberCount: 0, sample: [] });
     await assert.rejects(gh.fetchMyTeams(), /read:org/);
   });
 

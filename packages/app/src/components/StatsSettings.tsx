@@ -22,6 +22,7 @@ import {
   averageReviewWait,
   averageWaitingNow,
   duration,
+  perMember,
   type Average,
 } from "../stats";
 import type { PullRequest, StatsData } from "../types";
@@ -153,11 +154,23 @@ export function StatsSettings({
   }
 
   const data = stats.kind === "ready" ? stats.value : null;
+  const perMemberAverage = data && team ? perMember(data.mergedByTeam, data.teamMemberCount) : null;
   const bars = data
     ? [
         { who: "You", merged: data.mergedByMe, fill: "var(--info)" },
         ...(data.mergedByTeam !== null && team
           ? [{ who: team.split("/")[1] ?? team, merged: data.mergedByTeam, fill: "var(--muted-foreground)" }]
+          : []),
+        ...(perMemberAverage !== null
+          ? [
+              {
+                who: "Avg per member",
+                // One decimal, so the label, tooltip and table all say the same.
+                merged: Math.round(perMemberAverage * 10) / 10,
+                // The same neutral, lighter: it's derived from the bar above.
+                fill: "color-mix(in oklab, var(--muted-foreground) 60%, transparent)",
+              },
+            ]
           : []),
       ]
     : [];
@@ -214,7 +227,7 @@ export function StatsSettings({
                   dataKey="who"
                   tickLine={false}
                   axisLine={false}
-                  width={96}
+                  width={112}
                   tick={{ fontSize: 11 }}
                   interval={0}
                 />

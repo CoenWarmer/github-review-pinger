@@ -118,6 +118,8 @@ export interface StatsData {
   mergedByTeam: number | null;
   /** The team has more members than are looked up, so its count is short. */
   teamMembersCapped: boolean;
+  /** How many members of the team were looked up; 0 with no team. */
+  teamMemberCount: number;
   /** Up to 100 of your merged PRs, newest first. */
   sample: { requestedAt: string | null; reviews: { by: string | null; at: string }[] }[];
 }
@@ -598,8 +600,8 @@ export function createGithub({
         );
         return { mergedByMe: reply.data.search.issueCount, sample };
       };
-      const teamCount = async (): Promise<{ merged: number | null; capped: boolean }> => {
-        if (!team) return { merged: null, capped: false };
+      const teamCount = async (): Promise<{ merged: number | null; capped: boolean; members: number }> => {
+        if (!team) return { merged: null, capped: false, members: 0 };
         const [org, slug] = team.split("/");
         if (!org || !slug) throw new FetchError("api", `Not a team: ${team}`);
         const found = await github.fetchDirectory({ teams: [[org, slug]] });
@@ -609,17 +611,22 @@ export function createGithub({
         // reaches it may have more.
         const capped = logins.length >= MAX_MEMBER_PAGES * 100;
         const searches = mergedBySearches(since, logins);
-        if (searches.length === 0) return { merged: 0, capped };
+        if (searches.length === 0) return { merged: 0, capped, members: logins.length };
         // One request for all the counts, each its own aliased search.
         const text = `query {\n${searches
           .map((s, i) => `s${i}: search(type: ISSUE, query: ${JSON.stringify(s)}) { issueCount }`)
           .join("\n")}\n}`;
         const reply = await request<Record<string, { issueCount: number }>>(text);
         const merged = searches.reduce((sum, _, i) => sum + (reply.data[`s${i}`]?.issueCount ?? 0), 0);
-        return { merged, capped };
+        return { merged, capped, members: logins.length };
       };
       const [mineResult, team_] = await Promise.all([mine(), teamCount()]);
-      return { ...mineResult, mergedByTeam: team_.merged, teamMembersCapped: team_.capped };
+      return {
+        ...mineResult,
+        mergedByTeam: team_.merged,
+        teamMembersCapped: team_.capped,
+        teamMemberCount: team_.members,
+      };
     },
 
     async addMergeStates(pullRequests) {

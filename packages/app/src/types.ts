@@ -45,6 +45,8 @@ export interface StatsData {
   mergedByTeam: number | null;
   /** The team has more members than are looked up, so its count is short. */
   teamMembersCapped: boolean;
+  /** How many members of the team were looked up; 0 with no team. */
+  teamMemberCount: number;
   /** Up to 100 of your merged PRs, newest first. */
   sample: { requestedAt: string | null; reviews: { by: string | null; at: string }[] }[];
 }

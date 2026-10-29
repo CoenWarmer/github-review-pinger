@@ -69,6 +69,11 @@ export function averageCodeOwners(prs: PullRequest[]): Average {
   return averageOf(reviewable(prs).map((pr) => pr.codeOwners ?? 0));
 }
 
+/** PRs merged per team member, or null when there are no members to divide by. */
+export function perMember(merged: number | null, members: number): number | null {
+  return merged === null || members <= 0 ? null : merged / members;
+}
+
 /** "2d 4h", "5h 20m", "12m": a duration at a glance. */
 export function duration(ms: number): string {
   const minutes = Math.max(0, Math.round(ms / 60_000));

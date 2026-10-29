@@ -299,6 +299,8 @@ pub struct StatsData {
     pub merged_by_team: Option<u64>,
     /// The team has more members than are looked up, so its count is short.
     pub team_members_capped: bool,
+    /// How many members of the team were looked up; 0 with no team.
+    pub team_member_count: usize,
     /// Up to 100 of your merged PRs, newest first.
     pub sample: Vec<StatsSample>,
 }
@@ -389,7 +391,7 @@ pub async fn fetch_stats(
     };
     let team_count = async {
         let Some(team) = team else {
-            return Ok((None, false));
+            return Ok((None, false, 0));
         };
         let Some((org, slug)) = team.split_once('/') else {
             return Err(FetchError::Api(format!("Not a team: {team}")));
@@ -426,20 +428,21 @@ pub async fn fetch_stats(
                 .collect::<String>()
         );
         if searches.is_empty() {
-            return Ok((Some(0), capped));
+            return Ok((Some(0), capped, logins.len()));
         }
         let reply: Response<Value> = request(http, token, &query, json!({})).await?;
         let total = (0..searches.len())
             .filter_map(|i| reply.data[format!("s{i}")]["issueCount"].as_u64())
             .sum();
-        Ok((Some(total), capped))
+        Ok((Some(total), capped, logins.len()))
     };
-    let ((merged_by_me, sample), (merged_by_team, team_members_capped)) =
+    let ((merged_by_me, sample), (merged_by_team, team_members_capped, team_member_count)) =
         future::try_join(mine, team_count).await?;
     Ok(StatsData {
         merged_by_me,
         merged_by_team,
         team_members_capped,
+        team_member_count,
         sample,
     })
 }

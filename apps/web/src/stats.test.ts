@@ -6,6 +6,7 @@ import {
   averageReviewWait,
   averageWaitingNow,
   duration,
+  perMember,
 } from "../../../packages/app/src/stats.ts";
 
 const NOW = Date.parse("2026-10-10T12:00:00Z");
@@ -88,5 +89,17 @@ describe("durations", () => {
     assert.equal(duration(5.5 * 3_600_000), "5h 30m");
     assert.equal(duration(24 * 3_600_000), "1d");
     assert.equal(duration(52 * 3_600_000), "2d 4h");
+  });
+});
+
+describe("merged per team member", () => {
+  it("divides the team's merges by its members", () => {
+    assert.equal(perMember(87, 12), 7.25);
+    assert.equal(perMember(0, 4), 0);
+  });
+
+  it("is nothing without a team or without members", () => {
+    assert.equal(perMember(null, 5), null);
+    assert.equal(perMember(10, 0), null);
   });
 });
