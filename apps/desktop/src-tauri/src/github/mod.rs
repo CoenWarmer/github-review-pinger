@@ -1703,6 +1703,40 @@ mod tests {
         }
     }
 
+    /// Which of the logged-in user's PRs with failing checks got their required
+    /// checks looked up. Run with `cargo test -- --ignored --nocapture live_required_checks`.
+    #[test]
+    #[ignore = "calls the GitHub API with your gh token"]
+    fn live_required_checks() {
+        let token = auth::resolve_token(None).expect("gh is logged in");
+        let since = (Utc::now() - chrono::Duration::days(30)).date_naive();
+        let fetched = tauri::async_runtime::block_on(fetch_open_pull_requests(
+            &http_client(),
+            &token.value,
+            since,
+            true,
+            &[],
+            None,
+        ))
+        .expect("fetch succeeds");
+        for pr in fetched
+            .pull_requests
+            .iter()
+            .filter(|pr| needs_required_checks(pr))
+        {
+            println!(
+                "#{} required_checks: {}",
+                pr.number,
+                pr.required_checks
+                    .as_ref()
+                    .map_or("NONE".to_string(), |checks| format!(
+                        "{} checks",
+                        checks.len()
+                    ))
+            );
+        }
+    }
+
     #[test]
     #[ignore = "calls the GitHub API with your gh token"]
     fn live_merged() {
