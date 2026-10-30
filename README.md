@@ -19,6 +19,10 @@ The app isn't notarized, so the first launch is blocked: open System Settings
 Windows and Linux: download the installer from the
 [latest release](https://github.com/CoenWarmer/github-review-pinger/releases/latest).
 
+The desktop app checks for new releases and offers to install them from a
+banner. (Not for a dev build, or a Linux `.deb`/`.rpm`, which belong to your
+package manager.)
+
 The app uses your [GitHub CLI](https://cli.github.com/) login, or a personal
 access token you paste into its settings.
 
@@ -84,3 +88,13 @@ Run all Rust checks from the repository root: `cargo test --workspace`.
    [CoenWarmer/homebrew-tap](https://github.com/CoenWarmer/homebrew-tap).
    It needs a `HOMEBREW_TAP_TOKEN` secret: a fine-grained token with
    Contents read/write on that repo only.
+
+### Update signing
+
+The app only installs updates signed with the key whose public half is in
+`plugins.updater.pubkey` in `tauri.conf.json`. The Release workflow signs with
+the private half, from two repository secrets: `TAURI_SIGNING_PRIVATE_KEY`
+(the key file's contents) and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` (empty if it
+has none). Losing the key means no installed copy can update again. Building
+the bundles locally (`pnpm tauri build`) also needs `TAURI_SIGNING_PRIVATE_KEY`
+set, because they come with signed update files.

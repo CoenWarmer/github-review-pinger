@@ -35,6 +35,7 @@ import { PrRow } from "./components/PrRow";
 import { SearchResults, matchesQuery } from "./components/SearchResults";
 import { ReviewRow } from "./components/ReviewRow";
 import { RingsLoader } from "./components/RingsLoader";
+import { UpdateBanner } from "./components/UpdateBanner";
 import { SettingsPanel } from "./components/SettingsPanel";
 import { StatsSettings } from "./components/StatsSettings";
 import { Setup, problemMessage } from "./components/Setup";
@@ -585,6 +586,7 @@ function AppContent() {
                   )}
                 </Banner>
               )}
+              <UpdateBanner />
               {snapshot.ssoPartial && (
                 <Banner>
                   Some organizations are hidden because this token isn't

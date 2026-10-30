@@ -6,6 +6,7 @@ mod github;
 mod poller;
 mod settings;
 mod sound;
+mod updater;
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -335,6 +336,7 @@ pub fn run() {
             None,
         ))
         .plugin(tauri_plugin_positioner::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .invoke_handler(tauri::generate_handler![
             get_snapshot,
             refresh,
@@ -370,7 +372,9 @@ pub fn run() {
             snooze,
             unsnooze,
             get_autostart,
-            set_autostart
+            set_autostart,
+            updater::pending_update,
+            updater::install_update
         ])
         .setup(|app| {
             #[cfg(target_os = "macos")]
@@ -414,6 +418,10 @@ pub fn run() {
                 .build(app)?;
 
             app.manage(card::Cards::default());
+            app.manage(updater::Updates::default());
+            if updater::enabled() {
+                updater::start(app.handle());
+            }
             let poller = poller::start(app.handle());
             // Launch at login defaults to on, but a dev build shouldn't
             // register itself as a login item.

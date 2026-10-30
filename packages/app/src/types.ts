@@ -25,6 +25,13 @@ export interface MergedPr {
   mergedAt: string;
 }
 
+/** A newer release, found by checking GitHub. */
+export interface UpdateInfo {
+  version: string;
+  /** The release notes, as written on GitHub. */
+  notes: string | null;
+}
+
 /** A PR found by searching GitHub, in any state. */
 export interface FoundPr {
   id: string;

@@ -7,6 +7,7 @@ import type {
   Snapshot,
   StatsData,
   Theme,
+  UpdateInfo,
   TokenSource,
 } from "./types";
 
@@ -30,6 +31,19 @@ export interface Platform {
     sound: boolean;
     /** CI build statistics can be loaded, through the Buildkite CLI. */
     buildkite: boolean;
+  };
+
+  /**
+   * Desktop only: a newer release can be installed in place. The web app
+   * updates itself, so it leaves this out.
+   */
+  updates?: {
+    /** The update found so far, if any. */
+    pending(): Promise<UpdateInfo | null>;
+    /** Calls `callback` when a newer version is found. Returns how to stop listening. */
+    onFound(callback: (update: UpdateInfo) => void): () => void;
+    /** Installs it and restarts. Rejects with a message to show. */
+    install(): Promise<void>;
   };
 
   getSnapshot(): Promise<Snapshot>;
