@@ -702,6 +702,20 @@ describe("required checks", () => {
       id,
       commits: { nodes: [{ commit: { statusCheckRollup: { state: "SUCCESS" } } }] },
     }) as RawPullRequest;
+  const page = (id: string, nodes: unknown[], next: string | null) => ({
+    id,
+    commits: {
+      nodes: [
+        {
+          commit: {
+            statusCheckRollup: {
+              contexts: { pageInfo: { hasNextPage: next !== null, endCursor: next }, nodes },
+            },
+          },
+        },
+      ],
+    },
+  });
 
   it("is only asked for PRs whose checks fail", () => {
     assert.ok(needsRequiredChecks(failing("a")));
@@ -709,47 +723,52 @@ describe("required checks", () => {
     assert.ok(!needsRequiredChecks({ id: "a" } as RawPullRequest));
   });
 
-  it("asks about each PR by its own id, quoted", () => {
-    const query = requiredChecksQuery(["PR_a", 'PR"b']);
+  it("asks about each PR by its own id, quoted, after its cursor", () => {
+    const query = requiredChecksQuery([
+      ["PR_a", null],
+      ['PR"b', "cur"],
+    ]);
     assert.ok(query.includes('r0: node(id: "PR_a")'));
     assert.ok(query.includes('isRequired(pullRequestId: "PR_a")'));
+    assert.ok(query.includes("contexts(first: 100) {"));
     assert.ok(query.includes('r1: node(id: "PR\\"b")'));
+    assert.ok(query.includes('contexts(first: 100, after: "cur") {'));
   });
 
-  it("records the required checks of failing PRs and leaves the rest alone", async () => {
+  it("records the required checks, with how they stand, across every page", async () => {
     const asked: string[] = [];
     const gh = github(({ query }) => {
       asked.push(query);
+      const second = query.includes('after: "next"');
       return reply({
-        r0: {
-          id: "a",
-          commits: {
-            nodes: [
-              {
-                commit: {
-                  statusCheckRollup: {
-                    contexts: {
-                      nodes: [
-                        { __typename: "CheckRun", name: "build", isRequired: true },
-                        { __typename: "CheckRun", name: "docs", isRequired: false },
-                        { __typename: "StatusContext", context: "kibana-ci", isRequired: true },
-                      ],
-                    },
-                  },
-                },
-              },
-            ],
-          },
-        },
+        r0: second
+          ? page(
+              "a",
+              [{ __typename: "StatusContext", context: "snyk", state: "SUCCESS", isRequired: true }],
+              null,
+            )
+          : page(
+              "a",
+              [
+                { __typename: "CheckRun", name: "build", status: "COMPLETED", conclusion: "SUCCESS", isRequired: true },
+                { __typename: "CheckRun", name: "docs", status: "COMPLETED", conclusion: "FAILURE", isRequired: false },
+                { __typename: "StatusContext", context: "kibana-ci", state: "PENDING", isRequired: true },
+              ],
+              "next",
+            ),
       });
     });
     const prs = [failing("a"), passing("b")];
 
     await gh.addRequiredChecks(prs);
 
-    assert.equal(asked.length, 1);
+    assert.equal(asked.length, 2);
     assert.ok(!asked[0].includes('"b"'));
-    assert.deepEqual(prs[0].requiredChecks, ["build", "kibana-ci"]);
+    assert.deepEqual(prs[0].requiredChecks, [
+      { name: "build", outcome: "passed" },
+      { name: "kibana-ci", outcome: "running" },
+      { name: "snyk", outcome: "passed" },
+    ]);
     assert.equal(prs[1].requiredChecks, undefined);
   });
 

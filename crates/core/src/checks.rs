@@ -6,7 +6,7 @@ use std::collections::HashMap;
 
 use chrono::{DateTime, Utc};
 
-use crate::github::types::{CheckContext, CheckRunStatus, CheckState, PullRequest};
+use crate::github::types::{CheckContext, CheckOutcome, CheckRunStatus, CheckState, PullRequest};
 use crate::memory::{ChecksRun, Memory};
 use crate::prs::{self, Checks};
 
@@ -20,24 +20,21 @@ const MIN_SAMPLES: usize = 3;
 /// Statuses from a PR bot, such as Kibana's `prbot:outdated` ("branch is out
 /// of date"), that report on the PR rather than on a build. They fail often
 /// and drag the whole rollup to FAILURE while the real CI is still running.
+fn is_advisory_name(name: &str) -> bool {
+    name.starts_with("prbot:")
+}
+
 fn is_advisory(context: &CheckContext) -> bool {
-    matches!(context, CheckContext::StatusContext { context, .. } if context.starts_with("prbot:"))
+    matches!(context, CheckContext::StatusContext { context, .. } if is_advisory_name(context))
 }
 
-/// The name a check goes by in branch protection.
-fn name(context: &CheckContext) -> Option<&str> {
-    match context {
-        CheckContext::CheckRun { name, .. } => Some(name),
-        CheckContext::StatusContext { context, .. } => Some(context),
-        CheckContext::Other => None,
-    }
-}
-
-/// The head commit's checks, judged without the advisory statuses, and, when
-/// GitHub said which are required, looking only at those: a failing check
-/// that doesn't block merging isn't the PR's CI failing. `None`
-/// when the rollup is not a failure, or can't be second-guessed because only
-/// part of the checks were fetched; the rollup's own verdict stands then.
+/// The head commit's checks, judged without the advisory statuses and, when
+/// GitHub said which are required, by those alone: a failing check that
+/// doesn't block merging isn't the PR's CI failing.
+///
+/// `None` when the rollup isn't a failure, or can't be second-guessed
+/// because only part of the checks were fetched; the rollup's own verdict
+/// stands then.
 pub(crate) fn without_advisory(pr: &PullRequest) -> Option<Checks> {
     let rollup = pr
         .commits
@@ -49,6 +46,26 @@ pub(crate) fn without_advisory(pr: &PullRequest) -> Option<Checks> {
     if !matches!(rollup.state, CheckState::Failure | CheckState::Error) {
         return None;
     }
+
+    // The required checks come from a lookup that follows every page, so
+    // they're complete even when the PR has more checks than one page holds.
+    if let Some(required) = &pr.required_checks {
+        let required: Vec<_> = required
+            .iter()
+            .filter(|check| !is_advisory_name(&check.name))
+            .collect();
+        if !required.is_empty() {
+            let any = |outcome| required.iter().any(|check| check.outcome == outcome);
+            return Some(if any(CheckOutcome::Failed) {
+                Checks::Failing
+            } else if any(CheckOutcome::Running) {
+                Checks::Pending
+            } else {
+                Checks::Passing
+            });
+        }
+    }
+
     let contexts = rollup.contexts.as_ref()?;
     if contexts
         .total_count
@@ -58,15 +75,7 @@ pub(crate) fn without_advisory(pr: &PullRequest) -> Option<Checks> {
     }
 
     let (mut failed, mut running, mut settled) = (false, false, false);
-    let required = pr
-        .required_checks
-        .as_ref()
-        .filter(|names| !names.is_empty());
-    for context in contexts
-        .iter()
-        .filter(|c| !is_advisory(c))
-        .filter(|c| required.is_none_or(|names| name(c).is_some_and(|n| names.contains(n))))
-    {
+    for context in contexts.iter().filter(|c| !is_advisory(c)) {
         match context {
             CheckContext::CheckRun {
                 status, conclusion, ..

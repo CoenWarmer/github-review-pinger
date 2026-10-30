@@ -1,8 +1,6 @@
 //! Shapes returned by `query.graphql`. Enums carry an `Other` fallback so new
 //! values GitHub adds don't break deserialization.
 
-use std::collections::HashSet;
-
 use chrono::{DateTime, Utc};
 use serde::de::IgnoredAny;
 use serde::{Deserialize, Serialize};
@@ -116,11 +114,11 @@ pub struct PullRequest {
     /// be ready to merge, and `None` for the rest.
     #[serde(default)]
     pub merge_state_status: Option<MergeStateStatus>,
-    /// Not part of the details query either: the names of the head commit's
-    /// checks that branch protection requires, asked for PRs whose checks
-    /// fail. `None` when not asked or the lookup failed.
+    /// Not part of the details query either: the head commit's checks that
+    /// branch protection requires, and how each stands, asked for PRs whose
+    /// checks fail. `None` when not asked or the lookup failed.
     #[serde(default)]
-    pub required_checks: Option<HashSet<String>>,
+    pub required_checks: Option<Vec<RequiredCheck>>,
     /// Not part of the details query; set for PRs by others that came back
     /// from the `review-requested` search, i.e. a review is pending from the
     /// viewer or one of their teams.
@@ -243,6 +241,21 @@ pub struct StatusCheckRollup {
     pub state: CheckState,
     #[serde(default)]
     pub contexts: Option<Nodes<CheckContext>>,
+}
+
+/// A check that branch protection requires, and how it stands.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct RequiredCheck {
+    pub name: String,
+    pub outcome: CheckOutcome,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum CheckOutcome {
+    Passed,
+    Running,
+    Failed,
 }
 
 /// One check on the head commit, reduced to what's needed for timing.
