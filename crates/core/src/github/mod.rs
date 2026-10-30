@@ -49,7 +49,7 @@ pub fn required_checks_query(lookups: &[(String, Option<String>)]) -> String {
                 "  r{i}: node(id: {id}) {{ ... on PullRequest {{ id commits(last: 1) {{ nodes {{ commit {{ \
 statusCheckRollup {{ contexts(first: 100{after}) {{ pageInfo {{ hasNextPage endCursor }} nodes {{ __typename \
 ... on CheckRun {{ name status conclusion isRequired(pullRequestId: {id}) }} \
-... on StatusContext {{ context state isRequired(pullRequestId: {id}) }} }} }} }} }} }} }} }} }} }}\n"
+... on StatusContext {{ context state isRequired(pullRequestId: {id}) }} }} }} }} }} }} }} }} }}\n"
             )
         })
         .collect();
@@ -191,6 +191,37 @@ mod tests {
         // An id can't end the string it's quoted in, and a cursor continues the page.
         assert!(query.contains("r1: node(id: \"PR\\\"b\")"));
         assert!(query.contains("contexts(first: 100, after: \"cur\") {"));
+    }
+
+    #[test]
+    fn the_required_checks_query_is_well_formed() {
+        let query = required_checks_query(&[
+            ("PR_a".to_string(), None),
+            ("PR_b".to_string(), Some("cur".to_string())),
+        ]);
+        // GitHub rejects the whole request for a stray brace, so every lookup
+        // must close exactly what it opens, and none may end the query early.
+        let mut depth = 0i32;
+        let mut parens = 0i32;
+        let mut quoted = false;
+        for c in query.chars() {
+            match c {
+                '"' => quoted = !quoted,
+                '{' if !quoted => depth += 1,
+                '}' if !quoted => depth -= 1,
+                '(' if !quoted => parens += 1,
+                ')' if !quoted => parens -= 1,
+                _ => {}
+            }
+            assert!(depth >= 0, "closed more than was opened in:\n{query}");
+        }
+        assert_eq!((depth, parens), (0, 0), "unbalanced:\n{query}");
+        // Each lookup is its own balanced line, so one can't swallow the next.
+        for line in query.lines().filter(|l| l.trim_start().starts_with('r')) {
+            let opens = line.matches('{').count();
+            let closes = line.matches('}').count();
+            assert_eq!(opens, closes, "lookup out of balance: {line}");
+        }
     }
 
     #[test]
