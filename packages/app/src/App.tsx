@@ -22,12 +22,20 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { cn } from "@/lib/utils";
 import { PrRow } from "./components/PrRow";
 import { SearchResults, matchesQuery } from "./components/SearchResults";
 import { ReviewRow } from "./components/ReviewRow";
 import { RingsLoader } from "./components/RingsLoader";
+import { UpdateBanner } from "./components/UpdateBanner";
 import { SettingsPanel } from "./components/SettingsPanel";
 import { StatsSettings } from "./components/StatsSettings";
 import { Setup, problemMessage } from "./components/Setup";
@@ -80,6 +88,9 @@ function Empty({ children }: { children: ReactNode }) {
     </p>
   );
 }
+
+/** The repo filter's "no repo chosen" (a Select can't have an empty value). */
+const ALL_REPOS = "__all__";
 
 function Banner({ children }: { children: ReactNode }) {
   return <p className="m-0 border-t bg-warning/15 px-3 py-2">{children}</p>;
@@ -275,6 +286,7 @@ function AppContent() {
   const now = useNow();
   const [tab, setTab] = useState<Tab>("mine");
   const [query, setQuery] = useState("");
+  const [repo, setRepo] = useState(ALL_REPOS);
   useApplyTheme(snapshot?.theme);
   // Once a fetch has landed (so sync has had its say), hand over the sorts
   // this browser remembered before they were synced.
@@ -300,14 +312,33 @@ function AppContent() {
     return <Setup problem={snapshot.status.problem} />;
   }
 
-  const prs = snapshot.pullRequests;
-  const reviews = snapshot.reviewRequests;
+  const allPrs = snapshot.pullRequests;
+  const allReviews = snapshot.reviewRequests;
+  // The repo filter narrows every list, but not the tab counts or the statistics.
+  const inRepo = <T extends { repo: string }>(rows: T[]): T[] =>
+    repo === ALL_REPOS ? rows : rows.filter((row) => row.repo === repo);
+  const prs = inRepo(allPrs);
+  const reviews = inRepo(allReviews);
+  const merged = inRepo(snapshot.mergedPullRequests);
+  const viewRows = (id: string) => inRepo(snapshot.viewPullRequests[id] ?? []);
+  const repoOptions = [
+    ...new Set(
+      (tab === "reviews"
+        ? allReviews
+        : [
+            ...allPrs,
+            ...Object.values(snapshot.viewPullRequests).flat(),
+            ...snapshot.mergedPullRequests,
+          ]
+      ).map((pr) => pr.repo),
+    ),
+  ].sort((a, b) => a.localeCompare(b));
   const counts: Partial<Record<Tab, number>> = {
-    mine: prs.filter(
+    mine: allPrs.filter(
       (pr) =>
         pr.actions.length > 0 && ["approved", "needsAction"].includes(pr.group),
     ).length,
-    reviews: reviews.filter((pr) => pr.group === "needsReview").length,
+    reviews: allReviews.filter((pr) => pr.group === "needsReview").length,
   };
   // Only the PR lists can be filtered.
   const filterable = tab === "mine" || tab === "reviews";
@@ -331,7 +362,7 @@ function AppContent() {
     // A PR in a custom view may also be one of yours: list it once.
     const open = [
       ...prs,
-      ...Object.values(snapshot.viewPullRequests).flat(),
+      ...inRepo(Object.values(snapshot.viewPullRequests).flat()),
     ].filter(
       (pr, i, all) => all.findIndex((other) => other.id === pr.id) === i,
     );
@@ -343,7 +374,7 @@ function AppContent() {
         ...pr.reviewers.map((r) => r.login),
       ]),
     );
-    const foundMerged = snapshot.mergedPullRequests.filter((pr) =>
+    const foundMerged = merged.filter((pr) =>
       matchesQuery(query, [pr.title, pr.repo, pr.number]),
     );
     return {
@@ -367,7 +398,11 @@ function AppContent() {
         <main className="flex h-full flex-col">
           <Tabs
             value={tab}
-            onValueChange={(value) => setTab(value as Tab)}
+            onValueChange={(value) => {
+              setTab(value as Tab);
+              // Each tab has its own repos.
+              setRepo(ALL_REPOS);
+            }}
             className="gap-0 py-1"
           >
             <TabsList
@@ -396,7 +431,7 @@ function AppContent() {
             </TabsList>
           </Tabs>
           {filterable && (
-            <div className="border-b px-3 py-3">
+            <div className="flex items-center gap-2 border-b px-3 py-3">
               <Input
                 type="search"
                 aria-label="Filter pull requests"
@@ -405,8 +440,29 @@ function AppContent() {
                 spellCheck={false}
                 value={query}
                 onChange={(e) => setQuery(e.currentTarget.value)}
-                className="h-7 text-xs md:text-xs"
+                className="h-7 min-w-0 flex-1 text-xs md:text-xs"
               />
+              {(repoOptions.length > 1 || repo !== ALL_REPOS) && (
+                <Select value={repo} onValueChange={setRepo}>
+                  <SelectTrigger
+                    size="sm"
+                    aria-label="Filter by repository"
+                    className="w-32 shrink-0 text-xs data-[size=sm]:h-7"
+                  >
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value={ALL_REPOS} className="text-xs whitespace-nowrap">
+                      All repos
+                    </SelectItem>
+                    {repoOptions.map((name) => (
+                      <SelectItem key={name} value={name} className="text-xs whitespace-nowrap">
+                        {name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              )}
             </div>
           )}
           {/* Pinned over the list, so a notice appearing doesn't push the rows down. */}
@@ -414,8 +470,9 @@ function AppContent() {
             <ScrollArea className="h-full">
               {search ? (
                 <SearchResults
-                  key={`${tab}:${query.trim()}`}
+                  key={`${tab}:${repo}:${query.trim()}`}
                   query={query}
+                  repo={repo === ALL_REPOS ? null : repo}
                   shownIds={search.ids}
                   rows={search.rows}
                   now={now}
@@ -425,7 +482,7 @@ function AppContent() {
                 // never on the polling cycle, to spare the API quota.
                 <div className="px-3 py-3">
                   <StatsSettings
-                    pullRequests={prs}
+                    pullRequests={allPrs}
                     viewer={snapshot.viewer}
                     buildkitePipeline={snapshot.buildkitePipeline}
                   />
@@ -448,9 +505,9 @@ function AppContent() {
                 />
               ) : tab === "mine" ? (
                 prs.length === 0 &&
-                snapshot.mergedPullRequests.length === 0 &&
+                merged.length === 0 &&
                 Object.values(snapshot.viewPullRequests).every(
-                  (rows) => rows.length === 0,
+                  (rows) => inRepo(rows).length === 0,
                 ) ? (
                   <Empty>No open pull requests.</Empty>
                 ) : (
@@ -465,7 +522,7 @@ function AppContent() {
                             key={`view:${pref.id}`}
                             id={`mine:view:${pref.id}`}
                             title={view.name}
-                            rows={snapshot.viewPullRequests[pref.id] ?? []}
+                            rows={viewRows(pref.id)}
                             defaultOpen={false}
                             render={(pr) => (
                               <PrRow key={pr.id} pr={pr} now={now} />
@@ -477,7 +534,7 @@ function AppContent() {
                         return (
                           <MergedSection
                             key="merged"
-                            rows={snapshot.mergedPullRequests}
+                            rows={merged}
                             canLoadMore={snapshot.mergedCanLoadMore}
                             now={now}
                           />
@@ -529,6 +586,7 @@ function AppContent() {
                   )}
                 </Banner>
               )}
+              <UpdateBanner />
               {snapshot.ssoPartial && (
                 <Banner>
                   Some organizations are hidden because this token isn't

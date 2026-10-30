@@ -1325,6 +1325,87 @@ mod tests {
         assert_eq!(pr.checks, Checks::Failing);
     }
 
+    fn failed_run(name: &str) -> Value {
+        json!({
+            "__typename": "CheckRun",
+            "name": name,
+            "status": "COMPLETED",
+            "conclusion": "FAILURE",
+            "startedAt": "2026-10-01T09:00:00Z",
+            "completedAt": "2026-10-01T09:01:00Z",
+        })
+    }
+
+    fn with_contexts(state: &str, contexts: Vec<Value>) -> Value {
+        json!({ "commit": {
+            "committedDate": "2026-10-01T09:00:00Z",
+            "statusCheckRollup": {
+                "state": state,
+                "contexts": { "totalCount": contexts.len(), "nodes": contexts },
+            },
+        } })
+    }
+
+    fn status_node(context: &str, state: &str) -> Value {
+        json!({
+            "__typename": "StatusContext",
+            "context": context,
+            "state": state,
+            "createdAt": "2026-10-01T09:00:00Z",
+        })
+    }
+
+    #[test]
+    fn a_failing_check_that_isnt_required_does_not_fail_the_ci() {
+        let commit = with_contexts(
+            "FAILURE",
+            vec![
+                failed_run("release-notes / validate"),
+                status_node("kibana-ci", "SUCCESS"),
+            ],
+        );
+        let unknown = derive_one(json!({ "commits": { "nodes": [commit.clone()] } }));
+        assert_eq!(unknown.checks, Checks::Failing);
+
+        let pr = derive_one(json!({
+            "requiredChecks": ["kibana-ci"],
+            "commits": { "nodes": [commit] },
+        }));
+        assert_eq!(pr.checks, Checks::Passing);
+    }
+
+    #[test]
+    fn required_checks_still_running_show_as_running_despite_other_failures() {
+        let pr = derive_one(json!({
+            "requiredChecks": ["kibana-ci"],
+            "commits": { "nodes": [with_contexts("FAILURE", vec![
+                failed_run("release-notes / validate"),
+                status_node("kibana-ci", "PENDING"),
+            ])] },
+        }));
+        assert_eq!(pr.checks, Checks::Pending);
+    }
+
+    #[test]
+    fn a_failing_required_check_fails_the_ci() {
+        let pr = derive_one(json!({
+            "requiredChecks": ["kibana-ci"],
+            "commits": { "nodes": [with_contexts("FAILURE", vec![
+                status_node("kibana-ci", "FAILURE"),
+            ])] },
+        }));
+        assert_eq!(pr.checks, Checks::Failing);
+    }
+
+    #[test]
+    fn no_required_checks_means_every_check_counts() {
+        let pr = derive_one(json!({
+            "requiredChecks": [],
+            "commits": { "nodes": [with_contexts("FAILURE", vec![failed_run("build")])] },
+        }));
+        assert_eq!(pr.checks, Checks::Failing);
+    }
+
     #[test]
     fn a_partial_page_of_checks_keeps_the_rollup_verdict() {
         let mut commit = commit_with_statuses("FAILURE", &[("prbot:outdated", "FAILURE")]);

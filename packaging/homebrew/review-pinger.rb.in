@@ -8,6 +8,9 @@ cask "review-pinger" do
   desc "Menu bar app showing your open GitHub pull requests and their review status"
   homepage "https://github.com/CoenWarmer/github-review-pinger"
 
+  # The app updates itself; brew shouldn't fight it.
+  auto_updates true
+
   app "Review Pinger.app"
 
   zap trash: [

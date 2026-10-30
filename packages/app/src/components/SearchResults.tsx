@@ -76,11 +76,14 @@ type GithubSearch =
  */
 export function SearchResults({
   query,
+  repo,
   shownIds,
   rows,
   now,
 }: {
   query: string;
+  /** `owner/name` when the list is narrowed to one repo, so GitHub's search is too. */
+  repo: string | null;
   /** The ids of the PRs in `rows`, which GitHub's results leave out. */
   shownIds: string[];
   rows: ReactNode;
@@ -100,7 +103,7 @@ export function SearchResults({
   async function searchGithub() {
     setSearch({ kind: "searching" });
     try {
-      const found = await platform.searchPullRequests(query.trim());
+      const found = await platform.searchPullRequests(repo ? `${query.trim()} repo:${repo}` : query.trim());
       if (mounted.current) setSearch({ kind: "done", found });
     } catch (e) {
       if (mounted.current) setSearch({ kind: "failed", message: String(e) });

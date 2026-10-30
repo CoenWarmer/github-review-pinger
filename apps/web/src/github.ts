@@ -64,6 +64,8 @@ export interface RawPullRequest {
   commits?: { nodes: ({ commit: { statusCheckRollup?: { state: string } | null } } | null)[] };
   reviewRequested?: boolean;
   mergeStateStatus?: string | null;
+  /** Names of the head commit's checks that branch protection requires; filled in for PRs whose checks fail. */
+  requiredChecks?: string[] | null;
   [field: string]: unknown;
 }
 
@@ -243,6 +245,8 @@ export interface Github {
    */
   fetchStats(team: string | null, range: string, byMember?: boolean): Promise<StatsData>;
   addMergeStates(pullRequests: RawPullRequest[]): Promise<void>;
+  /** Best effort: leaves `requiredChecks` unset when GitHub can't say. */
+  addRequiredChecks(pullRequests: RawPullRequest[]): Promise<void>;
   fetchDirectory(needs: Needs): Promise<Found>;
   /** The token's scopes as GitHub lists them; `null` for tokens that have none, such as fine-grained ones. */
   scopes(): Promise<string | null>;
@@ -508,6 +512,8 @@ export function createGithub({
         };
         const mine = async () => {
           const own = await detailsOf(authored.ids);
+          // Before the first paint, so a red badge doesn't flash and turn green.
+          await github.addRequiredChecks(own);
           onPartial({
             viewer,
             pullRequests: [...own],
@@ -526,6 +532,7 @@ export function createGithub({
         const all = await github.fetchDetails(ids);
         byId = new Map(all.map((pr) => [pr.id, pr]));
         pullRequests = authored.ids.flatMap((id) => byId.get(id) ?? []);
+        await github.addRequiredChecks(pullRequests);
         await github.addMergeStates(pullRequests);
       }
       for (const pr of pullRequests) byId.set(pr.id, pr);
@@ -832,6 +839,24 @@ export function createGithub({
       for (const pr of pullRequests) pr.mergeStateStatus = byId.get(pr.id) ?? null;
     },
 
+    async addRequiredChecks(pullRequests) {
+      const failing = pullRequests.filter(needsRequiredChecks).map((pr) => pr.id);
+      if (failing.length === 0) return;
+      try {
+        const replies = await mapLimit(chunks(failing, BATCH_SIZE), MAX_CONCURRENT, (batch) =>
+          request<Record<string, RequiredChecksReply | null>>(requiredChecksQuery(batch)),
+        );
+        const required = new Map(
+          replies.flatMap((reply) => Object.values(reply.data)).flatMap((r) => (r ? [requiredNames(r)] : [])),
+        );
+        for (const pr of pullRequests) {
+          if (failing.includes(pr.id)) pr.requiredChecks = required.get(pr.id) ?? null;
+        }
+      } catch (e) {
+        console.warn("Could not tell which checks are required", e);
+      }
+    },
+
     async fetchDirectory(needs) {
       const quote = (s: string) => JSON.stringify(s);
       const key = (org: string, slug: string) => `${org.toLowerCase()}/${slug.toLowerCase()}`;
@@ -923,6 +948,56 @@ function membersPage(members: NonNullable<NonNullable<MembersData["team"]>["memb
   const logins = members.nodes.flatMap((node) => (node?.login ? [node.login.toLowerCase()] : []));
   const info = members.pageInfo;
   return { logins, next: info?.hasNextPage ? (info.endCursor ?? null) : null };
+}
+
+/** Whether the PR's checks fail, so which of them are required decides if that counts. Mirrors the core crate's `needs_required_checks`. */
+export function needsRequiredChecks(pr: RawPullRequest): boolean {
+  const commits = (pr.commits?.nodes ?? []).filter((node) => node !== null);
+  const state = commits.at(-1)?.commit.statusCheckRollup?.state;
+  return state === "FAILURE" || state === "ERROR";
+}
+
+/**
+ * Asks which of each PR's head-commit checks are required. `isRequired`
+ * needs the PR it's asked about, which a query over many PRs can't pass
+ * along, so each PR gets its own aliased lookup. Mirrors the core crate's
+ * `required_checks_query`.
+ */
+export function requiredChecksQuery(ids: string[]): string {
+  const lookups = ids
+    .map((id, i) => {
+      // JSON quoting is GraphQL string quoting, and an id can't break out of it.
+      const quoted = JSON.stringify(id);
+      return `  r${i}: node(id: ${quoted}) { ... on PullRequest { id commits(last: 1) { nodes { commit { statusCheckRollup { contexts(first: 100) { nodes { __typename ... on CheckRun { name isRequired(pullRequestId: ${quoted}) } ... on StatusContext { context isRequired(pullRequestId: ${quoted}) } } } } } } } } }\n`;
+    })
+    .join("");
+  return `query RequiredChecks {\n${lookups}}`;
+}
+
+interface RequiredChecksReply {
+  id: string;
+  commits?: {
+    nodes: ({
+      commit: {
+        statusCheckRollup?: {
+          contexts?: {
+            nodes: ({ name?: string; context?: string; isRequired?: boolean } | null)[];
+          } | null;
+        } | null;
+      };
+    } | null)[];
+  } | null;
+}
+
+/** The PR's id and the names of its required checks. */
+export function requiredNames(reply: RequiredChecksReply): [string, string[]] {
+  const names = (reply.commits?.nodes ?? [])
+    .flatMap((node) => node?.commit.statusCheckRollup?.contexts?.nodes ?? [])
+    .flatMap((context) =>
+      context?.isRequired ? [context.name ?? context.context ?? ""] : [],
+    )
+    .filter((name) => name !== "");
+  return [reply.id, names];
 }
 
 /**

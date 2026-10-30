@@ -1,7 +1,8 @@
 pub use review_pinger_core::github::types;
 use review_pinger_core::github::{
     DETAILS_QUERY, MERGE_STATE_QUERY, MERGED_QUERY, MERGED_SEARCH, MERGED_SEARCH_QUERY,
-    PR_SEARCH_QUERY, SEARCH_QUERY, STATS_MERGED_QUERY,
+    PR_SEARCH_QUERY, RequiredChecksReply, SEARCH_QUERY, STATS_MERGED_QUERY, needs_required_checks,
+    required_checks_query,
 };
 
 use std::collections::{HashMap, HashSet};
@@ -155,6 +156,8 @@ pub async fn fetch_open_pull_requests(
                 .collect();
             let mine = async {
                 let mut own = details_sharing(http, token, &authored.ids, &limiter).await?;
+                // Before the first paint, so a red badge doesn't flash and turn green.
+                add_required_checks(http, token, &mut own).await;
                 on_partial(&Fetched {
                     viewer: viewer.clone(),
                     pull_requests: own.clone(),
@@ -177,6 +180,7 @@ pub async fn fetch_open_pull_requests(
                 .iter()
                 .filter_map(|id| by_id.get(id).cloned())
                 .collect();
+            add_required_checks(http, token, &mut pull_requests).await;
             add_merge_states(http, token, &mut pull_requests).await?;
         }
     }
@@ -1026,6 +1030,49 @@ pub async fn add_merge_states(
         pr.merge_state_status = merge_states.get(&pr.id).copied();
     }
     Ok(())
+}
+
+/// Fills in `required_checks` for PRs whose checks fail, so a failing check
+/// that branch protection doesn't require isn't reported as the CI failing.
+/// Best effort: without it the verdict falls back to every check counting.
+pub async fn add_required_checks(
+    http: &reqwest::Client,
+    token: &str,
+    pull_requests: &mut [PullRequest],
+) {
+    let failing: Vec<String> = pull_requests
+        .iter()
+        .filter(|pr| needs_required_checks(pr))
+        .map(|pr| pr.id.clone())
+        .collect();
+    if failing.is_empty() {
+        return;
+    }
+    let queries: Vec<String> = failing
+        .chunks(BATCH_SIZE)
+        .map(required_checks_query)
+        .collect();
+    type Lookups = HashMap<String, Option<RequiredChecksReply>>;
+    let replies: Result<Vec<Response<Lookups>>, _> = stream::iter(queries)
+        .map(|query| async move { request(http, token, &query, json!({})).await })
+        .buffer_unordered(MAX_CONCURRENT)
+        .try_collect()
+        .await;
+    let required: HashMap<String, HashSet<String>> = match replies {
+        Ok(batches) => batches
+            .into_iter()
+            .flat_map(|batch| batch.data.into_values())
+            .flatten()
+            .map(|reply| reply.required_names())
+            .collect(),
+        Err(e) => {
+            log::warn!("Couldn't tell which checks are required: {e:?}");
+            return;
+        }
+    };
+    for pr in pull_requests {
+        pr.required_checks = required.get(&pr.id).cloned();
+    }
 }
 
 /// Which of `ids`, previously your own open PRs, are merged rather than just

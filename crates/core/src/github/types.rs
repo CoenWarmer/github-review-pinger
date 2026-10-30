@@ -1,6 +1,8 @@
 //! Shapes returned by `query.graphql`. Enums carry an `Other` fallback so new
 //! values GitHub adds don't break deserialization.
 
+use std::collections::HashSet;
+
 use chrono::{DateTime, Utc};
 use serde::de::IgnoredAny;
 use serde::{Deserialize, Serialize};
@@ -114,6 +116,11 @@ pub struct PullRequest {
     /// be ready to merge, and `None` for the rest.
     #[serde(default)]
     pub merge_state_status: Option<MergeStateStatus>,
+    /// Not part of the details query either: the names of the head commit's
+    /// checks that branch protection requires, asked for PRs whose checks
+    /// fail. `None` when not asked or the lookup failed.
+    #[serde(default)]
+    pub required_checks: Option<HashSet<String>>,
     /// Not part of the details query; set for PRs by others that came back
     /// from the `review-requested` search, i.e. a review is pending from the
     /// viewer or one of their teams.
@@ -244,6 +251,8 @@ pub struct StatusCheckRollup {
 pub enum CheckContext {
     /// A GitHub Actions or other check run. Keeps its `started_at` once done.
     CheckRun {
+        #[serde(default)]
+        name: String,
         status: CheckRunStatus,
         /// How it ended, once completed.
         #[serde(default)]

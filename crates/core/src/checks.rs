@@ -24,7 +24,18 @@ fn is_advisory(context: &CheckContext) -> bool {
     matches!(context, CheckContext::StatusContext { context, .. } if context.starts_with("prbot:"))
 }
 
-/// The head commit's checks, judged without the advisory statuses. `None`
+/// The name a check goes by in branch protection.
+fn name(context: &CheckContext) -> Option<&str> {
+    match context {
+        CheckContext::CheckRun { name, .. } => Some(name),
+        CheckContext::StatusContext { context, .. } => Some(context),
+        CheckContext::Other => None,
+    }
+}
+
+/// The head commit's checks, judged without the advisory statuses, and, when
+/// GitHub said which are required, looking only at those: a failing check
+/// that doesn't block merging isn't the PR's CI failing. `None`
 /// when the rollup is not a failure, or can't be second-guessed because only
 /// part of the checks were fetched; the rollup's own verdict stands then.
 pub(crate) fn without_advisory(pr: &PullRequest) -> Option<Checks> {
@@ -47,7 +58,15 @@ pub(crate) fn without_advisory(pr: &PullRequest) -> Option<Checks> {
     }
 
     let (mut failed, mut running, mut settled) = (false, false, false);
-    for context in contexts.iter().filter(|c| !is_advisory(c)) {
+    let required = pr
+        .required_checks
+        .as_ref()
+        .filter(|names| !names.is_empty());
+    for context in contexts
+        .iter()
+        .filter(|c| !is_advisory(c))
+        .filter(|c| required.is_none_or(|names| name(c).is_some_and(|n| names.contains(n))))
+    {
         match context {
             CheckContext::CheckRun {
                 status, conclusion, ..

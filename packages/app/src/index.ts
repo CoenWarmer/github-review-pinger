@@ -18,6 +18,7 @@ export type {
   Snapshot,
   SyncStatus,
   TeamChannel,
+  UpdateInfo,
   Theme,
   TokenSource,
   View,

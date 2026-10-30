@@ -1,12 +1,23 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import type { Platform, Snapshot } from "@review-pinger/app";
+import type { Platform, Snapshot, UpdateInfo } from "@review-pinger/app";
 
 /** The desktop app: everything goes through the Rust shell. */
 export const tauriPlatform: Platform = {
   version: __APP_VERSION__,
   features: { githubCli: true, autostart: true, notifications: true, sound: true, buildkite: true },
+
+  updates: {
+    pending: () => invoke<UpdateInfo | null>("pending_update"),
+    onFound: (callback) => {
+      const unlisten = listen<UpdateInfo>("update-available", (event) => callback(event.payload));
+      return () => {
+        unlisten.then((stop) => stop());
+      };
+    },
+    install: () => invoke("install_update"),
+  },
 
   getSnapshot: () => invoke<Snapshot>("get_snapshot"),
   onSnapshot: (callback) => {

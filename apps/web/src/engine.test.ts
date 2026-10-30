@@ -126,6 +126,7 @@ class FakeGithub implements Github {
     return { mergedByMe: 0, mergedByMeInTeamOrg: null, mergedByTeam: null, teamMembersCapped: false, teamMemberCount: 0, teamMemberMerged: null, sample: [] };
   }
   async addMergeStates() {}
+  async addRequiredChecks() {}
   async fetchDirectory() {
     this.directoryCalls++;
     return this.found;
