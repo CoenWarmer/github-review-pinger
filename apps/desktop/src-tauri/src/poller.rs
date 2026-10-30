@@ -843,6 +843,7 @@ async fn refresh_visited(app: &AppHandle, poller: &Poller, ids: Vec<String>) {
         };
         let (mut own, others): (Vec<_>, Vec<_>) =
             fresh.drain(..).partition(|pr| authored.contains(&pr.id));
+        github::add_required_checks(&poller.http, &token.value, &mut own).await;
         github::add_merge_states(&poller.http, &token.value, &mut own).await?;
         own.extend(others);
 

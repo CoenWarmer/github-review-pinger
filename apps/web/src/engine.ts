@@ -309,7 +309,9 @@ export class Engine {
     if (!github) return;
     try {
       const fresh = await github.fetchDetails(ids);
-      await github.addMergeStates(fresh.filter((pr) => this.ownIds.has(pr.id)));
+      const own = fresh.filter((pr) => this.ownIds.has(pr.id));
+      await github.addRequiredChecks(own);
+      await github.addMergeStates(own);
       this.pinger.applyRefresh(JSON.stringify(fresh));
       this.rederive();
       this.persist();

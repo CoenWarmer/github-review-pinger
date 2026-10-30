@@ -5,6 +5,8 @@ import {
   mergedBySearches,
   couldBeReady,
   FetchError,
+  needsRequiredChecks,
+  requiredChecksQuery,
   type Queries,
   type RawPullRequest,
 } from "./github.ts";
@@ -686,5 +688,75 @@ describe("review statistics", () => {
           : reply({ viewer: { contributionsCollection: { totalPullRequestReviewContributions: 1 } } }),
     );
     await assert.rejects(gh.fetchReviewStats("o/core", ...WINDOW), /read:org/);
+  });
+});
+
+describe("required checks", () => {
+  const failing = (id: string): RawPullRequest =>
+    ({
+      id,
+      commits: { nodes: [{ commit: { statusCheckRollup: { state: "FAILURE" } } }] },
+    }) as RawPullRequest;
+  const passing = (id: string): RawPullRequest =>
+    ({
+      id,
+      commits: { nodes: [{ commit: { statusCheckRollup: { state: "SUCCESS" } } }] },
+    }) as RawPullRequest;
+
+  it("is only asked for PRs whose checks fail", () => {
+    assert.ok(needsRequiredChecks(failing("a")));
+    assert.ok(!needsRequiredChecks(passing("a")));
+    assert.ok(!needsRequiredChecks({ id: "a" } as RawPullRequest));
+  });
+
+  it("asks about each PR by its own id, quoted", () => {
+    const query = requiredChecksQuery(["PR_a", 'PR"b']);
+    assert.ok(query.includes('r0: node(id: "PR_a")'));
+    assert.ok(query.includes('isRequired(pullRequestId: "PR_a")'));
+    assert.ok(query.includes('r1: node(id: "PR\\"b")'));
+  });
+
+  it("records the required checks of failing PRs and leaves the rest alone", async () => {
+    const asked: string[] = [];
+    const gh = github(({ query }) => {
+      asked.push(query);
+      return reply({
+        r0: {
+          id: "a",
+          commits: {
+            nodes: [
+              {
+                commit: {
+                  statusCheckRollup: {
+                    contexts: {
+                      nodes: [
+                        { __typename: "CheckRun", name: "build", isRequired: true },
+                        { __typename: "CheckRun", name: "docs", isRequired: false },
+                        { __typename: "StatusContext", context: "kibana-ci", isRequired: true },
+                      ],
+                    },
+                  },
+                },
+              },
+            ],
+          },
+        },
+      });
+    });
+    const prs = [failing("a"), passing("b")];
+
+    await gh.addRequiredChecks(prs);
+
+    assert.equal(asked.length, 1);
+    assert.ok(!asked[0].includes('"b"'));
+    assert.deepEqual(prs[0].requiredChecks, ["build", "kibana-ci"]);
+    assert.equal(prs[1].requiredChecks, undefined);
+  });
+
+  it("leaves them unset, without failing, when GitHub can't say", async () => {
+    const gh = github(() => new Response("", { status: 502 }));
+    const prs = [failing("a")];
+    await gh.addRequiredChecks(prs);
+    assert.equal(prs[0].requiredChecks, undefined);
   });
 });
