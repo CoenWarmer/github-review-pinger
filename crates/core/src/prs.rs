@@ -1368,7 +1368,7 @@ mod tests {
         assert_eq!(unknown.checks, Checks::Failing);
 
         let pr = derive_one(json!({
-            "requiredChecks": ["kibana-ci"],
+            "requiredChecks": [{ "name": "kibana-ci", "outcome": "passed" }],
             "commits": { "nodes": [commit] },
         }));
         assert_eq!(pr.checks, Checks::Passing);
@@ -1377,7 +1377,7 @@ mod tests {
     #[test]
     fn required_checks_still_running_show_as_running_despite_other_failures() {
         let pr = derive_one(json!({
-            "requiredChecks": ["kibana-ci"],
+            "requiredChecks": [{ "name": "kibana-ci", "outcome": "running" }],
             "commits": { "nodes": [with_contexts("FAILURE", vec![
                 failed_run("release-notes / validate"),
                 status_node("kibana-ci", "PENDING"),
@@ -1389,12 +1389,39 @@ mod tests {
     #[test]
     fn a_failing_required_check_fails_the_ci() {
         let pr = derive_one(json!({
-            "requiredChecks": ["kibana-ci"],
+            "requiredChecks": [{ "name": "kibana-ci", "outcome": "failed" }],
             "commits": { "nodes": [with_contexts("FAILURE", vec![
                 status_node("kibana-ci", "FAILURE"),
             ])] },
         }));
         assert_eq!(pr.checks, Checks::Failing);
+    }
+
+    #[test]
+    fn required_checks_decide_even_when_a_page_of_checks_was_cut_off() {
+        // 108 checks, 100 fetched: the first page shows a failing check that
+        // isn't required and a required one still running.
+        let mut commit = with_contexts(
+            "FAILURE",
+            vec![
+                failed_run("release-notes / validate"),
+                status_node("kibana-ci", "PENDING"),
+            ],
+        );
+        commit["commit"]["statusCheckRollup"]["contexts"]["totalCount"] = json!(108);
+        let pr = derive_one(json!({
+            "requiredChecks": [
+                { "name": "kibana-ci", "outcome": "running" },
+                { "name": "CLA", "outcome": "passed" },
+                { "name": "prbot:outdated", "outcome": "failed" },
+            ],
+            "commits": { "nodes": [commit.clone()] },
+        }));
+        assert_eq!(pr.checks, Checks::Pending);
+
+        // Without the lookup the cut-off page can't be trusted: GitHub's verdict stands.
+        let unknown = derive_one(json!({ "commits": { "nodes": [commit] } }));
+        assert_eq!(unknown.checks, Checks::Failing);
     }
 
     #[test]

@@ -64,8 +64,8 @@ export interface RawPullRequest {
   commits?: { nodes: ({ commit: { statusCheckRollup?: { state: string } | null } } | null)[] };
   reviewRequested?: boolean;
   mergeStateStatus?: string | null;
-  /** Names of the head commit's checks that branch protection requires; filled in for PRs whose checks fail. */
-  requiredChecks?: string[] | null;
+  /** The head commit's checks that branch protection requires, and how each stands; filled in for PRs whose checks fail. */
+  requiredChecks?: RequiredCheck[] | null;
   [field: string]: unknown;
 }
 
@@ -840,20 +840,33 @@ export function createGithub({
     },
 
     async addRequiredChecks(pullRequests) {
-      const failing = pullRequests.filter(needsRequiredChecks).map((pr) => pr.id);
-      if (failing.length === 0) return;
+      let asking: [string, string | null][] = pullRequests
+        .filter(needsRequiredChecks)
+        .map((pr) => [pr.id, null]);
+      const found = new Map<string, RequiredCheck[]>();
       try {
-        const replies = await mapLimit(chunks(failing, BATCH_SIZE), MAX_CONCURRENT, (batch) =>
-          request<Record<string, RequiredChecksReply | null>>(requiredChecksQuery(batch)),
-        );
-        const required = new Map(
-          replies.flatMap((reply) => Object.values(reply.data)).flatMap((r) => (r ? [requiredNames(r)] : [])),
-        );
-        for (const pr of pullRequests) {
-          if (failing.includes(pr.id)) pr.requiredChecks = required.get(pr.id) ?? null;
+        for (let page = 0; page < MAX_CHECK_PAGES && asking.length > 0; page++) {
+          const replies = await mapLimit(chunks(asking, BATCH_SIZE), MAX_CONCURRENT, (batch) =>
+            request<Record<string, RequiredChecksReply | null>>(requiredChecksQuery(batch)),
+          );
+          asking = [];
+          for (const reply of replies.flatMap((r) => Object.values(r.data))) {
+            if (!reply) continue;
+            const [id, checks, next] = requiredPage(reply);
+            found.set(id, [...(found.get(id) ?? []), ...checks]);
+            if (next !== null) asking.push([id, next]);
+          }
         }
       } catch (e) {
         console.warn("Could not tell which checks are required", e);
+        return;
+      }
+      // A PR still being paged through when the limit hit has an incomplete list.
+      const incomplete = new Set(asking.map(([id]) => id));
+      for (const pr of pullRequests) {
+        if (needsRequiredChecks(pr) && !incomplete.has(pr.id)) {
+          pr.requiredChecks = found.get(pr.id) ?? null;
+        }
       }
     },
 
@@ -957,22 +970,29 @@ export function needsRequiredChecks(pr: RawPullRequest): boolean {
   return state === "FAILURE" || state === "ERROR";
 }
 
+/** Most pages of checks followed for one PR. Mirrors the core crate's `MAX_CHECK_PAGES`. */
+const MAX_CHECK_PAGES = 5;
+
 /**
- * Asks which of each PR's head-commit checks are required. `isRequired`
- * needs the PR it's asked about, which a query over many PRs can't pass
- * along, so each PR gets its own aliased lookup. Mirrors the core crate's
+ * Asks which of each PR's head-commit checks are required, and how each
+ * stands. `isRequired` needs the PR it's asked about, which a query over many
+ * PRs can't pass along, so each PR gets its own aliased lookup, after the
+ * cursor given for it when its checks span pages. Mirrors the core crate's
  * `required_checks_query`.
  */
-export function requiredChecksQuery(ids: string[]): string {
-  const lookups = ids
-    .map((id, i) => {
+export function requiredChecksQuery(lookups: [id: string, cursor: string | null][]): string {
+  const body = lookups
+    .map(([id, cursor], i) => {
       // JSON quoting is GraphQL string quoting, and an id can't break out of it.
       const quoted = JSON.stringify(id);
-      return `  r${i}: node(id: ${quoted}) { ... on PullRequest { id commits(last: 1) { nodes { commit { statusCheckRollup { contexts(first: 100) { nodes { __typename ... on CheckRun { name isRequired(pullRequestId: ${quoted}) } ... on StatusContext { context isRequired(pullRequestId: ${quoted}) } } } } } } } } }\n`;
+      const after = cursor === null ? "" : `, after: ${JSON.stringify(cursor)}`;
+      return `  r${i}: node(id: ${quoted}) { ... on PullRequest { id commits(last: 1) { nodes { commit { statusCheckRollup { contexts(first: 100${after}) { pageInfo { hasNextPage endCursor } nodes { __typename ... on CheckRun { name status conclusion isRequired(pullRequestId: ${quoted}) } ... on StatusContext { context state isRequired(pullRequestId: ${quoted}) } } } } } } } } }\n`;
     })
     .join("");
-  return `query RequiredChecks {\n${lookups}}`;
+  return `query RequiredChecks {\n${body}}`;
 }
+
+export type RequiredCheck = { name: string; outcome: "passed" | "running" | "failed" };
 
 interface RequiredChecksReply {
   id: string;
@@ -981,7 +1001,15 @@ interface RequiredChecksReply {
       commit: {
         statusCheckRollup?: {
           contexts?: {
-            nodes: ({ name?: string; context?: string; isRequired?: boolean } | null)[];
+            pageInfo: { hasNextPage: boolean; endCursor: string | null };
+            nodes: ({
+              name?: string;
+              status?: string;
+              conclusion?: string | null;
+              context?: string;
+              state?: string;
+              isRequired?: boolean;
+            } | null)[];
           } | null;
         } | null;
       };
@@ -989,15 +1017,30 @@ interface RequiredChecksReply {
   } | null;
 }
 
-/** The PR's id and the names of its required checks. */
-export function requiredNames(reply: RequiredChecksReply): [string, string[]] {
-  const names = (reply.commits?.nodes ?? [])
-    .flatMap((node) => node?.commit.statusCheckRollup?.contexts?.nodes ?? [])
-    .flatMap((context) =>
-      context?.isRequired ? [context.name ?? context.context ?? ""] : [],
-    )
-    .filter((name) => name !== "");
-  return [reply.id, names];
+/**
+ * The PR's id, the required checks on this page, and the cursor to ask for
+ * the next page with, when there is one. Mirrors `RequiredChecksReply::page`.
+ */
+export function requiredPage(reply: RequiredChecksReply): [string, RequiredCheck[], string | null] {
+  const contexts = (reply.commits?.nodes ?? []).flatMap(
+    (node) => node?.commit.statusCheckRollup?.contexts ?? [],
+  )[0];
+  const checks = (contexts?.nodes ?? []).flatMap((c): RequiredCheck[] => {
+    if (!c?.isRequired) return [];
+    const name = c.name ?? c.context;
+    if (name === undefined) return [];
+    let outcome: RequiredCheck["outcome"];
+    if (c.status !== undefined) {
+      if (c.status !== "COMPLETED") outcome = "running";
+      else if (["SUCCESS", "SKIPPED", "NEUTRAL"].includes(c.conclusion ?? "")) outcome = "passed";
+      else outcome = "failed";
+    } else if (c.state === "SUCCESS") outcome = "passed";
+    else if (c.state === "FAILURE" || c.state === "ERROR") outcome = "failed";
+    else outcome = "running";
+    return [{ name, outcome }];
+  });
+  const next = contexts?.pageInfo.hasNextPage ? contexts.pageInfo.endCursor : null;
+  return [reply.id, checks, next];
 }
 
 /**

@@ -1,8 +1,8 @@
 pub use review_pinger_core::github::types;
 use review_pinger_core::github::{
-    DETAILS_QUERY, MERGE_STATE_QUERY, MERGED_QUERY, MERGED_SEARCH, MERGED_SEARCH_QUERY,
-    PR_SEARCH_QUERY, RequiredChecksReply, SEARCH_QUERY, STATS_MERGED_QUERY, needs_required_checks,
-    required_checks_query,
+    DETAILS_QUERY, MAX_CHECK_PAGES, MERGE_STATE_QUERY, MERGED_QUERY, MERGED_SEARCH,
+    MERGED_SEARCH_QUERY, PR_SEARCH_QUERY, RequiredChecksReply, SEARCH_QUERY, STATS_MERGED_QUERY,
+    needs_required_checks, required_checks_query,
 };
 
 use std::collections::{HashMap, HashSet};
@@ -19,7 +19,7 @@ use tokio::sync::Semaphore;
 use crate::directory::{Directory, Found, Needs};
 use types::{
     CheckState, FoundPullRequest, MergeStateStatus, Mergeable, MergedPullRequest, PullRequest,
-    ReviewDecision, ReviewState, SearchedPullRequest,
+    RequiredCheck, ReviewDecision, ReviewState, SearchedPullRequest,
 };
 
 const ENDPOINT: &str = "https://api.github.com/graphql";
@@ -1034,44 +1034,61 @@ pub async fn add_merge_states(
 
 /// Fills in `required_checks` for PRs whose checks fail, so a failing check
 /// that branch protection doesn't require isn't reported as the CI failing.
-/// Best effort: without it the verdict falls back to every check counting.
+/// A PR can have more checks than one page holds, so each lookup follows the
+/// pages. Best effort: without it the verdict falls back to GitHub's own.
 pub async fn add_required_checks(
     http: &reqwest::Client,
     token: &str,
     pull_requests: &mut [PullRequest],
 ) {
-    let failing: Vec<String> = pull_requests
+    type Lookups = HashMap<String, Option<RequiredChecksReply>>;
+    let mut asking: Vec<(String, Option<String>)> = pull_requests
         .iter()
         .filter(|pr| needs_required_checks(pr))
-        .map(|pr| pr.id.clone())
+        .map(|pr| (pr.id.clone(), None))
         .collect();
-    if failing.is_empty() {
-        return;
-    }
-    let queries: Vec<String> = failing
-        .chunks(BATCH_SIZE)
-        .map(required_checks_query)
-        .collect();
-    type Lookups = HashMap<String, Option<RequiredChecksReply>>;
-    let replies: Result<Vec<Response<Lookups>>, _> = stream::iter(queries)
-        .map(|query| async move { request(http, token, &query, json!({})).await })
-        .buffer_unordered(MAX_CONCURRENT)
-        .try_collect()
-        .await;
-    let required: HashMap<String, HashSet<String>> = match replies {
-        Ok(batches) => batches
+    let mut found: HashMap<String, Vec<RequiredCheck>> = HashMap::new();
+
+    for _ in 0..MAX_CHECK_PAGES {
+        if asking.is_empty() {
+            break;
+        }
+        let queries: Vec<String> = asking
+            .chunks(BATCH_SIZE)
+            .map(required_checks_query)
+            .collect();
+        let replies: Result<Vec<Response<Lookups>>, _> = stream::iter(queries)
+            .map(|query| async move { request(http, token, &query, json!({})).await })
+            .buffer_unordered(MAX_CONCURRENT)
+            .try_collect()
+            .await;
+        let replies = match replies {
+            Ok(replies) => replies,
+            Err(e) => {
+                log::warn!("Couldn't tell which checks are required: {e:?}");
+                return;
+            }
+        };
+        asking = Vec::new();
+        for reply in replies
             .into_iter()
             .flat_map(|batch| batch.data.into_values())
             .flatten()
-            .map(|reply| reply.required_names())
-            .collect(),
-        Err(e) => {
-            log::warn!("Couldn't tell which checks are required: {e:?}");
-            return;
+        {
+            let (id, checks, next) = reply.page();
+            found.entry(id.clone()).or_default().extend(checks);
+            if let Some(cursor) = next {
+                asking.push((id, Some(cursor)));
+            }
         }
-    };
+    }
+
+    // A PR still being paged through when the limit hit has an incomplete list.
+    let incomplete: HashSet<&String> = asking.iter().map(|(id, _)| id).collect();
     for pr in pull_requests {
-        pr.required_checks = required.get(&pr.id).cloned();
+        if !incomplete.contains(&pr.id) {
+            pr.required_checks = found.remove(&pr.id);
+        }
     }
 }
 
