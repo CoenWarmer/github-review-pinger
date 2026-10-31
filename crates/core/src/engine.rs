@@ -2,7 +2,7 @@
 //! about, and patching single pull requests into the last fetch. The desktop
 //! and web apps do their own fetching and call this.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use chrono::{DateTime, Duration, TimeZone, Utc};
 
@@ -21,6 +21,7 @@ use crate::settings::Settings;
 const COLD_START_GAP: Duration = Duration::minutes(15);
 
 /// What a fetch brought back.
+#[derive(Clone)]
 pub struct Fetched {
     pub viewer: String,
     pub token_source: TokenSource,
@@ -133,11 +134,81 @@ pub fn record_poll<Tz: TimeZone>(
     }
 }
 
+/// Which searches found each PR, so one fetched partway through a refresh
+/// can be filed where it belongs.
+#[derive(Default)]
+pub struct Matches {
+    pub authored: HashSet<String>,
+    pub requested: HashSet<String>,
+    pub reviewed: HashSet<String>,
+    /// Each enabled view's matches, by view id.
+    pub views: HashMap<String, HashSet<String>>,
+}
+
+/// Puts PRs fetched partway through a refresh into `fetched`, for display
+/// only. Without `found` (the searches haven't returned) only PRs already in
+/// the lists are replaced, as in `apply_refresh`. With it, new ones are added
+/// too. Nothing is removed for no longer matching: the complete fetch decides
+/// that.
+pub fn apply_progress(fetched: &mut Fetched, mut fresh: Vec<PullRequest>, found: Option<&Matches>) {
+    // Merge states arrive last, so keep what's shown until they do; otherwise
+    // a "Ready to merge" badge would vanish and come back.
+    for pr in &mut fresh {
+        if pr.merge_state_status.is_none() {
+            pr.merge_state_status = fetched
+                .pull_requests
+                .iter()
+                .find(|old| old.id == pr.id)
+                .and_then(|old| old.merge_state_status);
+        }
+    }
+    let Some(found) = found else {
+        return apply_refresh(fetched, fresh);
+    };
+    for pr in fresh {
+        if pr.closed {
+            apply_refresh(fetched, vec![pr]);
+            continue;
+        }
+        for (id, ids) in &found.views {
+            if ids.contains(&pr.id) {
+                upsert(
+                    fetched.view_pull_requests.entry(id.clone()).or_default(),
+                    pr.clone(),
+                );
+            }
+        }
+        if found.authored.contains(&pr.id) {
+            upsert(&mut fetched.pull_requests, pr);
+        } else if found.requested.contains(&pr.id) || found.reviewed.contains(&pr.id) {
+            let mut pr = pr;
+            pr.review_requested = found.requested.contains(&pr.id);
+            upsert(&mut fetched.review_pull_requests, pr);
+        }
+    }
+}
+
+fn upsert(list: &mut Vec<PullRequest>, pr: PullRequest) {
+    match list.iter().position(|p| p.id == pr.id) {
+        Some(at) => list[at] = pr,
+        None => list.push(pr),
+    }
+}
+
 /// Replaces each refreshed PR in place, or drops it if it was merged or
 /// closed. PRs the last fetch didn't list are ignored; the full refresh
 /// decides what belongs in the lists.
 pub fn apply_refresh(fetched: &mut Fetched, fresh: Vec<PullRequest>) {
     for pr in fresh {
+        for list in fetched.view_pull_requests.values_mut() {
+            if let Some(at) = list.iter().position(|p| p.id == pr.id) {
+                if pr.closed {
+                    list.remove(at);
+                } else {
+                    list[at] = pr.clone();
+                }
+            }
+        }
         if let Some(at) = fetched.pull_requests.iter().position(|p| p.id == pr.id) {
             if pr.closed {
                 fetched.pull_requests.remove(at);
@@ -215,6 +286,41 @@ mod tests {
             )],
             view_pull_requests: HashMap::new(),
         }
+    }
+
+    #[test]
+    fn progress_before_the_searches_only_replaces_known_prs() {
+        let mut fetched = fetched();
+        let fresh = vec![
+            pr("mine", serde_json::json!({ "title": "New" })),
+            pr("stranger", serde_json::json!({})),
+        ];
+        apply_progress(&mut fetched, fresh, None);
+        assert_eq!(fetched.pull_requests.len(), 1);
+        assert_eq!(fetched.pull_requests[0].title, "New");
+        assert_eq!(fetched.review_pull_requests.len(), 1);
+    }
+
+    #[test]
+    fn progress_after_the_searches_files_new_prs_where_they_were_found() {
+        let mut fetched = fetched();
+        let matches = Matches {
+            authored: ["own".to_string()].into(),
+            requested: ["asked".to_string()].into(),
+            reviewed: ["done".to_string()].into(),
+            views: HashMap::new(),
+        };
+        let fresh = ["own", "asked", "done"]
+            .map(|id| pr(id, serde_json::json!({})))
+            .into();
+        apply_progress(&mut fetched, fresh, Some(&matches));
+        assert_eq!(fetched.pull_requests.len(), 2);
+        let asked: Vec<_> = fetched
+            .review_pull_requests
+            .iter()
+            .map(|pr| (pr.id.as_str(), pr.review_requested))
+            .collect();
+        assert_eq!(asked, [("theirs", true), ("asked", true), ("done", false)]);
     }
 
     #[test]
