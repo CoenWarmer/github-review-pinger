@@ -511,8 +511,13 @@ mod tests {
         pinger
             .poll(&fetch(vec![pr("mine", json!({}))], vec![]), NOW, 0)
             .unwrap();
-        let natural = update(&pinger.derived(NOW).unwrap().unwrap())["pullRequests"][0]["group"].clone();
-        let target = if natural == "draft" { "waiting" } else { "draft" };
+        let natural =
+            update(&pinger.derived(NOW).unwrap().unwrap())["pullRequests"][0]["group"].clone();
+        let target = if natural == "draft" {
+            "waiting"
+        } else {
+            "draft"
+        };
         pinger.set_placement("mine", Some(target), NOW).unwrap();
 
         let out = update(&pinger.derived(NOW).unwrap().unwrap());

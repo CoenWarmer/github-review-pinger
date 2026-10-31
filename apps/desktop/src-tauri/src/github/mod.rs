@@ -1,8 +1,8 @@
 pub use review_pinger_core::github::types;
 use review_pinger_core::github::{
     DETAILS_QUERY, MAX_CHECK_PAGES, MERGE_STATE_QUERY, MERGED_QUERY, MERGED_SEARCH,
-    MERGED_SEARCH_QUERY, PR_DETAILS_QUERY, PR_SEARCH_QUERY, RequiredChecksReply, SEARCH_QUERY, STATS_MERGED_QUERY,
-    needs_required_checks, required_checks_query,
+    MERGED_SEARCH_QUERY, PR_DETAILS_QUERY, PR_SEARCH_QUERY, RequiredChecksReply, SEARCH_QUERY,
+    STATS_MERGED_QUERY, needs_required_checks, required_checks_query,
 };
 
 use std::collections::{HashMap, HashSet};
@@ -1086,7 +1086,10 @@ pub async fn fetch_stats_repos(
         }),
     )
     .await?;
-    let merged = reply.data["merged"]["nodes"].as_array().into_iter().flatten();
+    let merged = reply.data["merged"]["nodes"]
+        .as_array()
+        .into_iter()
+        .flatten();
     let reviewed = reply.data["viewer"]["contributionsCollection"]
         ["pullRequestReviewContributionsByRepository"]
         .as_array()
@@ -1796,7 +1799,10 @@ mod tests {
     fn scopes_team_searches_to_the_chosen_repos_in_the_org() {
         assert_eq!(team_scope("o", &[]).as_deref(), Some("org:o"));
         let repos = vec!["o/a".to_string(), "x/b".to_string(), "o/c".to_string()];
-        assert_eq!(team_scope("o", &repos).as_deref(), Some("repo:o/a repo:o/c"));
+        assert_eq!(
+            team_scope("o", &repos).as_deref(),
+            Some("repo:o/a repo:o/c")
+        );
         assert_eq!(team_scope("y", &repos), None);
         assert_eq!(repo_qualifiers(&[]), "");
         assert_eq!(repo_qualifiers(&repos[..2]), " repo:o/a repo:x/b");

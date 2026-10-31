@@ -554,7 +554,11 @@ mod tests {
         assert_eq!(uploaded.placements["pr1"].value.as_deref(), Some("waiting"));
 
         let mut phone = Memory::default();
-        let result = reconcile(&mut phone, Some(uploaded.clone()), at("2026-10-28T12:01:00Z"));
+        let result = reconcile(
+            &mut phone,
+            Some(uploaded.clone()),
+            at("2026-10-28T12:01:00Z"),
+        );
         assert!(result.changed);
         assert_eq!(phone.placements()["pr1"], "waiting");
 

@@ -446,12 +446,18 @@ mod tests {
             placements: &placements,
         };
         let placed = derive(&[pr(json!({}))], ME, &rules, at(NOW)).remove(0);
-        assert_eq!((placed.group, placed.placed), (ReviewGroup::WaitingOnAuthor, true));
+        assert_eq!(
+            (placed.group, placed.placed),
+            (ReviewGroup::WaitingOnAuthor, true)
+        );
         // A name from the other list doesn't apply here.
         let placements = HashMap::from([("PR_1".to_string(), "waiting".to_string())]);
-        let rules = Rules { placements: &placements, ..rules };
+        let rules = Rules {
+            placements: &placements,
+            ..rules
+        };
         let natural = derive(&[pr(json!({}))], ME, &rules, at(NOW)).remove(0);
-        assert_eq!(natural.placed, false);
+        assert!(!natural.placed);
     }
 
     #[test]

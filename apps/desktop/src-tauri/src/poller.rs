@@ -345,9 +345,15 @@ impl Poller {
                 until: None,
             }
         };
-        github::fetch_stats(&self.http, &token, team.as_deref(), window, &lowercase(repos))
-            .await
-            .map_err(fetch_error_message)
+        github::fetch_stats(
+            &self.http,
+            &token,
+            team.as_deref(),
+            window,
+            &lowercase(repos),
+        )
+        .await
+        .map_err(fetch_error_message)
     }
 
     /// The reviews submitted in the last `days`, with `team` (`org/slug`)
@@ -377,8 +383,8 @@ impl Poller {
             !previous,
             &lowercase(repos),
         )
-            .await
-            .map_err(fetch_error_message)
+        .await
+        .map_err(fetch_error_message)
     }
 
     /// Statistics over the builds on PRs you authored, from the Buildkite CLI,
@@ -1414,6 +1420,14 @@ fn tray_text(
     )
 }
 
+/// Repo names compared and searched in lowercase, without repeats.
+fn lowercase(repos: Vec<String>) -> Vec<String> {
+    let mut repos: Vec<String> = repos.iter().map(|repo| repo.to_lowercase()).collect();
+    repos.sort();
+    repos.dedup();
+    repos
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1437,12 +1451,4 @@ mod tests {
             "Review Pinger: 1 PR needs your action, 2 reviews are waiting on you"
         );
     }
-}
-
-/// Repo names compared and searched in lowercase, without repeats.
-fn lowercase(repos: Vec<String>) -> Vec<String> {
-    let mut repos: Vec<String> = repos.iter().map(|repo| repo.to_lowercase()).collect();
-    repos.sort();
-    repos.dedup();
-    repos
 }
