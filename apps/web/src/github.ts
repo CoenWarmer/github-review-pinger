@@ -499,6 +499,10 @@ export function createGithub({
       plan = NO_PLAN,
       onProgress,
     ) {
+      const started = performance.now();
+      const lap = (what: string) =>
+        console.info(`refresh timing +${Math.round(performance.now() - started)}ms: ${what}`);
+      console.info(`refresh timing: starting; phase 1 has ${plan.first.length} PRs (${plan.own.length} own), reviews tab: ${plan.reviewsTab}`);
       const reviewed = `is:pr is:open reviewed-by:@me -author:@me archived:false updated:>=${reviewedSince}`;
       const emptySearch = { viewer: "", ids: [] as string[], ssoPartial: false };
       const searches = Promise.all([
@@ -506,26 +510,39 @@ export function createGithub({
         searchIds(REVIEW_REQUESTED),
         searchIds(reviewed),
         Promise.all(views.map(([, query]) => searchIds(query))),
-      ]);
+      ]).then((found) => {
+        lap("searches returned");
+        return found;
+      });
       // Added to what the details query returns for your own PRs: required
       // checks, then (after `show`) merge states, which double a PR's cost.
       const fetchPart = async (
         prs: RawPullRequest[],
         own: Set<string>,
         show: (fresh: RawPullRequest[]) => void,
+        name: string,
       ) => {
         const mine = prs.filter((pr) => own.has(pr.id));
         // Before the first paint, so a red badge doesn't flash and turn green.
         await github.addRequiredChecks(mine);
-        if (prs.length > 0) show(prs);
+        lap(`${name} required checks done (${mine.length} own)`);
+        if (prs.length > 0) {
+          show(prs);
+          lap(`${name} shown`);
+        }
         await github.addMergeStates(mine);
+        lap(`${name} merge states done`);
         return prs;
       };
       const firstPhase = async () => {
         if (plan.first.length === 0) return [];
         const fresh = await github.fetchDetails(plan.first);
-        return fetchPart(fresh, new Set(plan.own), (shown) =>
-          onProgress?.({ fresh: shown, matches: null, viewer: "", ssoPartial: false }),
+        lap(`phase 1 details in (${fresh.length} PRs)`);
+        return fetchPart(
+          fresh,
+          new Set(plan.own),
+          (shown) => onProgress?.({ fresh: shown, matches: null, viewer: "", ssoPartial: false }),
+          "phase 1",
         );
       };
       const [first, [authored, requested, reviewedByMe, viewResults]] = await Promise.all([
@@ -583,14 +600,21 @@ export function createGithub({
           .flatMap((reply) => reply.data.nodes)
           .filter((node): node is RawPullRequest => node !== null);
       };
-      const phase = async (ids: string[]) =>
-        fetchPart(await detailsOf(ids), authoredIds, (fresh) =>
-          onProgress?.({ fresh, matches, viewer, ssoPartial }),
+      const phase = async (name: string, ids: string[]) => {
+        const fresh = await detailsOf(ids);
+        lap(`${name} details in (${fresh.length} PRs)`);
+        return fetchPart(
+          fresh,
+          authoredIds,
+          (shown) => onProgress?.({ fresh: shown, matches, viewer, ssoPartial }),
+          name,
         );
+      };
       const [tab, other] = await Promise.all([
-        phase(wanted.filter(inTab)),
-        phase(wanted.filter((id) => !inTab(id))),
+        phase("phase 2", wanted.filter(inTab)),
+        phase("phase 3", wanted.filter((id) => !inTab(id))),
       ]);
+      lap("all phases done");
       // Only your own PRs got the expensive merge state; it's on the objects
       // before anything clones from `byId`, so a PR that's also in a view carries it.
       const byId = new Map([...first, ...tab, ...other].map((pr) => [pr.id, pr]));

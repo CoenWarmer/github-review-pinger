@@ -341,6 +341,7 @@ export class Engine {
   /** Remembers what the page is showing, for the next poll to fetch first. */
   setViewState(state: { reviewsTab: boolean; openIds: string[] }) {
     this.viewState = { reviewsTab: state.reviewsTab, openIds: new Set(state.openIds) };
+    console.info(`refresh timing: view state set: ${state.openIds.length} open PRs, reviews tab: ${state.reviewsTab}`);
   }
 
   /** Asks the next poll to refresh a PR first, and remembers it for the next visit. */
