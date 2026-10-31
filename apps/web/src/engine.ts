@@ -681,10 +681,10 @@ export class Engine {
   }
 
   /** A PR's description, size and timeline, for its "Details" fold-out. Rejects with a message to show. */
-  async loadPrDetails(id: string): Promise<PrDetailsData | null> {
+  async loadPrDetails(id: string, after: string | null = null): Promise<PrDetailsData | null> {
     if (!this.github) throw "There's no token to load details with.";
     try {
-      return await this.github.fetchPrDetails(id);
+      return await this.github.fetchPrDetails(id, after);
     } catch (e) {
       throw e instanceof Error ? e.message : String(e);
     }

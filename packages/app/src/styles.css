@@ -133,3 +133,7 @@
   overflow: hidden;
   border: 0 !important;
 }
+/* Rows here have nothing to expand, so the waterfall's empty chevron slot only pushes the labels right. */
+.pr-trace [role="rowheader"] > span:first-child:empty {
+  display: none;
+}

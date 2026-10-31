@@ -292,9 +292,13 @@ impl Poller {
 
     /// A PR's description, size and timeline, for its "Details" fold-out.
     /// Rejects with a message to show.
-    pub async fn pr_details(&self, id: &str) -> Result<serde_json::Value, String> {
+    pub async fn pr_details(
+        &self,
+        id: &str,
+        after: Option<&str>,
+    ) -> Result<serde_json::Value, String> {
         let token = self.search_token().await?;
-        github::fetch_pr_details(&self.http, &token, id)
+        github::fetch_pr_details(&self.http, &token, id, after)
             .await
             .map_err(fetch_error_message)
     }

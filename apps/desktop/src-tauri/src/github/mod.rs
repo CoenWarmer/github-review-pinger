@@ -395,14 +395,21 @@ pub async fn search_pull_requests(
 }
 
 /// One PR's description, size and timeline as GitHub answers, for the
-/// "Details" fold-out, which shapes it. `Null` for a PR that's gone.
+/// "Details" fold-out, which shapes it. `Null` for a PR that's gone. Its
+/// files come from the `after` cursor on, or from the first when `None`.
 pub async fn fetch_pr_details(
     http: &reqwest::Client,
     token: &str,
     id: &str,
+    after: Option<&str>,
 ) -> Result<Value, FetchError> {
-    let reply: Response<Value> =
-        request(http, token, PR_DETAILS_QUERY, json!({ "id": id })).await?;
+    let reply: Response<Value> = request(
+        http,
+        token,
+        PR_DETAILS_QUERY,
+        json!({ "id": id, "after": after }),
+    )
+    .await?;
     Ok(reply.data["node"].clone())
 }
 

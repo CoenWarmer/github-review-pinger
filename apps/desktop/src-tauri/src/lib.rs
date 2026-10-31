@@ -156,9 +156,10 @@ async fn search_pull_requests(
 #[tauri::command]
 async fn load_pr_details(
     id: String,
+    after: Option<String>,
     poller: State<'_, Arc<Poller>>,
 ) -> Result<serde_json::Value, String> {
-    poller.pr_details(&id).await
+    poller.pr_details(&id, after.as_deref()).await
 }
 
 #[tauri::command]

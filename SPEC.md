@@ -200,14 +200,17 @@ bottom:
    (older) ones at a time.
 
 Each row has a **Details** toggle, which folds out below it: lines added and
-deleted and files changed, a timeline, and the first lines of the description
+deleted and files changed, how many files each code-owning team owns as a
+horizontal bar chart (from the CODEOWNERS file of the branch the PR merges into, counted over up to 500
+files), a timeline, and the first lines of the description
 as markdown (no raw HTML or images; links open outside the app). The timeline
-(the `react-otel-trace-waterfall` component) has a row for the PR, from when it
+(the `react-otel-trace-waterfall` component) has a "PR Timeline" row, from when it
 was opened to now or its merge, with markers for opening, being marked ready
 for review, going back to draft and merging, and below it a row per code owner
 and per other reviewer who has commented or reviewed (up to six), from when the
 PR was ready, with a marker for each comment and for each approval or change
-request. Code owners still being waited on run to now. GitHub only says who is
+request, each a button that opens that comment or review on GitHub (the PR's
+own markers open the PR). Code owners still being waited on run to now. GitHub only says who is
 a code owner for review requests still pending, so one who has reviewed since
 shows as an ordinary reviewer. Details are fetched when a row is folded out,
 not with the poll, and kept for two minutes.

@@ -5,6 +5,7 @@ import { descriptionPreview, timelineSpans } from "../../../packages/app/src/det
 
 const at = (s: string) => Date.parse(s);
 const NOW = at("2026-10-10T12:00:00Z");
+const PR_URL = "https://github.com/o/r/pull/1";
 
 const data = (overrides: Partial<PrDetailsData> = {}): PrDetailsData => ({
   body: "",
@@ -16,6 +17,8 @@ const data = (overrides: Partial<PrDetailsData> = {}): PrDetailsData => ({
   closedAt: null,
   isDraft: false,
   author: { login: "me" },
+  files: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [] },
+  baseRef: null,
   reviewRequests: { nodes: [] },
   events: { nodes: [] },
   activity: { nodes: [] },
@@ -30,9 +33,11 @@ const eventsOf = (spans: ReturnType<typeof timelineSpans>, parent: string) =>
 
 describe("timelineSpans", () => {
   it("is the PR alone, opened for review, when nobody has done anything", () => {
-    const spans = timelineSpans(data(), NOW);
-    assert.deepEqual(names(spans), ["Pull request"]);
+    const spans = timelineSpans(data(), NOW, PR_URL);
+    assert.deepEqual(names(spans), ["PR Timeline"]);
     assert.deepEqual(eventsOf(spans, "pr"), ["Opened"]);
+    // The PR's own milestones open the PR.
+    assert.equal(spans.find((s) => s.parentSpanId === "pr")?.attributes?.url, PR_URL);
     // Runs until now while it's open.
     assert.equal((spans[0] as { endTimeMs: number }).endTimeMs, NOW);
   });
@@ -46,6 +51,7 @@ describe("timelineSpans", () => {
         },
       }),
       NOW,
+      PR_URL,
     );
     assert.deepEqual(eventsOf(spans, "pr"), ["Opened as draft", "Ready for review", "Merged"]);
     assert.equal((spans[0] as { endTimeMs: number }).endTimeMs, at("2026-10-03T09:00:00Z"));
@@ -62,23 +68,25 @@ describe("timelineSpans", () => {
         },
         activity: {
           nodes: [
-            { __typename: "IssueComment", createdAt: "2026-10-02T09:00:00Z", author: user("ann") },
+            { __typename: "IssueComment", createdAt: "2026-10-02T09:00:00Z", url: "https://github.com/o/r/pull/1#issuecomment-1", author: user("ann") },
             {
               __typename: "PullRequestReview",
               state: "APPROVED",
               submittedAt: "2026-10-03T09:00:00Z",
+              url: "https://github.com/o/r/pull/1#pullrequestreview-1",
               author: user("ann"),
-              comments: { nodes: [{ createdAt: "2026-10-03T08:59:00Z" }] },
+              comments: { nodes: [{ createdAt: "2026-10-03T08:59:00Z", url: "https://github.com/o/r/pull/1#discussion_r1" }] },
             },
             // The author's own comment is not a reviewer's, and a bot's isn't a person's.
-            { __typename: "IssueComment", createdAt: "2026-10-02T10:00:00Z", author: user("me") },
-            { __typename: "IssueComment", createdAt: "2026-10-02T11:00:00Z", author: user("ci[bot]") },
+            { __typename: "IssueComment", createdAt: "2026-10-02T10:00:00Z", url: "u", author: user("me") },
+            { __typename: "IssueComment", createdAt: "2026-10-02T11:00:00Z", url: "u", author: user("ci[bot]") },
           ],
         },
       }),
       NOW,
+      PR_URL,
     );
-    assert.deepEqual(names(spans), ["Pull request", "ann · code owner", "zed · code owner"]);
+    assert.deepEqual(names(spans), ["PR Timeline", "ann · code owner", "zed · code owner"]);
     assert.deepEqual(eventsOf(spans, "person:ann"), ["Commented", "Commented", "Approved"]);
     const ann = spans.find((s) => s.spanId === "person:ann") as { startTimeMs: number; endTimeMs: number };
     // From when the PR was ready for review (here: opened ready).
@@ -106,6 +114,7 @@ describe("timelineSpans", () => {
               __typename: "PullRequestReview",
               state: "CHANGES_REQUESTED",
               submittedAt: "2026-10-02T09:00:00Z",
+              url: "https://github.com/o/r/pull/1#pullrequestreview-2",
               author: user("bo"),
               comments: { nodes: [] },
             },
@@ -113,9 +122,13 @@ describe("timelineSpans", () => {
         },
       }),
       NOW,
+      PR_URL,
     );
-    assert.deepEqual(names(spans), ["Pull request", "@Acme/core · code owner", "bo"]);
+    assert.deepEqual(names(spans), ["PR Timeline", "@Acme/core · code owner", "bo"]);
     assert.deepEqual(eventsOf(spans, "person:bo"), ["Requested changes"]);
+    // A marker opens its own item on GitHub.
+    const change = spans.find((s) => s.parentSpanId === "person:bo");
+    assert.equal(change?.attributes?.url, "https://github.com/o/r/pull/1#pullrequestreview-2");
   });
 });
 

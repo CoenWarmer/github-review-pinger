@@ -8,6 +8,7 @@ export type {
   FoundPr,
   PrDetailsData,
   DetailReviewer,
+  CodeownersFile,
   ReviewStatsData,
   StatsData,
   MergedPr,

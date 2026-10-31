@@ -455,7 +455,7 @@ describe("statistics", () => {
       return reply({ node: { body: "hi", additions: 1, deletions: 2, changedFiles: 3 } });
     });
     const details = await gh.fetchPrDetails("PR_1");
-    assert.deepEqual(seen, [{ id: "PR_1" }]);
+    assert.deepEqual(seen, [{ id: "PR_1", after: null }]);
     assert.equal(details?.body, "hi");
   });
 

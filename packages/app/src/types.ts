@@ -83,6 +83,9 @@ export type DetailReviewer =
   // Bots and other kinds GitHub may add.
   | { __typename: string };
 
+/** A file looked up by path: `null` when the branch has none there. */
+export type CodeownersFile = { object: { text?: string } | null } | null;
+
 /**
  * What a PR's "Details" fold-out is drawn from, as GitHub answers
  * (`pr_details.graphql`); `details.ts` shapes it, the same for every host.
@@ -97,6 +100,16 @@ export interface PrDetailsData {
   closedAt: string | null;
   isDraft: boolean;
   author: { login: string } | null;
+  /** The changed files, a page of 100 from the cursor asked for. */
+  files: { pageInfo: { hasNextPage: boolean; endCursor: string | null }; nodes: ({ path: string } | null)[] };
+  /** The base branch's CODEOWNERS wherever GitHub finds one, in the order it looks. */
+  baseRef: {
+    target: {
+      inGithub?: CodeownersFile;
+      inRoot?: CodeownersFile;
+      inDocs?: CodeownersFile;
+    } | null;
+  } | null;
   /** Pending requests only: GitHub drops the code-owner flag with the request. */
   reviewRequests: {
     nodes: ({ asCodeOwner: boolean; requestedReviewer: DetailReviewer | null } | null)[];
@@ -112,13 +125,14 @@ export interface PrDetailsData {
   /** The latest reviews and comments. */
   activity: {
     nodes: (
-      | { __typename: "IssueComment"; createdAt: string; author: { login: string } | null }
+      | { __typename: "IssueComment"; createdAt: string; url: string; author: { login: string } | null }
       | {
           __typename: "PullRequestReview";
           state: string;
           submittedAt: string | null;
+          url: string;
           author: { login: string } | null;
-          comments: { nodes: ({ createdAt: string } | null)[] };
+          comments: { nodes: ({ createdAt: string; url: string } | null)[] };
         }
       | { __typename: string }
       | null

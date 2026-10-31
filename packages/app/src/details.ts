@@ -26,10 +26,12 @@ interface Person {
   codeOwner: boolean;
   /** Still asked to review: a request ends once they do. */
   pending: boolean;
-  markers: { kind: MarkerKind; at: number }[];
+  markers: { kind: MarkerKind; at: number; url: string }[];
 }
 
-function whoIs(reviewer: DetailReviewer | null): { key: string; label: string } | null {
+function whoIs(
+  reviewer: DetailReviewer | null,
+): { key: string; label: string } | null {
   if (!reviewer) return null;
   if (reviewer.__typename === "User" && "login" in reviewer) {
     return { key: reviewer.login.toLowerCase(), label: reviewer.login };
@@ -44,7 +46,11 @@ function whoIs(reviewer: DetailReviewer | null): { key: string; label: string } 
 const isBot = (login: string) => login.endsWith("[bot]");
 
 /** The spans to draw: one per row, with the markers as `EVENT` children folded onto it. */
-export function timelineSpans(data: PrDetailsData, now: number): OtelSpan[] {
+export function timelineSpans(
+  data: PrDetailsData,
+  now: number,
+  prUrl: string,
+): OtelSpan[] {
   const created = Date.parse(data.createdAt);
   const finished = data.mergedAt ?? data.closedAt;
   const end = Math.max(finished ? Date.parse(finished) : now, created + MINUTE);
@@ -86,26 +92,52 @@ export function timelineSpans(data: PrDetailsData, now: number): OtelSpan[] {
   }
   const author = data.author?.login.toLowerCase();
   const reviewerBy = (login: string | undefined) =>
-    login && login.toLowerCase() !== author && !isBot(login) ? person(login.toLowerCase(), login) : null;
+    login && login.toLowerCase() !== author && !isBot(login)
+      ? person(login.toLowerCase(), login)
+      : null;
   for (const item of data.activity.nodes) {
     if (!item) continue;
     if (item.__typename === "IssueComment" && "createdAt" in item) {
-      reviewerBy(item.author?.login)?.markers.push({ kind: "comment", at: Date.parse(item.createdAt) });
+      reviewerBy(item.author?.login)?.markers.push({
+        kind: "comment",
+        at: Date.parse(item.createdAt),
+        url: item.url,
+      });
     } else if (item.__typename === "PullRequestReview" && "state" in item) {
       if (!item.submittedAt) continue;
       const who = reviewerBy(item.author?.login);
       if (!who) continue;
       const at = Date.parse(item.submittedAt);
-      const inline = item.comments.nodes.flatMap((comment) => (comment ? [Date.parse(comment.createdAt)] : []));
-      for (const when of inline) who.markers.push({ kind: "comment", at: when });
-      if (item.state === "APPROVED") who.markers.push({ kind: "approved", at });
-      else if (item.state === "CHANGES_REQUESTED") who.markers.push({ kind: "changes", at });
-      else if (item.state === "COMMENTED" && inline.length === 0) who.markers.push({ kind: "comment", at });
+      const inline = item.comments.nodes.flatMap((comment) =>
+        comment ? [comment] : [],
+      );
+      for (const comment of inline) {
+        who.markers.push({
+          kind: "comment",
+          at: Date.parse(comment.createdAt),
+          url: comment.url,
+        });
+      }
+      if (item.state === "APPROVED")
+        who.markers.push({ kind: "approved", at, url: item.url });
+      else if (item.state === "CHANGES_REQUESTED")
+        who.markers.push({ kind: "changes", at, url: item.url });
+      else if (item.state === "COMMENTED" && inline.length === 0) {
+        who.markers.push({ kind: "comment", at, url: item.url });
+      }
     }
   }
 
   const spans: OtelSpan[] = [];
-  const marker = (parent: string, kind: MarkerKind, name: string, at: number, status?: "OK" | "ERROR") => {
+  // What a marker opens on GitHub: the comment or review, and for the PR's own milestones the PR.
+  const marker = (
+    parent: string,
+    kind: MarkerKind,
+    name: string,
+    at: number,
+    url: string,
+    status?: "OK" | "ERROR",
+  ) => {
     spans.push({
       traceId: "pr",
       spanId: `${parent}:${kind}:${at}`,
@@ -114,7 +146,7 @@ export function timelineSpans(data: PrDetailsData, now: number): OtelSpan[] {
       kind: "EVENT",
       startTimeMs: at,
       endTimeMs: at,
-      attributes: { kind, at: new Date(at).toISOString() },
+      attributes: { kind, at: new Date(at).toISOString(), url },
       ...(status ? { status: { code: status } } : {}),
     });
   };
@@ -122,22 +154,41 @@ export function timelineSpans(data: PrDetailsData, now: number): OtelSpan[] {
   spans.push({
     traceId: "pr",
     spanId: "pr",
-    name: "Pull request",
+    name: "PR Timeline",
     kind: "INTERNAL",
     startTimeMs: created,
     endTimeMs: end,
   });
-  marker("pr", "opened", openedAsDraft ? "Opened as draft" : "Opened", created);
-  if (openedAsDraft) marker("pr", "ready", "Ready for review", ready[0]);
-  for (const at of ready.slice(openedAsDraft ? 1 : 0)) marker("pr", "ready", "Ready for review", at);
-  for (const at of drafted) marker("pr", "draft", "Converted to draft", at);
+  marker(
+    "pr",
+    "opened",
+    openedAsDraft ? "Opened as draft" : "Opened",
+    created,
+    prUrl,
+  );
+  if (openedAsDraft) marker("pr", "ready", "Ready for review", ready[0], prUrl);
+  for (const at of ready.slice(openedAsDraft ? 1 : 0))
+    marker("pr", "ready", "Ready for review", at, prUrl);
+  for (const at of drafted)
+    marker("pr", "draft", "Converted to draft", at, prUrl);
   if (finished) {
-    marker("pr", data.mergedAt ? "merged" : "closed", data.mergedAt ? "Merged" : "Closed", Date.parse(finished));
+    const name = data.mergedAt ? "Merged" : "Closed";
+    marker(
+      "pr",
+      data.mergedAt ? "merged" : "closed",
+      name,
+      Date.parse(finished),
+      prUrl,
+    );
   }
 
-  const rows = [...people.values()].filter((p) => p.codeOwner || p.markers.length > 0);
+  const rows = [...people.values()].filter(
+    (p) => p.codeOwner || p.markers.length > 0,
+  );
   for (const row of rows) row.markers.sort((a, b) => a.at - b.at);
-  const owners = rows.filter((p) => p.codeOwner).sort((a, b) => a.label.localeCompare(b.label));
+  const owners = rows
+    .filter((p) => p.codeOwner)
+    .sort((a, b) => a.label.localeCompare(b.label));
   const others = rows
     .filter((p) => !p.codeOwner)
     .sort((a, b) => a.markers[0].at - b.markers[0].at)
@@ -149,7 +200,10 @@ export function timelineSpans(data: PrDetailsData, now: number): OtelSpan[] {
     const since = Math.min(firstReady, end - MINUTE);
     const approved = row.markers.some((m) => m.kind === "approved");
     // Someone still being waited on keeps their bar running to now.
-    const until = Math.max(row.pending && !approved ? end : (last ?? since), since + MINUTE);
+    const until = Math.max(
+      row.pending && !approved ? end : (last ?? since),
+      since + MINUTE,
+    );
     const id = `person:${row.key}`;
     spans.push({
       traceId: "pr",
@@ -159,18 +213,38 @@ export function timelineSpans(data: PrDetailsData, now: number): OtelSpan[] {
       startTimeMs: since,
       endTimeMs: Math.min(until, end),
     });
-    for (const { kind, at } of row.markers) {
-      const name = kind === "approved" ? "Approved" : kind === "changes" ? "Requested changes" : "Commented";
-      marker(id, kind, name, at, kind === "approved" ? "OK" : kind === "changes" ? "ERROR" : undefined);
+    for (const { kind, at, url } of row.markers) {
+      const name =
+        kind === "approved"
+          ? "Approved"
+          : kind === "changes"
+            ? "Requested changes"
+            : "Commented";
+      marker(
+        id,
+        kind,
+        name,
+        at,
+        url,
+        kind === "approved" ? "OK" : kind === "changes" ? "ERROR" : undefined,
+      );
     }
   }
   return spans;
 }
 
 /** The first `lines` non-blank-leading lines of a description, and whether any were left out. */
-export function descriptionPreview(body: string, lines = 8): { text: string; cut: boolean } {
+export function descriptionPreview(
+  body: string,
+  lines = 8,
+): { text: string; cut: boolean } {
   // Comments in a PR template are for whoever writes it, not whoever reads it.
-  const text = body.replace(/<!--[\s\S]*?-->/g, "").replace(/\r\n/g, "\n").trim();
+  const text = body
+    .replace(/<!--[\s\S]*?-->/g, "")
+    .replace(/\r\n/g, "\n")
+    .trim();
   const all = text.split("\n");
-  return all.length > lines ? { text: all.slice(0, lines).join("\n"), cut: true } : { text, cut: false };
+  return all.length > lines
+    ? { text: all.slice(0, lines).join("\n"), cut: true }
+    : { text, cut: false };
 }

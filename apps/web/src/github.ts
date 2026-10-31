@@ -321,7 +321,7 @@ export interface Github {
   /** The teams you belong to, as `org/slug`. Needs `read:org`. */
   fetchMyTeams(): Promise<string[]>;
   /** One PR's description, size and timeline as GitHub answers, for the "Details" fold-out; null for a PR that's gone. */
-  fetchPrDetails(id: string): Promise<PrDetailsData | null>;
+  fetchPrDetails(id: string, after?: string | null): Promise<PrDetailsData | null>;
   /**
    * The statistics for the merged-date `range` (GitHub's `merged:` syntax,
    * such as `>=2026-10-01` or `2026-08-30..2026-09-28`), with `team`
@@ -759,8 +759,8 @@ export function createGithub({
         }));
     },
 
-    async fetchPrDetails(id) {
-      const reply = await request<{ node: PrDetailsData | null }>(queries.prDetails, { id });
+    async fetchPrDetails(id, after = null) {
+      const reply = await request<{ node: PrDetailsData | null }>(queries.prDetails, { id, after });
       return reply.data.node;
     },
 

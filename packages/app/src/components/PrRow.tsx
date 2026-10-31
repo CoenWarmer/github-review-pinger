@@ -320,7 +320,7 @@ export function RowActions({
   return (
     <span
       className={cn(
-        "absolute top-1.5 right-2 rounded-md border bg-popover px-1 text-xs group-focus-within:visible group-hover:visible [@media(hover:none)]:visible",
+        "absolute top-1.5 right-2 flex items-center rounded-md border bg-popover px-1 text-xs group-focus-within:visible group-hover:visible [@media(hover:none)]:visible",
         // Stays put while folded out, so it's where you left it to fold in.
         detailsOpen ? "visible" : "invisible",
       )}
