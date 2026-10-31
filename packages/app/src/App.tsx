@@ -1,3 +1,4 @@
+import { useDroppable } from "@dnd-kit/core";
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import {
   ArrowDownWideNarrow,
@@ -30,6 +31,7 @@ import { ReviewRow } from "./components/ReviewRow";
 import { RingsLoader } from "./components/RingsLoader";
 import { UpdateBanner } from "./components/UpdateBanner";
 import { SettingsPanel } from "./components/SettingsPanel";
+import { PlacementDnd, useDragging } from "./components/Placement";
 import { RepoPicker } from "./components/RepoPicker";
 import { StatsSettings } from "./components/StatsSettings";
 import { Setup, problemMessage } from "./components/Setup";
@@ -148,6 +150,7 @@ function Section<
   rows,
   defaultOpen,
   emptyText,
+  dropKey,
   render,
 }: {
   /** Names the section for remembering its sort, e.g. `mine:approved`. */
@@ -158,6 +161,8 @@ function Section<
   defaultOpen: boolean;
   /** Shows the section even with no rows, saying this in it; without it, an empty section is left out. */
   emptyText?: string;
+  /** The section's name (`waiting`, ...) when PRs can be dragged into it. */
+  dropKey?: string;
   render: (row: T) => ReactNode;
 }) {
   const [open, setOpen] = useState(defaultOpen);
@@ -167,7 +172,14 @@ function Section<
     open,
     rows.map((row) => row.id),
   );
-  if (rows.length === 0 && emptyText === undefined) return null;
+  const dragging = useDragging();
+  const { setNodeRef, isOver } = useDroppable({
+    id: dropKey ?? id,
+    disabled: dropKey === undefined,
+  });
+  // While something is dragged every section it can go into shows, even empty.
+  const droppable = dropKey !== undefined && dragging;
+  if (rows.length === 0 && emptyText === undefined && !droppable) return null;
 
   const heading = (
     <>
@@ -177,7 +189,7 @@ function Section<
 
   return (
     <Collapsible asChild open={open} onOpenChange={setOpen}>
-      <section>
+      <section ref={setNodeRef} className={cn(isOver && "bg-accent/60")}>
         <h2 className="sticky top-0 z-10 m-0 flex items-center justify-between border-b bg-background px-3 py-1 text-[11px] font-semibold tracking-wide text-muted-foreground uppercase">
           <CollapsibleTrigger className="flex cursor-pointer items-center gap-1 border-0 bg-transparent p-0 font-[inherit] tracking-[inherit] uppercase">
             {open ? (
@@ -196,7 +208,9 @@ function Section<
           <ul className="m-0 list-none p-0">
             {rows.length === 0 ? (
               <li className="px-3 py-2 text-xs text-muted-foreground">
-                {emptyText}
+                {droppable && emptyText === undefined
+                  ? "Drop here"
+                  : emptyText}
               </li>
             ) : (
               sortRows(rows, sort).map(render)
@@ -360,6 +374,8 @@ function AppContent() {
     ...repos.filter((name) => !repoOptions.includes(name)),
     ...repoOptions,
   ].sort((a, b) => a.localeCompare(b));
+  const describePr = (id: string) =>
+    [...allPrs, ...allReviews].find((pr) => pr.id === id) ?? null;
   const counts: Partial<Record<Tab, number>> = {
     mine: allPrs.filter(
       (pr) =>
@@ -484,6 +500,7 @@ function AppContent() {
           )}
           {/* Pinned over the list, so a notice appearing doesn't push the rows down. */}
           <div className="relative min-h-0 flex-1">
+            <PlacementDnd describe={describePr}>
             <ScrollArea className="h-full">
               {search ? (
                 <SearchResults
@@ -569,7 +586,10 @@ function AppContent() {
                               ? "Nothing needs your action."
                               : undefined
                           }
-                          render={(pr) => <PrRow key={pr.id} pr={pr} now={now} />}
+                          dropKey={pref.section}
+                          render={(pr) => (
+                            <PrRow key={pr.id} pr={pr} now={now} draggable />
+                          )}
                         />
                       );
                     })
@@ -594,11 +614,15 @@ function AppContent() {
                     title={title}
                     rows={reviews.filter((pr) => pr.group === group)}
                     defaultOpen={group !== "snoozed" && group !== "draft"}
-                    render={(pr) => <ReviewRow key={pr.id} pr={pr} now={now} />}
+                    dropKey={group}
+                    render={(pr) => (
+                      <ReviewRow key={pr.id} pr={pr} now={now} draggable />
+                    )}
                   />
                 ))
               )}
             </ScrollArea>
+            </PlacementDnd>
             <div className="absolute inset-x-0 bottom-0 z-10 bg-background">
               {snapshot.status.kind === "error" && (
                 <Banner>

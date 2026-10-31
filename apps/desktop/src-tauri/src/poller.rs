@@ -201,6 +201,19 @@ impl Poller {
         self.sync_wake.notify_one();
     }
 
+    /// Puts a PR in a section by hand, or with `None` lets its state decide again.
+    pub fn set_placement(&self, app: &AppHandle, id: &str, section: Option<&str>) {
+        {
+            let mut memory = self.memory.lock().unwrap();
+            if !memory.set_placement(id, section, Utc::now()) {
+                return;
+            }
+            self.save(&memory);
+        }
+        self.rederive(app);
+        self.sync_wake.notify_one();
+    }
+
     /// Saves the Slack channel for a team. Fails when the link isn't a
     /// Slack link.
     pub fn set_team_channel(&self, app: &AppHandle, team: &str, link: &str) -> Result<(), String> {

@@ -43,6 +43,9 @@ export const tauriPlatform: Platform = {
   snooze: (id, days) => {
     invoke("snooze", { id, days });
   },
+  placePullRequest: (id, section) => {
+    invoke("place_pull_request", { id, section });
+  },
   unsnooze: (id) => {
     invoke("unsnooze", { id });
   },

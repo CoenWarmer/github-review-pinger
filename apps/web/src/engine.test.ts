@@ -327,6 +327,26 @@ describe("the web engine", () => {
     });
   });
 
+  it("places a PR in a section by hand, remembers it, and puts it back", async () => {
+    const { engine, storage } = makeEngine();
+    await engine.start();
+    const natural = engine.getSnapshot().pullRequests[0].group;
+    const target = natural === "draft" ? "waiting" : "draft";
+    engine.place("mine", target);
+
+    const placed = engine.getSnapshot().pullRequests[0];
+    assert.deepEqual([placed.group, placed.placed], [target, true]);
+
+    // A new visit still sees it.
+    const next = makeEngine({ storage }).engine;
+    await next.start();
+    assert.equal(next.getSnapshot().pullRequests[0].group, target);
+
+    engine.place("mine", null);
+    const back = engine.getSnapshot().pullRequests[0];
+    assert.deepEqual([back.group, back.placed], [natural, false]);
+  });
+
   it("snoozes without fetching, and remembers it", async () => {
     const { engine, github, storage } = makeEngine();
     await engine.start();

@@ -45,6 +45,7 @@ export function createWebPlatform(engine: Engine): Platform {
     openUrl: openExternal,
     snooze: (id, days) => engine.snooze(id, days),
     unsnooze: (id) => engine.snooze(id, undefined),
+    placePullRequest: (id, section) => engine.place(id, section),
 
     setTeamChannel: (team, link) => rejectWithMessage(() => engine.setTeamChannel(team, link)),
     removeTeamChannel: (team) => engine.removeTeamChannel(team),

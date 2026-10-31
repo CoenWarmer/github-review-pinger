@@ -81,6 +81,7 @@ export interface PingerLike {
   derived(now: string): string | undefined | null;
   applyRefresh(fresh: string): void;
   setSnooze(id: string, days: number | undefined | null, now: string): void;
+  setPlacement(id: string, section: string | undefined | null, now: string): void;
   directoryNeeds(now: string): string;
   mergeDirectory(asked: string, found: string, now: string): boolean;
   directoryDenied(): boolean;
@@ -525,6 +526,14 @@ export class Engine {
 
   snooze(id: string, days: number | undefined) {
     this.pinger.setSnooze(id, days, this.nowIso());
+    this.persist();
+    this.rederive();
+    this.syncSoon();
+  }
+
+  /** Puts a PR in a section by hand, or with `null` lets its state decide again. */
+  place(id: string, section: string | null) {
+    this.pinger.setPlacement(id, section, this.nowIso());
     this.persist();
     this.rederive();
     this.syncSoon();

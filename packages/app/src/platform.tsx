@@ -70,6 +70,11 @@ export interface Platform {
   openUrl(url: string): void;
   snooze(id: string, days: number): void;
   unsnooze(id: string): void;
+  /**
+   * Puts a PR in a section by hand (`needsAction`, `waiting`, ...), or with
+   * `null` lets its state decide again. Saved and synced.
+   */
+  placePullRequest(id: string, section: string | null): void;
 
   /** Rejects with a message to show when the link isn't a Slack link. */
   setTeamChannel(team: string, link: string): Promise<void>;

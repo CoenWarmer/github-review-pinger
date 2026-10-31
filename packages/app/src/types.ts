@@ -152,6 +152,8 @@ export interface PullRequest {
   url: string;
   repo: string;
   group: Group;
+  /** Dragged into `group` by hand, rather than put there by its state. */
+  placed: boolean;
   actions: Action[];
   openSince: string;
   quietSince: string;
@@ -183,6 +185,8 @@ export interface ReviewRequest {
   repo: string;
   author: string;
   group: ReviewGroup;
+  /** Dragged into `group` by hand, rather than put there by its state. */
+  placed: boolean;
   openSince: string;
   /** When it became your turn; only for requested PRs. */
   waitingSince: string | null;

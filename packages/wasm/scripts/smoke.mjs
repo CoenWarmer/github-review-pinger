@@ -42,6 +42,12 @@ pinger.setSnooze("mine", 3, now);
 const snoozed = JSON.parse(pinger.derived(now));
 assert.equal(snoozed.pullRequests[0].group, "snoozed");
 
+pinger.setPlacement("mine", "waiting", now);
+const placed = JSON.parse(pinger.derived(now));
+assert.equal(placed.pullRequests[0].group, "waiting");
+assert.equal(placed.pullRequests[0].placed, true);
+pinger.setPlacement("mine", undefined, now);
+
 let error = null;
 try {
   pinger.poll("{", now, 0);

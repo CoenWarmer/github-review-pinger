@@ -234,6 +234,21 @@ impl PingerState {
         Ok(())
     }
 
+    /// Puts a PR in a section by hand, or with `None` lets its state decide again.
+    pub fn set_placement(
+        &mut self,
+        id: &str,
+        section: Option<&str>,
+        now: &str,
+    ) -> Result<(), String> {
+        let now = time(now)?;
+        if self.memory.set_placement(id, section, now) {
+            Ok(())
+        } else {
+            Err(format!("Not a section: {}", section.unwrap_or_default()))
+        }
+    }
+
     /// The teams, as `[org, slug]`, whose members still have to be looked up.
     pub fn directory_needs(&self, now: &str) -> Result<String, String> {
         let Some(fetched) = &self.latest else {
@@ -488,6 +503,31 @@ mod tests {
         assert_eq!(out["reviewRequests"][0]["group"], "needsReview");
         // The first poll after install is silent.
         assert!(out["notifications"].as_array().unwrap().is_empty());
+    }
+
+    #[test]
+    fn dragging_moves_a_pr_and_putting_it_back_returns_it() {
+        let mut pinger = PingerState::new(None);
+        pinger
+            .poll(&fetch(vec![pr("mine", json!({}))], vec![]), NOW, 0)
+            .unwrap();
+        let natural = update(&pinger.derived(NOW).unwrap().unwrap())["pullRequests"][0]["group"].clone();
+        let target = if natural == "draft" { "waiting" } else { "draft" };
+        pinger.set_placement("mine", Some(target), NOW).unwrap();
+
+        let out = update(&pinger.derived(NOW).unwrap().unwrap());
+        assert_eq!(out["pullRequests"][0]["group"], target);
+        assert_eq!(out["pullRequests"][0]["placed"], true);
+
+        // Kept across visits.
+        let restored = PingerState::new(Some(&pinger.state().unwrap()));
+        assert_eq!(restored.memory.placements().len(), 1);
+
+        pinger.set_placement("mine", None, NOW).unwrap();
+        let out = update(&pinger.derived(NOW).unwrap().unwrap());
+        assert_eq!(out["pullRequests"][0]["group"], natural);
+        assert_eq!(out["pullRequests"][0]["placed"], false);
+        assert!(pinger.set_placement("mine", Some("no way!"), NOW).is_err());
     }
 
     #[test]

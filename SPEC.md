@@ -199,6 +199,17 @@ bottom:
    days, newest first, with a "Load more" button that fetches 5 further
    (older) ones at a time.
 
+A PR can be **dragged into another section** (of My PRs, or of Review
+Requests), which keeps it there whatever its state says. Sections that are
+empty still show while dragging, so they can be dropped on; merged PRs and
+custom views can't be dragged or dropped on. Its row gets an "Undo move"
+button, which puts it back where its state places it. Dropping into Snoozed
+doesn't snooze, and a PR moved out of Approved or Needs your action stops
+counting in the tray (counts follow the section it's shown in). Placements
+are synced like snoozes, one entry per PR with the time of its last change,
+and forgotten once the PR has been gone for a week (or 30 days after being
+put back, in the gist).
+
 A **custom view** adds its own section: a name and a GitHub search query
 (`is:pr` is always added, so it can't return issues), the same syntax
 github.com's own saved views use (Review Pinger can't read those, since

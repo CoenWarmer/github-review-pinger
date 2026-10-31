@@ -46,12 +46,14 @@ pub fn derive(
     now: DateTime<Utc>,
 ) -> (Vec<PrView>, Vec<ReviewView>) {
     let snoozed = memory.snoozes();
+    let placements = memory.placements();
     let estimates = checks::estimates(memory, &settings.check_durations);
     let rules = prs::Rules {
         directory,
         ignored_logins: &settings.ignored_logins,
         dormant_after: dormant_after(settings),
         snoozed: &snoozed,
+        placements: &placements,
     };
     let mut views = prs::derive(&fetched.pull_requests, &fetched.viewer, &rules, now);
     for view in &mut views {
@@ -75,12 +77,14 @@ pub fn derive_views(
     now: DateTime<Utc>,
 ) -> HashMap<String, Vec<PrView>> {
     let snoozed = memory.snoozes();
+    let placements = memory.placements();
     let estimates = checks::estimates(memory, &settings.check_durations);
     let rules = prs::Rules {
         directory,
         ignored_logins: &settings.ignored_logins,
         dormant_after: dormant_after(settings),
         snoozed: &snoozed,
+        placements: &placements,
     };
     fetched
         .view_pull_requests

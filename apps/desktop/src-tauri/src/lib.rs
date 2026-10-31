@@ -318,6 +318,16 @@ fn snooze(app: AppHandle, poller: State<Arc<Poller>>, id: String, days: u32) {
 }
 
 #[tauri::command]
+fn place_pull_request(
+    app: AppHandle,
+    poller: State<Arc<Poller>>,
+    id: String,
+    section: Option<String>,
+) {
+    poller.set_placement(&app, &id, section.as_deref());
+}
+
+#[tauri::command]
 fn unsnooze(app: AppHandle, poller: State<Arc<Poller>>, id: String) {
     poller.set_snooze(&app, &id, None);
 }
@@ -389,6 +399,7 @@ pub fn run() {
             set_auth_source,
             snooze,
             unsnooze,
+            place_pull_request,
             get_autostart,
             set_autostart,
             updater::pending_update,
