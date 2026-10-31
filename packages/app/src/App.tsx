@@ -147,6 +147,7 @@ function Section<
   title,
   rows,
   defaultOpen,
+  emptyText,
   render,
 }: {
   /** Names the section for remembering its sort, e.g. `mine:approved`. */
@@ -155,6 +156,8 @@ function Section<
   rows: T[];
   /** Every section can be collapsed; this is just whether it starts that way. */
   defaultOpen: boolean;
+  /** Shows the section even with no rows, saying this in it; without it, an empty section is left out. */
+  emptyText?: string;
   render: (row: T) => ReactNode;
 }) {
   const [open, setOpen] = useState(defaultOpen);
@@ -164,7 +167,7 @@ function Section<
     open,
     rows.map((row) => row.id),
   );
-  if (rows.length === 0) return null;
+  if (rows.length === 0 && emptyText === undefined) return null;
 
   const heading = (
     <>
@@ -184,11 +187,17 @@ function Section<
             )}
             {heading}
           </CollapsibleTrigger>
-          <SortMenu value={sort} onChange={setSort} />
+          {rows.length > 0 && <SortMenu value={sort} onChange={setSort} />}
         </h2>
         <CollapsibleContent asChild>
           <ul className="m-0 list-none p-0">
-            {sortRows(rows, sort).map(render)}
+            {rows.length === 0 ? (
+              <li className="px-3 py-2 text-xs text-muted-foreground">
+                {emptyText}
+              </li>
+            ) : (
+              sortRows(rows, sort).map(render)
+            )}
           </ul>
         </CollapsibleContent>
       </section>
@@ -552,6 +561,11 @@ function AppContent() {
                           title={SECTION_TITLES[pref.section]}
                           rows={prs.filter((pr) => pr.group === pref.section)}
                           defaultOpen={!STARTS_COLLAPSED.has(pref.section)}
+                          emptyText={
+                            pref.section === "needsAction"
+                              ? "Nothing needs your action."
+                              : undefined
+                          }
                           render={(pr) => <PrRow key={pr.id} pr={pr} now={now} />}
                         />
                       );

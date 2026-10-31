@@ -187,6 +187,8 @@ bottom:
    active first within each.
 2. **Needs your action**: ready to merge first, then changes requested, new
    feedback, conflicts, CI failing; most recently active first within each.
+   Shown even when empty, with "Nothing needs your action.", so it's always
+   clear nothing is waiting on you; the other sections are left out when empty.
 3. **Waiting on others**: reviews, running checks, or auto-merge; sorted by
    most recently active first.
 4. **Snoozed**: collapsed, most recently active first, with the snooze end
