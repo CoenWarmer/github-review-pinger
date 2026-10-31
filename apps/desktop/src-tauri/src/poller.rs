@@ -286,6 +286,16 @@ impl Poller {
             .map_err(fetch_error_message)
     }
 
+    /// The repos the statistics can be narrowed to: those you merged in or
+    /// reviewed in over the last `days`. Rejects with a message to show.
+    pub async fn stats_repos(&self, days: i64) -> Result<Vec<String>, String> {
+        let token = self.search_token().await?;
+        let to = Utc::now();
+        github::fetch_stats_repos(&self.http, &token, to - chrono::Duration::days(days), to)
+            .await
+            .map_err(fetch_error_message)
+    }
+
     /// The statistics for the last `days`, with `team` (`org/slug`) counted
     /// too when chosen. Rejects with a message to show.
     pub async fn stats(
@@ -293,6 +303,7 @@ impl Poller {
         team: Option<String>,
         days: i64,
         previous: bool,
+        repos: Vec<String>,
     ) -> Result<github::StatsData, String> {
         let token = self.search_token().await?;
         let today = Utc::now().date_naive();
@@ -308,7 +319,7 @@ impl Poller {
                 until: None,
             }
         };
-        github::fetch_stats(&self.http, &token, team.as_deref(), window)
+        github::fetch_stats(&self.http, &token, team.as_deref(), window, &lowercase(repos))
             .await
             .map_err(fetch_error_message)
     }
@@ -320,6 +331,7 @@ impl Poller {
         team: Option<String>,
         days: i64,
         previous: bool,
+        repos: Vec<String>,
     ) -> Result<github::ReviewStatsData, String> {
         let token = self.search_token().await?;
         let now = Utc::now();
@@ -330,7 +342,15 @@ impl Poller {
             now
         };
         let from = to - chrono::Duration::days(days);
-        github::fetch_review_stats(&self.http, &token, team.as_deref(), from, to, !previous)
+        github::fetch_review_stats(
+            &self.http,
+            &token,
+            team.as_deref(),
+            from,
+            to,
+            !previous,
+            &lowercase(repos),
+        )
             .await
             .map_err(fetch_error_message)
     }
@@ -1391,4 +1411,12 @@ mod tests {
             "Review Pinger: 1 PR needs your action, 2 reviews are waiting on you"
         );
     }
+}
+
+/// Repo names compared and searched in lowercase, without repeats.
+fn lowercase(repos: Vec<String>) -> Vec<String> {
+    let mut repos: Vec<String> = repos.iter().map(|repo| repo.to_lowercase()).collect();
+    repos.sort();
+    repos.dedup();
+    repos
 }

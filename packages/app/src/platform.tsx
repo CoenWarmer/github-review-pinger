@@ -90,15 +90,32 @@ export interface Platform {
   listTeams(): Promise<string[]>;
   /**
    * Your merged PRs over the last `days`, and a team's (`org/slug`) when one
-   * is given. Rejects with a message to show.
+   * is given. With `repos` (`owner/name`s) only merges in those repos count.
+   * Rejects with a message to show.
    */
-  loadStats(team: string | null, days: number, previous?: boolean): Promise<StatsData>;
+  loadStats(
+    team: string | null,
+    days: number,
+    previous?: boolean,
+    repos?: string[],
+  ): Promise<StatsData>;
+  /**
+   * The repos you merged in or reviewed in over the last `days`, lowercase
+   * `owner/name`, sorted: what the statistics can be narrowed to. Rejects
+   * with a message to show.
+   */
+  listStatsRepos(days: number): Promise<string[]>;
   /**
    * The reviews submitted over the last `days`: yours, and each member's of
    * a team (`org/slug`) when one is given and it's small enough. Rejects with
    * a message to show.
    */
-  loadReviewStats(team: string | null, days: number, previous?: boolean): Promise<ReviewStatsData>;
+  loadReviewStats(
+    team: string | null,
+    days: number,
+    previous?: boolean,
+    repos?: string[],
+  ): Promise<ReviewStatsData>;
 
   /**
    * Builds you created in the last `days` (or with `previous` in the same

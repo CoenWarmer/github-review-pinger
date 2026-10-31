@@ -54,8 +54,10 @@ export function createWebPlatform(engine: Engine): Platform {
     loadMoreMerged: () => engine.loadMoreMerged(),
     searchPullRequests: (text) => engine.searchPullRequests(text),
     listTeams: () => engine.listTeams(),
-    loadStats: (team, days, previous) => engine.loadStats(team, days, previous),
-    loadReviewStats: (team, days, previous) => engine.loadReviewStats(team, days, previous),
+    loadStats: (team, days, previous, repos) => engine.loadStats(team, days, previous, repos),
+    loadReviewStats: (team, days, previous, repos) =>
+      engine.loadReviewStats(team, days, previous, repos),
+    listStatsRepos: (days) => engine.listStatsRepos(days),
     setBuildkitePipeline: (name) => rejectWithMessage(() => engine.setBuildkitePipeline(name)),
     // Needs the Buildkite CLI, which only the desktop app can run.
     loadCiStats: async () => ({ kind: "error", message: "Not available in the browser." }),

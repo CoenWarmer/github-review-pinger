@@ -61,11 +61,13 @@ export const tauriPlatform: Platform = {
   loadMoreMerged: () => invoke("load_more_merged"),
   searchPullRequests: (text) => invoke("search_pull_requests", { text }),
   listTeams: () => invoke("my_teams"),
-  loadStats: (team, days, previous = false) => invoke("load_stats", { team, days, previous }),
+  loadStats: (team, days, previous = false, repos = []) =>
+    invoke("load_stats", { team, days, previous, repos }),
   loadCiStats: (days, previous = false) => invoke("load_ci_stats", { days, previous }),
   setBuildkitePipeline: (name) => invoke("set_buildkite_pipeline", { name }),
-  loadReviewStats: (team, days, previous = false) =>
-    invoke("load_review_stats", { team, days, previous }),
+  loadReviewStats: (team, days, previous = false, repos = []) =>
+    invoke("load_review_stats", { team, days, previous, repos }),
+  listStatsRepos: (days) => invoke("load_stats_repos", { days }),
   addView: (name, query) => {
     invoke("add_view", { name, query });
   },

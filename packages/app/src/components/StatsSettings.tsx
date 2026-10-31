@@ -5,6 +5,15 @@ import { cn } from "@/lib/utils";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent } from "@/components/ui/card";
 import {
+  DropdownMenu,
+  DropdownMenuCheckboxItem,
+  DropdownMenuContent,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { ChevronDown } from "lucide-react";
+import {
   ChartContainer,
   type ChartConfig,
 } from "@/components/ui/chart";
@@ -40,6 +49,9 @@ import type {
 import { Credits } from "./Credits";
 
 const TEAM_KEY = "reviewPinger.statsTeam";
+const REPOS_KEY = "reviewPinger.statsRepos";
+/** Each chosen repo is a search qualifier, and GitHub caps a search's length. */
+const MAX_REPOS = 5;
 /** Teams up to this size are counted member by member, which the median needs. */
 const MEMBER_COUNT_CAP = 150;
 const NO_TEAM = "none";
@@ -58,6 +70,9 @@ const previousStatsCache: Cache<StatsData> = new Map();
 const previousReviewsCache: Cache<ReviewStatsData> = new Map();
 /** CI builds through the Buildkite CLI: the same for any team. */
 const ciCache: Cache<CiStats> = new Map();
+/** The repos the statistics can be narrowed to: the same for any team. */
+const reposCache: Cache<string[]> = new Map();
+const reposInFlight = new Map<string, Promise<string[]>>();
 const previousCiCache: Cache<CiStats> = new Map();
 let teamsCache: { at: number; teams: string[] } | null = null;
 /** A request already under way is shared, so opening Settings twice in a row asks once. */
@@ -92,6 +107,26 @@ function saveTeam(team: string | null) {
   try {
     if (team) localStorage.setItem(TEAM_KEY, team);
     else localStorage.removeItem(TEAM_KEY);
+  } catch {
+    // A per-device convenience; losing it just means choosing again.
+  }
+}
+
+function savedRepos(): string[] {
+  try {
+    const parsed: unknown = JSON.parse(localStorage.getItem(REPOS_KEY) ?? "[]");
+    return Array.isArray(parsed)
+      ? parsed.filter((repo): repo is string => typeof repo === "string")
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveRepos(repos: string[]) {
+  try {
+    if (repos.length > 0) localStorage.setItem(REPOS_KEY, JSON.stringify(repos));
+    else localStorage.removeItem(REPOS_KEY);
   } catch {
     // A per-device convenience; losing it just means choosing again.
   }
@@ -162,6 +197,8 @@ function teamBars(
     youInTeamOrg: number | null;
     teamTotal: number | null;
   } | null = null,
+  /** Your bar's name, which says so when repos are chosen. */
+  youLabel = "You (all repos)",
 ): Bar[] {
   const average = team ? perMember(counts.teamTotal, counts.members) : null;
   const averageBefore =
@@ -176,7 +213,7 @@ function teamBars(
       : change(now, was, { better: "up" });
   return [
     {
-      who: "You (all repos)",
+      who: youLabel,
       value: counts.you,
       fill: "var(--info)",
       change: moved(counts.you, before?.you),
@@ -445,26 +482,33 @@ export function StatsSettings({
       ? { kind: "ready", value: teamsCache.teams }
       : { kind: "loading" },
   );
-  const key = team ?? NO_TEAM;
+  const [repos, setRepos] = useState<string[]>(savedRepos);
+  const repoList = useLoaded(
+    "repos",
+    reposCache,
+    reposInFlight,
+    () => platform.listStatsRepos(STATS_DAYS * 2),
+  );
+  const key = `${team ?? NO_TEAM}|${repos.join(",")}`;
   const stats = useLoaded(key, statsCache, statsInFlight, () =>
-    platform.loadStats(team, STATS_DAYS),
+    platform.loadStats(team, STATS_DAYS, false, repos),
   );
   const reviews = useLoaded(key, reviewsCache, reviewsInFlight, () =>
-    platform.loadReviewStats(team, STATS_DAYS),
+    platform.loadReviewStats(team, STATS_DAYS, false, repos),
   );
   // The 30 days before, only to show what changed, loaded once these are showing.
   const previousStats = useLoaded(
     key,
     previousStatsCache,
     previousStatsInFlight,
-    () => platform.loadStats(team, STATS_DAYS, true),
+    () => platform.loadStats(team, STATS_DAYS, true, repos),
     stats.kind === "ready",
   );
   const previousReviews = useLoaded(
     key,
     previousReviewsCache,
     previousReviewsInFlight,
-    () => platform.loadReviewStats(team, STATS_DAYS, true),
+    () => platform.loadReviewStats(team, STATS_DAYS, true, repos),
     reviews.kind === "ready",
   );
   // CI builds come from the Buildkite CLI, so only where the app can run it.
@@ -519,6 +563,27 @@ export function StatsSettings({
     saveTeam(next);
   }
 
+  function chooseRepos(next: string[]) {
+    const sorted = [...next].sort();
+    setRepos(sorted);
+    saveRepos(sorted);
+  }
+
+  const youLabel = repos.length > 0 ? "You (chosen repos)" : "You (all repos)";
+  const repoNames = repoList.kind === "ready" ? repoList.value : [];
+  // A saved repo with no recent activity is still shown, so the choice isn't silently lost.
+  const repoOptions = [
+    ...repos.filter((repo) => !repoNames.includes(repo)),
+    ...repoNames,
+  ].sort();
+  // Open PRs aren't counted by a search, so the ones in the chosen repos are picked out.
+  const openInRepos = useMemo(
+    () =>
+      repos.length > 0
+        ? pullRequests.filter((pr) => repos.includes(pr.repo.toLowerCase()))
+        : pullRequests,
+    [pullRequests, repos],
+  );
   const data = stats.kind === "ready" ? stats.value : null;
   // Failing to load the earlier window just means no changes are shown.
   const before = previousStats.kind === "ready" ? previousStats.value : null;
@@ -541,9 +606,10 @@ export function StatsSettings({
               youInTeamOrg: before.mergedByMeInTeamOrg,
               teamTotal: before.mergedByTeam,
             },
+            youLabel,
           )
         : [],
-    [team, data, before],
+    [team, data, before, youLabel],
   );
   const reviewData = reviews.kind === "ready" ? reviews.value : null;
   const reviewCounts = reviewData?.teamMemberReviews ?? null;
@@ -570,9 +636,10 @@ export function StatsSettings({
               youInTeamOrg: reviewsBefore.reviewsByMeInTeamOrg,
               teamTotal: null,
             },
+            youLabel,
           )
         : [],
-    [team, reviewData, reviewCounts, reviewsBefore],
+    [team, reviewData, reviewCounts, reviewsBefore, youLabel],
   );
   const teamList = teams.kind === "ready" ? teams.value : [];
   // A saved team you've since left is still shown, so the choice isn't silently lost.
@@ -581,6 +648,20 @@ export function StatsSettings({
 
   return (
     <div className="flex flex-col gap-4">
+      <div className="flex items-center gap-2">
+        <span className="shrink-0 text-xs text-muted-foreground">Repos</span>
+        <RepoPicker
+          options={repoOptions}
+          chosen={repos}
+          onChange={chooseRepos}
+          loading={repoList.kind === "loading"}
+        />
+      </div>
+      {repoList.kind === "error" && (
+        <p className="m-0 -mt-2 text-xs text-muted-foreground">
+          {repoList.message}
+        </p>
+      )}
       <div className="flex items-center gap-2">
         <span className="shrink-0 text-xs text-muted-foreground">
           Compare with team
@@ -730,7 +811,7 @@ export function StatsSettings({
         />
         <Figure
           label="Code owners per PR"
-          value={averageCodeOwners(pullRequests)}
+          value={averageCodeOwners(openInRepos)}
           format={(n) => (Math.round(n * 10) / 10).toString()}
           basis="open PR"
         />
@@ -762,6 +843,91 @@ export function StatsSettings({
         <Credits platform={platform} />
       </div>
     </div>
+  );
+}
+
+/**
+ * A multi-select of the repos to narrow the statistics to, which stays open
+ * while you tick more. No repo ticked means all of them.
+ */
+function RepoPicker({
+  options,
+  chosen,
+  onChange,
+  loading,
+}: {
+  options: string[];
+  chosen: string[];
+  onChange: (repos: string[]) => void;
+  loading: boolean;
+}) {
+  const summary =
+    chosen.length === 0
+      ? "All repos"
+      : chosen.length === 1
+        ? chosen[0]
+        : `${chosen.length} repos`;
+  const full = chosen.length >= MAX_REPOS;
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          className="h-7 min-w-0 flex-1 justify-between px-3 text-xs font-normal"
+          aria-label="Repos to show statistics for"
+        >
+          <span className="truncate">{loading ? "Loading repos…" : summary}</span>
+          <ChevronDown className="size-4 shrink-0 opacity-50" />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent
+        align="start"
+        className="max-h-72 w-(--radix-dropdown-menu-trigger-width) overflow-y-auto"
+      >
+        <DropdownMenuCheckboxItem
+          checked={chosen.length === 0}
+          onSelect={(e) => {
+            e.preventDefault();
+            onChange([]);
+          }}
+          className="text-xs"
+        >
+          All repos
+        </DropdownMenuCheckboxItem>
+        {options.length > 0 && <DropdownMenuSeparator />}
+        {options.map((repo) => {
+          const checked = chosen.includes(repo);
+          return (
+            <DropdownMenuCheckboxItem
+              key={repo}
+              checked={checked}
+              disabled={!checked && full}
+              onSelect={(e) => {
+                e.preventDefault();
+                onChange(
+                  checked
+                    ? chosen.filter((r) => r !== repo)
+                    : [...chosen, repo],
+                );
+              }}
+              className="text-xs"
+            >
+              {repo}
+            </DropdownMenuCheckboxItem>
+          );
+        })}
+        {full && (
+          <>
+            <DropdownMenuSeparator />
+            <DropdownMenuLabel className="text-[11px] font-normal text-muted-foreground">
+              Up to {MAX_REPOS} repos
+            </DropdownMenuLabel>
+          </>
+        )}
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }
 

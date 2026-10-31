@@ -657,18 +657,38 @@ export class Engine {
   }
 
   /**
+   * The repos the statistics can be narrowed to: those you merged in or
+   * reviewed in over the last `days`. Rejects with a message to show.
+   */
+  async listStatsRepos(days: number): Promise<string[]> {
+    if (!this.github) throw "There's no token to load statistics with.";
+    const to = this.now();
+    const from = new Date(to.getTime() - days * 86_400_000);
+    try {
+      return await this.github.fetchStatsRepos(from.toISOString(), to.toISOString());
+    } catch (e) {
+      throw e instanceof Error ? e.message : String(e);
+    }
+  }
+
+  /**
    * The statistics for the last `days`, or with `previous` for the same
    * number of days before those, which is only compared with. Rejects with a
    * message to show.
    */
-  async loadStats(team: string | null, days: number, previous = false): Promise<StatsData> {
+  async loadStats(
+    team: string | null,
+    days: number,
+    previous = false,
+    repos: string[] = [],
+  ): Promise<StatsData> {
     if (!this.github) throw "There's no token to load statistics with.";
     const day = (back: number) =>
       new Date(this.now().getTime() - back * 86_400_000).toISOString().slice(0, 10);
     // The earlier window is the same length and ends the day before this one starts.
     const range = previous ? `${day(2 * days)}..${day(days + 1)}` : `>=${day(days)}`;
     try {
-      return await this.github.fetchStats(team, range, !previous);
+      return await this.github.fetchStats(team, range, !previous, lowercase(repos));
     } catch (e) {
       throw e instanceof Error ? e.message : String(e);
     }
@@ -682,13 +702,20 @@ export class Engine {
     team: string | null,
     days: number,
     previous = false,
+    repos: string[] = [],
   ): Promise<ReviewStatsData> {
     if (!this.github) throw "There's no token to load statistics with.";
     // The earlier window is the same length and ends where this one starts.
     const to = new Date(this.now().getTime() - (previous ? days * 86_400_000 : 0));
     const from = new Date(to.getTime() - days * 86_400_000);
     try {
-      return await this.github.fetchReviewStats(team, from.toISOString(), to.toISOString(), !previous);
+      return await this.github.fetchReviewStats(
+        team,
+        from.toISOString(),
+        to.toISOString(),
+        !previous,
+        lowercase(repos),
+      );
     } catch (e) {
       throw e instanceof Error ? e.message : String(e);
     }
@@ -835,3 +862,8 @@ export class Engine {
 }
 
 export type { RawPullRequest };
+
+/** Repo names are searched and compared in lowercase, without repeats. */
+function lowercase(repos: string[]): string[] {
+  return [...new Set(repos.map((repo) => repo.toLowerCase()))].sort();
+}

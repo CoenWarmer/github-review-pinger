@@ -469,14 +469,36 @@ fn quote_text(text: &str) -> String {
     serde_json::to_string(text).expect("a string serializes")
 }
 
-/// What each of `logins` merged in `org` in the date `range` (GitHub's
-/// `merged:` syntax, such as `>=2026-10-01`), in no particular
-/// order: one aliased search per member, several to a request.
+/// ` repo:a/b repo:c/d`, which GitHub matches as any of them; empty for no
+/// repos, so it can be appended to any search.
+fn repo_qualifiers(repos: &[String]) -> String {
+    repos.iter().map(|repo| format!(" repo:{repo}")).collect()
+}
+
+/// What a team's merge search is scoped to: `org:<org>`, or with repos chosen
+/// just those of them in the org (`repo:` and `org:` together would match
+/// either). `None` when repos are chosen and none are in the org.
+fn team_scope(org: &str, repos: &[String]) -> Option<String> {
+    if repos.is_empty() {
+        return Some(format!("org:{org}"));
+    }
+    let prefix = format!("{}/", org.to_lowercase());
+    let inside: Vec<String> = repos
+        .iter()
+        .filter(|repo| repo.to_lowercase().starts_with(&prefix))
+        .cloned()
+        .collect();
+    (!inside.is_empty()).then(|| repo_qualifiers(&inside).trim_start().to_string())
+}
+
+/// What each of `logins` merged within `scope` (see `team_scope`) in the date
+/// `range` (GitHub's `merged:` syntax, such as `>=2026-10-01`), in no
+/// particular order: one aliased search per member, several to a request.
 async fn member_counts(
     http: &reqwest::Client,
     token: &str,
     range: &str,
-    org: &str,
+    scope: &str,
     logins: &[String],
 ) -> Result<Vec<u64>, FetchError> {
     // Owned queries keep the stream's closure free of borrowed arguments,
@@ -491,7 +513,7 @@ async fn member_counts(
                     format!(
                         "m{i}: search(type: ISSUE, query: {}) {{ issueCount }}\n",
                         quote_text(&format!(
-                            "is:pr is:merged merged:{range} org:{org} author:{login}"
+                            "is:pr is:merged merged:{range} {scope} author:{login}"
                         ))
                     )
                 })
@@ -518,11 +540,11 @@ async fn member_counts(
     Ok(batches.into_iter().flatten().collect())
 }
 
-/// Search texts that count PRs merged in the date `range` in `org` by any of
-/// `logins`: several `author:` qualifiers match any of them, but only so many
+/// Search texts that count PRs merged in the date `range` within `scope` (see
+/// `team_scope`) by any of `logins`: several `author:` qualifiers match any of them, but only so many
 /// fit in one search, so the logins are split across as few as will hold them.
-fn merged_by_searches(range: &str, org: &str, logins: &[String]) -> Vec<String> {
-    let start = format!("is:pr is:merged merged:{range} org:{org}");
+fn merged_by_searches(range: &str, scope: &str, logins: &[String]) -> Vec<String> {
+    let start = format!("is:pr is:merged merged:{range} {scope}");
     let mut searches = Vec::new();
     let mut current = start.clone();
     for login in logins {
@@ -558,12 +580,14 @@ impl StatsWindow {
 }
 
 /// The statistics for the window: your merged PRs, and when a team is chosen
-/// (`org/slug`, which needs `read:org`) what its members merged.
+/// (`org/slug`, which needs `read:org`) what its members merged. With `repos`
+/// (lowercase `owner/name`) only merges in those repos count.
 pub async fn fetch_stats(
     http: &reqwest::Client,
     token: &str,
     team: Option<&str>,
     window: StatsWindow,
+    repos: &[String],
 ) -> Result<StatsData, FetchError> {
     let range = window.range();
     let mine = async {
@@ -571,7 +595,10 @@ pub async fn fetch_stats(
             http,
             token,
             STATS_MERGED_QUERY,
-            json!({ "q": format!("is:pr is:merged author:@me merged:{range} sort:updated-desc") }),
+            json!({ "q": format!(
+                "is:pr is:merged author:@me merged:{range}{} sort:updated-desc",
+                repo_qualifiers(repos)
+            ) }),
         )
         .await?;
         let search = reply.data.search;
@@ -668,9 +695,20 @@ pub async fn fetch_stats(
         // Members are read a page at a time up to a limit, so a team that
         // reaches it may have more.
         let capped = logins.len() >= MEMBERS_READ_LIMIT;
-        // Your merges in the same org, so the two compare.
+        let Some(scope) = team_scope(org, repos) else {
+            // None of the chosen repos is the team's, so nobody merged anything there.
+            let by_member = window.until.is_none() && logins.len() <= MEMBER_COUNT_CAP;
+            return Ok(TeamStats {
+                merged: Some(0),
+                capped,
+                members: logins.len(),
+                mine_in_org: Some(0),
+                member_counts: by_member.then(|| vec![0; logins.len()]),
+            });
+        };
+        // Your merges in the same scope, so the two compare.
         let mine_in_org = async {
-            let text = format!("is:pr is:merged author:@me merged:{range} org:{org}");
+            let text = format!("is:pr is:merged author:@me merged:{range} {scope}");
             let query = format!(
                 "query {{ me: search(type: ISSUE, query: {}) {{ issueCount }} }}",
                 quote_text(&text)
@@ -683,10 +721,10 @@ pub async fn fetch_stats(
         let members_merged = async {
             // An earlier window is only compared in total, so no member-by-member.
             if window.until.is_none() && logins.len() <= MEMBER_COUNT_CAP {
-                let counts = member_counts(http, token, &range, org, &logins).await?;
+                let counts = member_counts(http, token, &range, &scope, &logins).await?;
                 return Ok::<_, FetchError>((counts.iter().sum::<u64>(), Some(counts)));
             }
-            let searches = merged_by_searches(&range, org, &logins);
+            let searches = merged_by_searches(&range, &scope, &logins);
             let query = format!(
                 "query {{\n{}}}",
                 searches
@@ -809,7 +847,34 @@ pub struct ReviewStatsData {
     pub team_member_reviews: Option<Vec<u64>>,
 }
 
-const REVIEW_COUNT_QUERY: &str = "query($from: DateTime!, $to: DateTime!, $org: ID) { viewer { contributionsCollection(from: $from, to: $to, organizationID: $org) { totalPullRequestReviewContributions } } }";
+/// What to ask a contributions collection for: the total, or with repos
+/// chosen the count in each repo, which is the only way to tell them apart.
+fn review_fields(repos: &[String]) -> &'static str {
+    if repos.is_empty() {
+        "totalPullRequestReviewContributions"
+    } else {
+        "pullRequestReviewContributionsByRepository(maxRepositories: 100) { repository { nameWithOwner } contributions { totalCount } }"
+    }
+}
+
+/// The reviews in a contributions collection, in `repos` when any are chosen.
+fn review_count(collection: &Value, repos: &[String]) -> Option<u64> {
+    if repos.is_empty() {
+        return collection["totalPullRequestReviewContributions"].as_u64();
+    }
+    let by_repo = collection["pullRequestReviewContributionsByRepository"].as_array()?;
+    Some(
+        by_repo
+            .iter()
+            .filter(|entry| {
+                entry["repository"]["nameWithOwner"]
+                    .as_str()
+                    .is_some_and(|name| repos.contains(&name.to_lowercase()))
+            })
+            .filter_map(|entry| entry["contributions"]["totalCount"].as_u64())
+            .sum(),
+    )
+}
 
 /// The reviews submitted in the last window: yours, and when a team is
 /// chosen (`org/slug`, which needs `read:org`) what each of its members
@@ -817,6 +882,8 @@ const REVIEW_COUNT_QUERY: &str = "query($from: DateTime!, $to: DateTime!, $org: 
 /// member counts: GitHub counts these per person, so there is no cheaper way.
 /// Without `by_member`, as for an earlier window that's only compared with,
 /// the team's members aren't looked up at all, just your own two counts.
+/// With `repos` (lowercase `owner/name`) only reviews in those repos count, of
+/// the 100 repos each person reviewed most in.
 pub async fn fetch_review_stats(
     http: &reqwest::Client,
     token: &str,
@@ -824,16 +891,18 @@ pub async fn fetch_review_stats(
     from: DateTime<Utc>,
     to: DateTime<Utc>,
     by_member: bool,
+    repos: &[String],
 ) -> Result<ReviewStatsData, FetchError> {
     let variables = |org: Option<&str>| json!({ "from": from, "to": to, "org": org });
+    let count_query = format!(
+        "query($from: DateTime!, $to: DateTime!, $org: ID) {{ viewer {{ contributionsCollection(from: $from, to: $to, organizationID: $org) {{ {} }} }} }}",
+        review_fields(repos)
+    );
     let count_of = |reply: &Response<Value>| {
-        reply.data["viewer"]["contributionsCollection"]["totalPullRequestReviewContributions"]
-            .as_u64()
-            .unwrap_or(0)
+        review_count(&reply.data["viewer"]["contributionsCollection"], repos).unwrap_or(0)
     };
     let mine = async {
-        let reply: Response<Value> =
-            request(http, token, REVIEW_COUNT_QUERY, variables(None)).await?;
+        let reply: Response<Value> = request(http, token, &count_query, variables(None)).await?;
         Ok::<_, FetchError>(count_of(&reply))
     };
     let team_part = async {
@@ -882,7 +951,7 @@ pub async fn fetch_review_stats(
         logins.sort();
         let in_org = async {
             let reply: Response<Value> =
-                request(http, token, REVIEW_COUNT_QUERY, variables(Some(&org_id))).await?;
+                request(http, token, &count_query, variables(Some(&org_id))).await?;
             Ok::<_, FetchError>(count_of(&reply))
         };
         let members = async {
@@ -890,7 +959,7 @@ pub async fn fetch_review_stats(
                 return Ok::<_, FetchError>(None);
             }
             Ok(Some(
-                member_reviews(http, token, &org_id, from, to, &logins).await?,
+                member_reviews(http, token, &org_id, from, to, &logins, repos).await?,
             ))
         };
         let (mine_in_org, counts) = future::try_join(in_org, members).await?;
@@ -916,7 +985,9 @@ async fn member_reviews(
     from: DateTime<Utc>,
     to: DateTime<Utc>,
     logins: &[String],
+    repos: &[String],
 ) -> Result<Vec<u64>, FetchError> {
+    let fields = review_fields(repos);
     // Owned queries keep the stream's closure free of borrowed arguments,
     // which a Send future spawned on the runtime can't express.
     let queries: Vec<(String, usize)> = logins
@@ -927,7 +998,7 @@ async fn member_reviews(
                 .enumerate()
                 .map(|(i, login)| {
                     format!(
-                        "u{i}: user(login: {}) {{ c: contributionsCollection(from: $from, to: $to, organizationID: $org) {{ totalPullRequestReviewContributions }} }}\n",
+                        "u{i}: user(login: {}) {{ c: contributionsCollection(from: $from, to: $to, organizationID: $org) {{ {fields} }} }}\n",
                         quote_text(login)
                     )
                 })
@@ -939,9 +1010,11 @@ async fn member_reviews(
         })
         .collect();
     let org_id = org_id.to_string();
+    let repos = repos.to_vec();
     let batches: Vec<Vec<u64>> = stream::iter(queries)
         .map(|(query, len)| {
             let org_id = org_id.clone();
+            let repos = repos.clone();
             async move {
                 let reply: Response<Value> = request(
                     http,
@@ -952,10 +1025,7 @@ async fn member_reviews(
                 .await?;
                 Ok::<_, FetchError>(
                     (0..len)
-                        .filter_map(|i| {
-                            reply.data[format!("u{i}")]["c"]["totalPullRequestReviewContributions"]
-                                .as_u64()
-                        })
+                        .filter_map(|i| review_count(&reply.data[format!("u{i}")]["c"], &repos))
                         .collect::<Vec<u64>>(),
                 )
             }
@@ -964,6 +1034,51 @@ async fn member_reviews(
         .try_collect()
         .await?;
     Ok(batches.into_iter().flatten().collect())
+}
+
+/// The repos you merged a PR in or reviewed in since `from`, lowercase
+/// `owner/name`, sorted: what the statistics can be narrowed to. Only the
+/// latest 100 merged PRs and the 100 repos reviewed most are looked at.
+pub async fn fetch_stats_repos(
+    http: &reqwest::Client,
+    token: &str,
+    from: DateTime<Utc>,
+    to: DateTime<Utc>,
+) -> Result<Vec<String>, FetchError> {
+    let reply: Response<Value> = request(
+        http,
+        token,
+        "query($q: String!, $from: DateTime!, $to: DateTime!) {
+            merged: search(type: ISSUE, query: $q, first: 100) {
+                nodes { ... on PullRequest { repository { nameWithOwner } } }
+            }
+            viewer {
+                contributionsCollection(from: $from, to: $to) {
+                    pullRequestReviewContributionsByRepository(maxRepositories: 100) {
+                        repository { nameWithOwner }
+                    }
+                }
+            }
+        }",
+        json!({
+            "q": format!("is:pr is:merged author:@me merged:>={}", from.date_naive()),
+            "from": from,
+            "to": to,
+        }),
+    )
+    .await?;
+    let merged = reply.data["merged"]["nodes"].as_array().into_iter().flatten();
+    let reviewed = reply.data["viewer"]["contributionsCollection"]
+        ["pullRequestReviewContributionsByRepository"]
+        .as_array()
+        .into_iter()
+        .flatten();
+    let repos: std::collections::BTreeSet<String> = merged
+        .chain(reviewed)
+        .filter_map(|node| node["repository"]["nameWithOwner"].as_str())
+        .map(str::to_lowercase)
+        .collect();
+    Ok(repos.into_iter().collect())
 }
 
 /// A PR of yours as its CI builds name it, for finding those builds.
@@ -1641,21 +1756,46 @@ mod tests {
     #[test]
     fn splits_authors_across_searches_that_fit() {
         let since = ">=2026-10-01";
-        assert!(merged_by_searches(since, "o", &[]).is_empty());
+        assert!(merged_by_searches(since, "org:o", &[]).is_empty());
 
         let few = vec!["ana".to_string(), "bo".to_string()];
         assert_eq!(
-            merged_by_searches(since, "o", &few),
+            merged_by_searches(since, "org:o", &few),
             ["is:pr is:merged merged:>=2026-10-01 org:o author:ana author:bo"]
         );
 
         let many: Vec<String> = (0..120).map(|i| format!("member-number-{i}")).collect();
-        let searches = merged_by_searches(since, "o", &many);
+        let searches = merged_by_searches(since, "org:o", &many);
         assert!(searches.len() > 1);
         assert!(searches.iter().all(|s| s.len() <= MAX_SEARCH_CHARS));
         // Every login is in exactly one search.
         let counted: usize = searches.iter().map(|s| s.matches(" author:").count()).sum();
         assert_eq!(counted, many.len());
+    }
+
+    #[test]
+    fn scopes_team_searches_to_the_chosen_repos_in_the_org() {
+        assert_eq!(team_scope("o", &[]).as_deref(), Some("org:o"));
+        let repos = vec!["o/a".to_string(), "x/b".to_string(), "o/c".to_string()];
+        assert_eq!(team_scope("o", &repos).as_deref(), Some("repo:o/a repo:o/c"));
+        assert_eq!(team_scope("y", &repos), None);
+        assert_eq!(repo_qualifiers(&[]), "");
+        assert_eq!(repo_qualifiers(&repos[..2]), " repo:o/a repo:x/b");
+    }
+
+    #[test]
+    fn counts_reviews_in_the_chosen_repos() {
+        let total = json!({ "totalPullRequestReviewContributions": 9 });
+        assert_eq!(review_count(&total, &[]), Some(9));
+        let by_repo = json!({ "pullRequestReviewContributionsByRepository": [
+            { "repository": { "nameWithOwner": "O/A" }, "contributions": { "totalCount": 4 } },
+            { "repository": { "nameWithOwner": "o/b" }, "contributions": { "totalCount": 3 } },
+            { "repository": { "nameWithOwner": "o/c" }, "contributions": { "totalCount": 2 } },
+        ] });
+        let chosen = vec!["o/a".to_string(), "o/c".to_string()];
+        assert_eq!(review_count(&by_repo, &chosen), Some(6));
+        // A person GitHub doesn't know has no collection to count.
+        assert_eq!(review_count(&Value::Null, &chosen), None);
     }
 
     fn pr(overrides: Value) -> PullRequest {

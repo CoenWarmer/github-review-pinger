@@ -163,9 +163,10 @@ async fn load_stats(
     team: Option<String>,
     days: i64,
     previous: bool,
+    repos: Vec<String>,
     poller: State<'_, Arc<Poller>>,
 ) -> Result<github::StatsData, String> {
-    poller.stats(team, days, previous).await
+    poller.stats(team, days, previous, repos).await
 }
 
 #[tauri::command]
@@ -173,9 +174,18 @@ async fn load_review_stats(
     team: Option<String>,
     days: i64,
     previous: bool,
+    repos: Vec<String>,
     poller: State<'_, Arc<Poller>>,
 ) -> Result<github::ReviewStatsData, String> {
-    poller.review_stats(team, days, previous).await
+    poller.review_stats(team, days, previous, repos).await
+}
+
+#[tauri::command]
+async fn load_stats_repos(
+    days: i64,
+    poller: State<'_, Arc<Poller>>,
+) -> Result<Vec<String>, String> {
+    poller.stats_repos(days).await
 }
 
 /// Statistics over the builds on PRs you authored, from the Buildkite CLI.
@@ -364,6 +374,7 @@ pub fn run() {
             my_teams,
             load_stats,
             load_review_stats,
+            load_stats_repos,
             load_ci_stats,
             set_buildkite_pipeline,
             add_view,
