@@ -240,8 +240,8 @@ export interface Github {
    * entirely. `views` is `[id, query]` pairs for enabled custom views, each
    * already including `is:pr`. The PRs on screen (`plan.first`) are refetched
    * while the searches run, then the tab being looked at, then the other
-   * one. `onProgress` gets each phase's PRs as soon as they're in, before
-   * their merge states.
+   * one. `onProgress` gets each phase's PRs as soon as they're in, again
+   * once required checks are in (if any needed them), and before merge states.
    */
   fetchOpenPullRequests(
     reviewedSince: string,
@@ -523,12 +523,16 @@ export function createGithub({
         name: string,
       ) => {
         const mine = prs.filter((pr) => own.has(pr.id));
-        // Before the first paint, so a red badge doesn't flash and turn green.
-        await github.addRequiredChecks(mine);
-        lap(`${name} required checks done (${mine.length} own)`);
         if (prs.length > 0) {
           show(prs);
           lap(`${name} shown`);
+        }
+        if (mine.some(needsRequiredChecks)) {
+          await github.addRequiredChecks(mine);
+          lap(`${name} required checks done (${mine.length} own)`);
+          // Until now each PR kept the required checks it had, so the verdict
+          // doesn't flash; this brings in what changed.
+          show(mine);
         }
         await github.addMergeStates(mine);
         lap(`${name} merge states done`);

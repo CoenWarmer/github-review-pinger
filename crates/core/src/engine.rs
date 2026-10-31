@@ -151,15 +151,18 @@ pub struct Matches {
 /// too. Nothing is removed for no longer matching: the complete fetch decides
 /// that.
 pub fn apply_progress(fetched: &mut Fetched, mut fresh: Vec<PullRequest>, found: Option<&Matches>) {
-    // Merge states arrive last, so keep what's shown until they do; otherwise
-    // a "Ready to merge" badge would vanish and come back.
+    // Required checks and merge states arrive after the PR does, so keep what's
+    // shown until they do; otherwise a "CI failing" or "Ready to merge" badge
+    // would flash and change.
     for pr in &mut fresh {
+        let Some(old) = fetched.pull_requests.iter().find(|old| old.id == pr.id) else {
+            continue;
+        };
         if pr.merge_state_status.is_none() {
-            pr.merge_state_status = fetched
-                .pull_requests
-                .iter()
-                .find(|old| old.id == pr.id)
-                .and_then(|old| old.merge_state_status);
+            pr.merge_state_status = old.merge_state_status;
+        }
+        if pr.required_checks.is_none() {
+            pr.required_checks = old.required_checks.clone();
         }
     }
     let Some(found) = found else {

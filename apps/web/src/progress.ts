@@ -41,12 +41,15 @@ export function applyProgress(base: Fetched, progress: Progress): Fetched {
   const previous = new Map(base.pullRequests.map((pr) => [pr.id, pr]));
 
   for (const fresh of progress.fresh) {
-    // Merge states arrive last, so keep what's shown until they do; otherwise
-    // a "Ready to merge" badge would vanish and come back.
-    const pr: RawPullRequest =
-      fresh.mergeStateStatus == null && previous.get(fresh.id)?.mergeStateStatus
-        ? { ...fresh, mergeStateStatus: previous.get(fresh.id)!.mergeStateStatus }
-        : fresh;
+    // Required checks and merge states arrive after the PR does, so keep what's
+    // shown until they do; otherwise a "CI failing" or "Ready to merge" badge
+    // would flash and change.
+    const old = previous.get(fresh.id);
+    const pr: RawPullRequest = { ...fresh };
+    if (pr.mergeStateStatus == null && old?.mergeStateStatus) {
+      pr.mergeStateStatus = old.mergeStateStatus;
+    }
+    if (pr.requiredChecks == null && old?.requiredChecks) pr.requiredChecks = old.requiredChecks;
     const closed = pr.closed === true;
     // Each list gets its own copy: a flag set for one shouldn't leak into another.
     const place = (list: RawPullRequest[], add: boolean, copy: RawPullRequest) => {

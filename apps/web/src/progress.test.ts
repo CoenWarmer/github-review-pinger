@@ -42,6 +42,18 @@ describe("applyProgress", () => {
     assert.equal(next.pullRequests[0].mergeStateStatus, "CLEAN");
   });
 
+  it("keeps the required checks shown until the new ones arrive", () => {
+    const required: RawPullRequest["requiredChecks"] = [{ name: "build", outcome: "failed" }];
+    const before = { ...base(), pullRequests: [pr("mine", { requiredChecks: required })] };
+    const next = applyProgress(before, {
+      fresh: [pr("mine")],
+      matches: null,
+      viewer: "",
+      ssoPartial: false,
+    });
+    assert.deepEqual(next.pullRequests[0].requiredChecks, required);
+  });
+
   it("after the searches files new PRs where they were found", () => {
     const next = applyProgress(base(), {
       fresh: [pr("own"), pr("asked"), pr("done")],

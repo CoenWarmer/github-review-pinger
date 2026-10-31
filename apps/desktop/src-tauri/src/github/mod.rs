@@ -291,8 +291,9 @@ pub async fn fetch_open_pull_requests(
 }
 
 /// Adds what only your own PRs need to `pull_requests`: required checks, then
-/// merge states. `show` gets them in between, so a phase appears without
-/// waiting for the merge states, which doubles a PR's cost.
+/// merge states. `show` gets the PRs as soon as they're in, and again once
+/// the required checks are (when any PR needed them), so a phase appears
+/// without waiting for either. Merge states double a PR's cost, so they come last.
 async fn fetch_part(
     http: &reqwest::Client,
     token: &str,
@@ -300,7 +301,7 @@ async fn fetch_part(
     own: &HashSet<String>,
     started: Instant,
     phase: &str,
-    show: impl FnOnce(Vec<PullRequest>),
+    show: impl Fn(Vec<PullRequest>),
 ) -> Result<Vec<PullRequest>, FetchError> {
     let lap = |what: &str| {
         log::info!(
@@ -311,12 +312,16 @@ async fn fetch_part(
     let (mut mine, others): (Vec<_>, Vec<_>) = pull_requests
         .into_iter()
         .partition(|pr| own.contains(&pr.id));
-    // Before the first paint, so a red badge doesn't flash and turn green.
-    add_required_checks(http, token, &mut mine).await;
-    lap(&format!("required checks done ({} own)", mine.len()));
     if !mine.is_empty() || !others.is_empty() {
         show(mine.iter().chain(&others).cloned().collect());
         lap("shown");
+    }
+    if mine.iter().any(needs_required_checks) {
+        add_required_checks(http, token, &mut mine).await;
+        lap(&format!("required checks done ({} own)", mine.len()));
+        // Until now each PR kept the required checks it had, so the verdict
+        // doesn't flash; this brings in what changed.
+        show(mine.clone());
     }
     add_merge_states(http, token, &mut mine).await?;
     lap("merge states done");
