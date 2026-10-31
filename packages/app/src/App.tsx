@@ -22,13 +22,6 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { cn } from "@/lib/utils";
 import { PrRow } from "./components/PrRow";
@@ -37,6 +30,7 @@ import { ReviewRow } from "./components/ReviewRow";
 import { RingsLoader } from "./components/RingsLoader";
 import { UpdateBanner } from "./components/UpdateBanner";
 import { SettingsPanel } from "./components/SettingsPanel";
+import { RepoPicker } from "./components/RepoPicker";
 import { StatsSettings } from "./components/StatsSettings";
 import { Setup, problemMessage } from "./components/Setup";
 import { elapsed } from "./format";
@@ -97,8 +91,6 @@ function Empty({ children }: { children: ReactNode }) {
   );
 }
 
-/** The repo filter's "no repo chosen" (a Select can't have an empty value). */
-const ALL_REPOS = "__all__";
 
 function Banner({ children }: { children: ReactNode }) {
   return <p className="m-0 border-t bg-warning/15 px-3 py-2">{children}</p>;
@@ -299,7 +291,7 @@ function AppContent() {
   const now = useNow();
   const [tab, setTab] = useState<Tab>("mine");
   const [query, setQuery] = useState("");
-  const [repo, setRepo] = useState(ALL_REPOS);
+  const [repos, setRepos] = useState<string[]>([]);
   const reportOpen = useReportViewState(tab);
   const refreshingIds = useMemo(
     () => new Set(snapshot?.refreshingIds ?? []),
@@ -334,7 +326,7 @@ function AppContent() {
   const allReviews = snapshot.reviewRequests;
   // The repo filter narrows every list, but not the tab counts or the statistics.
   const inRepo = <T extends { repo: string }>(rows: T[]): T[] =>
-    repo === ALL_REPOS ? rows : rows.filter((row) => row.repo === repo);
+    repos.length === 0 ? rows : rows.filter((row) => repos.includes(row.repo));
   const prs = inRepo(allPrs);
   const reviews = inRepo(allReviews);
   const merged = inRepo(snapshot.mergedPullRequests);
@@ -350,6 +342,11 @@ function AppContent() {
           ]
       ).map((pr) => pr.repo),
     ),
+  ].sort((a, b) => a.localeCompare(b));
+  // A chosen repo stays pickable (to untick it) even once it has no PRs.
+  const pickable = [
+    ...repos.filter((name) => !repoOptions.includes(name)),
+    ...repoOptions,
   ].sort((a, b) => a.localeCompare(b));
   const counts: Partial<Record<Tab, number>> = {
     mine: allPrs.filter(
@@ -421,7 +418,7 @@ function AppContent() {
             onValueChange={(value) => {
               setTab(value as Tab);
               // Each tab has its own repos.
-              setRepo(ALL_REPOS);
+              setRepos([]);
             }}
             className="gap-0 py-1"
           >
@@ -462,26 +459,14 @@ function AppContent() {
                 onChange={(e) => setQuery(e.currentTarget.value)}
                 className="h-7 min-w-0 flex-1 text-xs md:text-xs"
               />
-              {(repoOptions.length > 1 || repo !== ALL_REPOS) && (
-                <Select value={repo} onValueChange={setRepo}>
-                  <SelectTrigger
-                    size="sm"
-                    aria-label="Filter by repository"
-                    className="w-32 shrink-0 text-xs data-[size=sm]:h-7"
-                  >
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value={ALL_REPOS} className="text-xs whitespace-nowrap">
-                      All repos
-                    </SelectItem>
-                    {repoOptions.map((name) => (
-                      <SelectItem key={name} value={name} className="text-xs whitespace-nowrap">
-                        {name}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+              {(pickable.length > 1 || repos.length > 0) && (
+                <RepoPicker
+                  options={pickable}
+                  chosen={repos}
+                  onChange={setRepos}
+                  ariaLabel="Filter by repository"
+                  className="w-32 shrink-0"
+                />
               )}
             </div>
           )}
@@ -490,9 +475,9 @@ function AppContent() {
             <ScrollArea className="h-full">
               {search ? (
                 <SearchResults
-                  key={`${tab}:${repo}:${query.trim()}`}
+                  key={`${tab}:${repos.join(",")}:${query.trim()}`}
                   query={query}
-                  repo={repo === ALL_REPOS ? null : repo}
+                  repos={repos}
                   shownIds={search.ids}
                   rows={search.rows}
                   now={now}

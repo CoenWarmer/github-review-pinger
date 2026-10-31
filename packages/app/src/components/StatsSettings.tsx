@@ -4,15 +4,7 @@ import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent } from "@/components/ui/card";
-import {
-  DropdownMenu,
-  DropdownMenuCheckboxItem,
-  DropdownMenuContent,
-  DropdownMenuLabel,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
-import { ChevronDown } from "lucide-react";
+import { RepoPicker } from "./RepoPicker";
 import {
   ChartContainer,
   type ChartConfig,
@@ -655,6 +647,9 @@ export function StatsSettings({
           chosen={repos}
           onChange={chooseRepos}
           loading={repoList.kind === "loading"}
+          max={MAX_REPOS}
+          ariaLabel="Repos to show statistics for"
+          className="flex-1"
         />
       </div>
       {repoList.kind === "error" && (
@@ -843,91 +838,6 @@ export function StatsSettings({
         <Credits platform={platform} />
       </div>
     </div>
-  );
-}
-
-/**
- * A multi-select of the repos to narrow the statistics to, which stays open
- * while you tick more. No repo ticked means all of them.
- */
-function RepoPicker({
-  options,
-  chosen,
-  onChange,
-  loading,
-}: {
-  options: string[];
-  chosen: string[];
-  onChange: (repos: string[]) => void;
-  loading: boolean;
-}) {
-  const summary =
-    chosen.length === 0
-      ? "All repos"
-      : chosen.length === 1
-        ? chosen[0]
-        : `${chosen.length} repos`;
-  const full = chosen.length >= MAX_REPOS;
-  return (
-    <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          className="h-7 min-w-0 flex-1 justify-between px-3 text-xs font-normal"
-          aria-label="Repos to show statistics for"
-        >
-          <span className="truncate">{loading ? "Loading repos…" : summary}</span>
-          <ChevronDown className="size-4 shrink-0 opacity-50" />
-        </Button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent
-        align="start"
-        className="max-h-72 w-(--radix-dropdown-menu-trigger-width) overflow-y-auto"
-      >
-        <DropdownMenuCheckboxItem
-          checked={chosen.length === 0}
-          onSelect={(e) => {
-            e.preventDefault();
-            onChange([]);
-          }}
-          className="text-xs"
-        >
-          All repos
-        </DropdownMenuCheckboxItem>
-        {options.length > 0 && <DropdownMenuSeparator />}
-        {options.map((repo) => {
-          const checked = chosen.includes(repo);
-          return (
-            <DropdownMenuCheckboxItem
-              key={repo}
-              checked={checked}
-              disabled={!checked && full}
-              onSelect={(e) => {
-                e.preventDefault();
-                onChange(
-                  checked
-                    ? chosen.filter((r) => r !== repo)
-                    : [...chosen, repo],
-                );
-              }}
-              className="text-xs"
-            >
-              {repo}
-            </DropdownMenuCheckboxItem>
-          );
-        })}
-        {full && (
-          <>
-            <DropdownMenuSeparator />
-            <DropdownMenuLabel className="text-[11px] font-normal text-muted-foreground">
-              Up to {MAX_REPOS} repos
-            </DropdownMenuLabel>
-          </>
-        )}
-      </DropdownMenuContent>
-    </DropdownMenu>
   );
 }
 
