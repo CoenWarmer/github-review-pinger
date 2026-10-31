@@ -45,6 +45,8 @@ pub const TRAY_ID: &str = "tray";
 pub struct Snapshot {
     pub status: Status,
     pub refreshing: bool,
+    /// The PRs shown that the running refresh hasn't brought back yet, for the debug indicator.
+    pub refreshing_ids: Vec<String>,
     pub viewer: Option<String>,
     pub token_source: Option<TokenSource>,
     /// The source the user picked; `None` until they do.
@@ -774,6 +776,7 @@ pub fn start(app: &AppHandle) -> Arc<Poller> {
         snapshot: Mutex::new(Snapshot {
             status: Status::Loading,
             refreshing: false,
+            refreshing_ids: Vec::new(),
             viewer: None,
             token_source: None,
             auth_choice: None,
@@ -917,8 +920,25 @@ async fn poll_once(app: &AppHandle, poller: &Poller) -> Result<(), Problem> {
         .await
         .unwrap_or(false);
     let auth_choice = poller.auth_source();
+    // Every PR on screen is refreshed by this poll; each is crossed off as its phase lands.
+    let pending: Vec<String> = poller
+        .latest
+        .lock()
+        .unwrap()
+        .as_ref()
+        .map(|fetched| {
+            fetched
+                .pull_requests
+                .iter()
+                .chain(&fetched.review_pull_requests)
+                .chain(fetched.view_pull_requests.values().flatten())
+                .map(|pr| pr.id.clone())
+                .collect()
+        })
+        .unwrap_or_default();
     poller.update(app, |s| {
         s.refreshing = true;
+        s.refreshing_ids = pending;
         s.has_saved_token = has_saved_token;
         s.auth_choice = auth_choice;
     });
@@ -934,6 +954,7 @@ async fn poll_once(app: &AppHandle, poller: &Poller) -> Result<(), Problem> {
             log::warn!("Refresh failed: {problem:?}");
             poller.update(app, |s| {
                 s.refreshing = false;
+                s.refreshing_ids.clear();
                 s.status = Status::Error {
                     problem: problem.clone(),
                 };
@@ -984,6 +1005,7 @@ async fn poll_once(app: &AppHandle, poller: &Poller) -> Result<(), Problem> {
 
     poller.update(app, |s| {
         s.refreshing = false;
+        s.refreshing_ids.clear();
         s.partial = false;
         s.status = Status::Ok;
         s.viewer = Some(fetched.viewer.clone());
@@ -1130,12 +1152,14 @@ async fn fetch_and_sync(
             shown.viewer = progress.viewer.to_string();
             shown.sso_partial = progress.sso_partial;
         }
+        let arrived: HashSet<String> = progress.fresh.iter().map(|pr| pr.id.clone()).collect();
         engine::apply_progress(shown, progress.fresh, progress.found);
         let (views, review_views) = poller.derive(app, shown, now);
         let view_pull_requests = poller.derive_views(app, shown, now);
         let (viewer, sso_partial) = (shown.viewer.clone(), shown.sso_partial);
         drop(working);
         poller.update(app, |s| {
+            s.refreshing_ids.retain(|id| !arrived.contains(id));
             if first_load {
                 // Nothing was shown yet, so what's still empty isn't known to be.
                 s.partial = true;

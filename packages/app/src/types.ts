@@ -241,6 +241,8 @@ export interface SyncStatus {
 export interface Snapshot {
   status: Status;
   refreshing: boolean;
+  /** The PRs shown that the running refresh hasn't brought back yet. */
+  refreshingIds: string[];
   viewer: string | null;
   tokenSource: TokenSource | null;
   /** The source the user picked; null until they do. */

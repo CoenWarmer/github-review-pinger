@@ -42,6 +42,7 @@ import { Setup, problemMessage } from "./components/Setup";
 import { elapsed } from "./format";
 import { clearSavedLists } from "./cache";
 import {
+  RefreshingContext,
   ReportOpenProvider,
   useApplyTheme,
   useNow,
@@ -300,6 +301,10 @@ function AppContent() {
   const [query, setQuery] = useState("");
   const [repo, setRepo] = useState(ALL_REPOS);
   const reportOpen = useReportViewState(tab);
+  const refreshingIds = useMemo(
+    () => new Set(snapshot?.refreshingIds ?? []),
+    [snapshot?.refreshingIds],
+  );
   useApplyTheme(snapshot?.theme);
   // Once a fetch has landed (so sync has had its say), hand over the sorts
   // this browser remembered before they were synced.
@@ -408,6 +413,7 @@ function AppContent() {
       }}
     >
       <ReportOpenProvider value={reportOpen}>
+      <RefreshingContext.Provider value={refreshingIds}>
       <SectionSortsContext.Provider value={snapshot.sectionSorts ?? {}}>
         <main className="flex h-full flex-col">
           <Tabs
@@ -612,6 +618,7 @@ function AppContent() {
           <Footer snapshot={snapshot} now={now} />
         </main>
       </SectionSortsContext.Provider>
+      </RefreshingContext.Provider>
       </ReportOpenProvider>
     </SlackContext.Provider>
   );

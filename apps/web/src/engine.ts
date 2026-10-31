@@ -183,6 +183,7 @@ export class Engine {
     this.snapshot = {
       status: { kind: "loading" },
       refreshing: false,
+      refreshingIds: [],
       viewer: null,
       tokenSource: "pat",
       authChoice: null,
@@ -365,7 +366,18 @@ export class Engine {
       this.publish({ status: { kind: "error", problem: { code: "noToken" } } });
       return;
     }
-    this.publish({ refreshing: true });
+    // Every PR on screen is refreshed by this poll; each is crossed off as its phase lands.
+    const last = this.lastFetched;
+    this.publish({
+      refreshing: true,
+      refreshingIds: last
+        ? [
+            ...last.pullRequests,
+            ...last.reviewPullRequests,
+            ...Object.values(last.viewPullRequests).flat(),
+          ].map((pr) => pr.id)
+        : [],
+    });
     let delay = POLL_INTERVAL_MS;
     try {
       const now = this.nowIso();
@@ -384,7 +396,7 @@ export class Engine {
       let shown = this.lastFetched ?? emptyFetched();
       const showProgress = (progress: Progress) => {
         shown = applyProgress(shown, progress);
-        this.showProgress(shown, now, firstLoad);
+        this.showProgress(shown, now, firstLoad, progress.fresh);
       };
       const plan = this.plan();
       const [fetched, mergedPage] = await Promise.all([
@@ -418,6 +430,7 @@ export class Engine {
       this.persist();
       this.publish({
         refreshing: false,
+        refreshingIds: [],
         partial: false,
         status: { kind: "ok" },
         viewer: fetched.viewer,
@@ -441,7 +454,7 @@ export class Engine {
           ? Math.min(Math.max(Date.parse(e.resetAt) - this.now().getTime(), 60_000), 3_600_000)
           : Math.min(30_000 * 2 ** (this.failures - 1), MAX_BACKOFF_MS);
       // Keep showing the last good data alongside the problem.
-      this.publish({ refreshing: false, status: { kind: "error", problem } });
+      this.publish({ refreshing: false, refreshingIds: [], status: { kind: "error", problem } });
     }
     this.schedule(delay);
   }
@@ -470,7 +483,8 @@ export class Engine {
    * what's remembered wait for the complete fetch. On a first load, what's
    * still empty isn't known to be, so it's marked partial.
    */
-  private showProgress(shown: Fetched, now: string, firstLoad: boolean) {
+  private showProgress(shown: Fetched, now: string, firstLoad: boolean, arrived: RawPullRequest[]) {
+    const done = new Set(arrived.map((pr) => pr.id));
     const update: Update = JSON.parse(this.pinger.preview(JSON.stringify(shown), now));
     this.publish({
       ...(firstLoad && {
@@ -480,6 +494,7 @@ export class Engine {
         fetchedAt: now,
         ssoPartial: shown.ssoPartial,
       }),
+      refreshingIds: this.snapshot.refreshingIds.filter((id) => !done.has(id)),
       pullRequests: update.pullRequests,
       reviewRequests: update.reviewRequests,
       viewPullRequests: update.views,

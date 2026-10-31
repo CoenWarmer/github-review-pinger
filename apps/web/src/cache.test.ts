@@ -39,6 +39,7 @@ function starting(over: Partial<Snapshot> = {}): Snapshot {
   return {
     status: { kind: "loading" },
     refreshing: false,
+    refreshingIds: [],
     partial: false,
     viewer: null,
     fetchedAt: null,

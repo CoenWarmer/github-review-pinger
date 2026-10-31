@@ -13,6 +13,7 @@ import {
   useVisitPr,
 } from "./PrRow";
 import { PrContextMenu } from "./PrContextMenu";
+import { RefreshIndicator } from "./RefreshIndicator";
 
 export function ReviewRow({ pr, now }: { pr: ReviewRequest; now: number }) {
   const visitPr = useVisitPr();
@@ -62,6 +63,7 @@ export function ReviewRow({ pr, now }: { pr: ReviewRequest; now: number }) {
           )}
         </button>
         {askingTeam && <TeamChannelForm team={askingTeam} onDone={() => setAskingTeam(null)} />}
+        <RefreshIndicator id={pr.id} />
         {pr.group !== "draft" && <RowActions pr={pr} />}
       </li>
     </PrContextMenu>

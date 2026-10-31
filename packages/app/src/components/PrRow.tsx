@@ -9,6 +9,7 @@ import { checksProgress, dayAndTime, elapsed, queueProgress, remaining } from ".
 import { TeamChannelForm, TeamChip } from "../slack";
 import type { Action, PullRequest, Reviewer, ReviewerState } from "../types";
 import { PrContextMenu } from "./PrContextMenu";
+import { RefreshIndicator } from "./RefreshIndicator";
 
 /** Opens a PR on GitHub, and has it refreshed first the next time the list shows. */
 export function useVisitPr() {
@@ -269,6 +270,7 @@ export function PrRow({ pr, now }: { pr: PullRequest; now: number }) {
           )}
         </button>
         {askingTeam && <TeamChannelForm team={askingTeam} onDone={() => setAskingTeam(null)} />}
+        <RefreshIndicator id={pr.id} />
         {pr.group !== "draft" && <RowActions pr={pr} />}
       </li>
     </PrContextMenu>
