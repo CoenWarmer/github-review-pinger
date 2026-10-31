@@ -234,25 +234,62 @@ describe("fetching pull requests", () => {
     const expected = await github(normal.handler).fetchOpenPullRequests("2026-09-01", true, []);
 
     const staged = fakeGithub(searches, prs);
-    const partials: { own: string[]; review: number; atCall: number }[] = [];
+    const partials: { fresh: string[]; known: boolean; atCall: number }[] = [];
     const fetched = await github(staged.handler).fetchOpenPullRequests(
       "2026-09-01",
       true,
       [],
-      (partial) =>
+      { first: [], own: [], reviewsTab: false },
+      (progress) =>
         partials.push({
-          own: partial.pullRequests.map((pr) => pr.id).sort(),
-          review: partial.reviewPullRequests.length,
+          fresh: progress.fresh.map((pr) => pr.id).sort(),
+          known: progress.matches !== null,
           atCall: staged.calls.length,
         }),
     );
 
-    // Your own PRs only, handed over once, before any merge state was asked for.
-    assert.deepEqual(partials.map((p) => [p.own, p.review]), [[["own1", "own2"], 0]]);
-    assert.ok(
-      !staged.calls.slice(0, partials[0].atCall).some((c) => c.query === "MERGE"),
+    // The open tab (your own PRs) first, then the other one, each handed over
+    // once the searches are in, and before its merge states were asked for.
+    assert.deepEqual(
+      partials.map((p) => [p.fresh, p.known]),
+      [
+        [["own1", "own2"], true],
+        [["done1", "req1"], true],
+      ],
     );
+    assert.ok(!staged.calls.slice(0, partials[0].atCall).some((c) => c.query === "MERGE"));
     assert.deepEqual(fetched, expected);
+  });
+
+  it("refetches the PRs on screen first, then the open tab without them, then the other tab", async () => {
+    const searches = {
+      "author:@me": [["own1", "own2"]],
+      "review-requested:@me": [["req1"]],
+      "reviewed-by:@me": [["done1"]],
+    };
+    const prs = {
+      own1: { id: "own1" },
+      own2: { id: "own2" },
+      req1: { id: "req1" },
+      done1: { id: "done1" },
+    };
+    const { handler } = fakeGithub(searches, prs);
+    const phases: [string[], boolean][] = [];
+    const fetched = await github(handler).fetchOpenPullRequests(
+      "2026-09-01",
+      true,
+      [],
+      { first: ["own1"], own: ["own1"], reviewsTab: true },
+      (progress) => phases.push([progress.fresh.map((pr) => pr.id).sort(), progress.matches !== null]),
+    );
+
+    assert.deepEqual(phases, [
+      [["own1"], false],
+      [["done1", "req1"], true],
+      [["own2"], true],
+    ]);
+    assert.deepEqual(fetched.pullRequests.map((pr) => pr.id).sort(), ["own1", "own2"]);
+    assert.deepEqual(fetched.reviewPullRequests.map((pr) => pr.id).sort(), ["done1", "req1"]);
   });
 
   it("fetches details in batches of ten", async () => {

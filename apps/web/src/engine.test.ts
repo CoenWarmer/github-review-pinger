@@ -9,6 +9,8 @@ import {
   type Fetched,
   type Found,
   type Github,
+  type Plan,
+  type Progress,
   type RawMergedPullRequest,
   type RawPullRequest,
 } from "./github.ts";
@@ -88,18 +90,27 @@ class FakeGithub implements Github {
     _reviewedSince: string,
     includeAuthored: boolean,
     views: [string, string][],
-    onPartial?: (partial: Fetched) => void,
+    _plan?: Plan,
+    onProgress?: (progress: Progress) => void,
   ) {
     this.polls++;
     this.includeAuthoredCalls.push(includeAuthored);
     this.viewCalls.push(views);
     if (this.failure) throw this.failure;
-    if (onPartial) {
+    if (onProgress) {
       this.partialCalls++;
-      onPartial({
-        ...structuredClone(this.fetched),
-        reviewPullRequests: [],
-        viewPullRequests: {},
+      // As the real fetch does: your own PRs arrive first, once the searches are in.
+      const own = structuredClone(this.fetched.pullRequests);
+      onProgress({
+        fresh: own,
+        matches: {
+          authored: own.map((pr) => pr.id),
+          requested: [],
+          reviewed: [],
+          views: {},
+        },
+        viewer: this.fetched.viewer,
+        ssoPartial: false,
       });
       await this.hold;
     }
@@ -231,9 +242,12 @@ describe("the web engine", () => {
     assert.equal(full.reviewRequests.length, 1);
     assert.equal(full.refreshing, false);
 
-    // Once there is something to show, a refresh just replaces it.
+    // Once there is something to show, a refresh reports its phases too, but
+    // the lists are already known, so nothing goes back to partial.
     await engine.refresh();
-    assert.equal(github.partialCalls, 1);
+    assert.equal(github.partialCalls, 2);
+    assert.equal(engine.getSnapshot().partial, false);
+    assert.equal(engine.getSnapshot().reviewRequests.length, 1);
   });
 
   it("uses the default Buildkite pipeline until one is chosen, then remembers it", async () => {

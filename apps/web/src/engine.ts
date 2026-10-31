@@ -24,9 +24,12 @@ import {
   type StatsData,
   type Github,
   type Needs,
+  type Plan,
+  type Progress,
   type RawMergedPullRequest,
   type RawPullRequest,
 } from "./github.ts";
+import { applyProgress, emptyFetched } from "./progress.ts";
 
 const TOKEN_KEY = "reviewPinger.token";
 const STATE_KEY = "reviewPinger.state";
@@ -152,6 +155,10 @@ export class Engine {
   private snapshot: Snapshot;
   private listeners = new Set<(snapshot: Snapshot) => void>();
   private visited = new Set<string>();
+  /** What the page is showing; the next poll fetches that first. */
+  private viewState = { reviewsTab: false, openIds: new Set<string>() };
+  /** The last complete fetch, which a poll's phases are patched into for display. */
+  private lastFetched: Fetched | null = null;
   /** Ids of the viewer's own PRs, which are the only ones that need a merge state. */
   private ownIds = new Set<string>();
   /** The Merged section's latest automatic fetch, and what "Load more" has
@@ -330,6 +337,11 @@ export class Engine {
     this.syncTimer = null;
   }
 
+  /** Remembers what the page is showing, for the next poll to fetch first. */
+  setViewState(state: { reviewsTab: boolean; openIds: string[] }) {
+    this.viewState = { reviewsTab: state.reviewsTab, openIds: new Set(state.openIds) };
+  }
+
   /** Asks the next poll to refresh a PR first, and remembers it for the next visit. */
   markVisited(id: string) {
     this.visited.add(id);
@@ -366,22 +378,28 @@ export class Engine {
         return view ? [[id, viewSearch(view)] as [string, string]] : [];
       });
       // Synced alongside, so the lists are derived with the snoozes of other devices.
-      // With nothing to show yet, My PRs is fetched and shown first.
-      const showPartial =
-        this.snapshot.fetchedAt === null
-          ? (partial: Fetched) => this.showPartial(partial, now)
-          : undefined;
+      // Each phase of the fetch (the PRs on screen, the rest of the open
+      // tab, the other tab) is shown as it lands, patched into the last fetch.
+      const firstLoad = this.snapshot.fetchedAt === null;
+      let shown = this.lastFetched ?? emptyFetched();
+      const showProgress = (progress: Progress) => {
+        shown = applyProgress(shown, progress);
+        this.showProgress(shown, now, firstLoad);
+      };
+      const plan = this.plan();
       const [fetched, mergedPage] = await Promise.all([
         github.fetchOpenPullRequests(
           this.pinger.reviewedSince(now),
           needs.open,
           views,
-          showPartial,
+          plan,
+          showProgress,
         ),
         needs.merged ? github.fetchMergedPage(null, MERGED_PAGE_SIZE) : Promise.resolve(null),
         this.sync(),
       ]);
       this.ownIds = new Set(fetched.pullRequests.map((pr) => pr.id));
+      this.lastFetched = fetched;
       const tz = this.deps.tzOffsetMinutes?.() ?? -new Date().getTimezoneOffset();
       const update: Update = JSON.parse(this.pinger.poll(JSON.stringify(fetched), now, tz));
       if (mergedPage) {
@@ -429,18 +447,42 @@ export class Engine {
   }
 
   /**
-   * Shows My PRs from a first load that isn't complete yet. Display only:
-   * notifications and what's remembered wait for the complete fetch.
+   * The PRs in open sections, which are refetched without waiting for the
+   * searches. Only ones the last fetch knows can be, so none on a first load.
    */
-  private showPartial(partial: Fetched, now: string) {
-    const update: Update = JSON.parse(this.pinger.preview(JSON.stringify(partial), now));
+  private plan(): Plan {
+    const last = this.lastFetched;
+    const known = new Set(
+      last
+        ? [
+            ...last.pullRequests,
+            ...last.reviewPullRequests,
+            ...Object.values(last.viewPullRequests).flat(),
+          ].map((pr) => pr.id)
+        : [],
+    );
+    const first = [...this.viewState.openIds].filter((id) => known.has(id));
+    return { first, own: first.filter((id) => this.ownIds.has(id)), reviewsTab: this.viewState.reviewsTab };
+  }
+
+  /**
+   * Shows what a refresh has fetched so far. Display only: notifications and
+   * what's remembered wait for the complete fetch. On a first load, what's
+   * still empty isn't known to be, so it's marked partial.
+   */
+  private showProgress(shown: Fetched, now: string, firstLoad: boolean) {
+    const update: Update = JSON.parse(this.pinger.preview(JSON.stringify(shown), now));
     this.publish({
-      partial: true,
-      status: { kind: "ok" },
-      viewer: partial.viewer,
-      fetchedAt: now,
-      ssoPartial: partial.ssoPartial,
+      ...(firstLoad && {
+        partial: true,
+        status: { kind: "ok" as const },
+        viewer: shown.viewer,
+        fetchedAt: now,
+        ssoPartial: shown.ssoPartial,
+      }),
       pullRequests: update.pullRequests,
+      reviewRequests: update.reviewRequests,
+      viewPullRequests: update.views,
     });
   }
 
@@ -758,6 +800,8 @@ export class Engine {
     this.deps.storage.remove(TOKEN_KEY);
     this.token = null;
     this.github = null;
+    this.lastFetched = null;
+    this.ownIds = new Set();
     if (this.timer) clearTimeout(this.timer);
     this.timer = null;
     if (this.syncTimer) clearTimeout(this.syncTimer);

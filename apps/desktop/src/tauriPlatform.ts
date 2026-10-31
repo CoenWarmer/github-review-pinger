@@ -29,6 +29,9 @@ export const tauriPlatform: Platform = {
   refresh: () => {
     invoke("refresh");
   },
+  setViewState: ({ reviewsTab, openIds }) => {
+    invoke("set_view_state", { reviewsTab, openIds });
+  },
 
   visit: (id, url) => {
     invoke("visit", { id });

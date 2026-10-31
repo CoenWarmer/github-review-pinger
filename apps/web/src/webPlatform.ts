@@ -36,6 +36,7 @@ export function createWebPlatform(engine: Engine): Platform {
     refresh: () => {
       void engine.refresh();
     },
+    setViewState: (state) => engine.setViewState(state),
 
     visit: (id, url) => {
       engine.markVisited(id);

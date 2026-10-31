@@ -41,7 +41,14 @@ import { StatsSettings } from "./components/StatsSettings";
 import { Setup, problemMessage } from "./components/Setup";
 import { elapsed } from "./format";
 import { clearSavedLists } from "./cache";
-import { useApplyTheme, useNow, useSnapshot } from "./hooks";
+import {
+  ReportOpenProvider,
+  useApplyTheme,
+  useNow,
+  useReportOpen,
+  useReportViewState,
+  useSnapshot,
+} from "./hooks";
 import { MergedRow } from "./components/MergedRow";
 import { PlatformProvider, usePlatform, type Platform } from "./platform";
 import { SECTION_TITLES } from "./sections";
@@ -159,6 +166,11 @@ function Section<
 }) {
   const [open, setOpen] = useState(defaultOpen);
   const [sort, setSort] = useSectionSort(id);
+  useReportOpen(
+    id,
+    open,
+    rows.map((row) => row.id),
+  );
   if (rows.length === 0) return null;
 
   const heading = (
@@ -287,6 +299,7 @@ function AppContent() {
   const [tab, setTab] = useState<Tab>("mine");
   const [query, setQuery] = useState("");
   const [repo, setRepo] = useState(ALL_REPOS);
+  const reportOpen = useReportViewState(tab);
   useApplyTheme(snapshot?.theme);
   // Once a fetch has landed (so sync has had its say), hand over the sorts
   // this browser remembered before they were synced.
@@ -394,6 +407,7 @@ function AppContent() {
         opensIn: snapshot.slackOpensIn,
       }}
     >
+      <ReportOpenProvider value={reportOpen}>
       <SectionSortsContext.Provider value={snapshot.sectionSorts ?? {}}>
         <main className="flex h-full flex-col">
           <Tabs
@@ -598,6 +612,7 @@ function AppContent() {
           <Footer snapshot={snapshot} now={now} />
         </main>
       </SectionSortsContext.Provider>
+      </ReportOpenProvider>
     </SlackContext.Provider>
   );
 }
