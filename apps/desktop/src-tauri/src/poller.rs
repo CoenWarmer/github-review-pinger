@@ -45,6 +45,8 @@ pub const TRAY_ID: &str = "tray";
 pub struct Snapshot {
     pub status: Status,
     pub refreshing: bool,
+    /// The PRs shown that the running refresh hasn't brought back yet, for the debug indicator.
+    pub refreshing_ids: Vec<String>,
     pub viewer: Option<String>,
     pub token_source: Option<TokenSource>,
     /// The source the user picked; `None` until they do.
@@ -99,6 +101,15 @@ struct MergedState {
     has_more: bool,
 }
 
+/// What the popover is showing, so a refresh can fetch that first.
+#[derive(Debug, Default, Clone)]
+pub struct ViewState {
+    /// The Review requests tab is the one open, rather than My PRs.
+    pub reviews_tab: bool,
+    /// The PRs in sections that are expanded.
+    pub open_ids: HashSet<String>,
+}
+
 /// Sharing snoozes and Slack channels with other devices.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -151,6 +162,8 @@ pub struct Poller {
     /// Pull requests the user opened on GitHub since the popover last
     /// showed; refreshed first when it next opens. Not persisted.
     visited: Mutex<HashSet<String>>,
+    /// What the popover is showing; the next refresh fetches that first.
+    view_state: Mutex<ViewState>,
     first_poll: AtomicBool,
     wake: Notify,
     /// Asks the sync task to run, soon.
@@ -516,6 +529,14 @@ impl Poller {
         self.visited.lock().unwrap().insert(id.to_string());
     }
 
+    /// Remembers what the popover is showing, for the next refresh to fetch first.
+    pub fn set_view_state(&self, reviews_tab: bool, open_ids: Vec<String>) {
+        *self.view_state.lock().unwrap() = ViewState {
+            reviews_tab,
+            open_ids: open_ids.into_iter().collect(),
+        };
+    }
+
     /// Updates the snapshot from the last fetch, after snoozes or a single
     /// PR changed.
     fn rederive(&self, app: &AppHandle) {
@@ -755,6 +776,7 @@ pub fn start(app: &AppHandle) -> Arc<Poller> {
         snapshot: Mutex::new(Snapshot {
             status: Status::Loading,
             refreshing: false,
+            refreshing_ids: Vec::new(),
             viewer: None,
             token_source: None,
             auth_choice: None,
@@ -791,6 +813,7 @@ pub fn start(app: &AppHandle) -> Arc<Poller> {
         directory: Mutex::new(directory),
         directory_path,
         visited: Mutex::new(HashSet::new()),
+        view_state: Mutex::new(ViewState::default()),
         first_poll: AtomicBool::new(true),
         wake: Notify::new(),
         sync_wake: Notify::new(),
@@ -897,8 +920,25 @@ async fn poll_once(app: &AppHandle, poller: &Poller) -> Result<(), Problem> {
         .await
         .unwrap_or(false);
     let auth_choice = poller.auth_source();
+    // Every PR on screen is refreshed by this poll; each is crossed off as its phase lands.
+    let pending: Vec<String> = poller
+        .latest
+        .lock()
+        .unwrap()
+        .as_ref()
+        .map(|fetched| {
+            fetched
+                .pull_requests
+                .iter()
+                .chain(&fetched.review_pull_requests)
+                .chain(fetched.view_pull_requests.values().flatten())
+                .map(|pr| pr.id.clone())
+                .collect()
+        })
+        .unwrap_or_default();
     poller.update(app, |s| {
         s.refreshing = true;
+        s.refreshing_ids = pending;
         s.has_saved_token = has_saved_token;
         s.auth_choice = auth_choice;
     });
@@ -914,6 +954,7 @@ async fn poll_once(app: &AppHandle, poller: &Poller) -> Result<(), Problem> {
             log::warn!("Refresh failed: {problem:?}");
             poller.update(app, |s| {
                 s.refreshing = false;
+                s.refreshing_ids.clear();
                 s.status = Status::Error {
                     problem: problem.clone(),
                 };
@@ -964,6 +1005,7 @@ async fn poll_once(app: &AppHandle, poller: &Poller) -> Result<(), Problem> {
 
     poller.update(app, |s| {
         s.refreshing = false;
+        s.refreshing_ids.clear();
         s.partial = false;
         s.status = Status::Ok;
         s.viewer = Some(fetched.viewer.clone());
@@ -1083,36 +1125,62 @@ async fn refresh_directory(app: &AppHandle, poller: &Poller) {
 }
 
 /// Fetches the PRs while the snoozes and channels sync, so the lists are
-/// derived with both. On the first load, My PRs is shown as soon as it's in,
-/// ahead of the rest. That's display only: notifications and what's
-/// remembered wait for the complete fetch.
+/// derived with both. The popover is updated as each phase arrives (the PRs
+/// on screen, the rest of the open tab, the other tab), but notifications and
+/// what's remembered wait for the complete fetch.
 async fn fetch_and_sync(
     app: &AppHandle,
     poller: &Poller,
     reviewed_since: NaiveDate,
     first_load: bool,
 ) -> Result<Fetched, Problem> {
+    let resolving = std::time::Instant::now();
     let token = resolve_token(poller).await?;
-    let show_partial = |partial: Fetched| {
+    log::info!(
+        "refresh timing: token resolved in {}ms",
+        resolving.elapsed().as_millis()
+    );
+    // The last fetch with each phase patched in, for display only.
+    let working: Mutex<Option<Fetched>> = Mutex::new(poller.latest.lock().unwrap().clone());
+    let show = |progress: github::Progress<'_>| {
         let now = Utc::now();
-        let (views, _) = poller.derive(app, &partial, now);
+        let mut working = working.lock().unwrap();
+        let shown = working.get_or_insert_with(|| Fetched {
+            viewer: String::new(),
+            token_source: token.source,
+            sso_partial: false,
+            pull_requests: Vec::new(),
+            review_pull_requests: Vec::new(),
+            view_pull_requests: HashMap::new(),
+        });
+        if !progress.viewer.is_empty() {
+            shown.viewer = progress.viewer.to_string();
+            shown.sso_partial = progress.sso_partial;
+        }
+        let arrived: HashSet<String> = progress.fresh.iter().map(|pr| pr.id.clone()).collect();
+        engine::apply_progress(shown, progress.fresh, progress.found);
+        let (views, review_views) = poller.derive(app, shown, now);
+        let view_pull_requests = poller.derive_views(app, shown, now);
+        let (viewer, sso_partial) = (shown.viewer.clone(), shown.sso_partial);
+        drop(working);
         poller.update(app, |s| {
-            s.partial = true;
-            s.status = Status::Ok;
-            s.viewer = Some(partial.viewer);
-            s.token_source = Some(partial.token_source);
-            s.fetched_at = Some(now);
-            s.sso_partial = partial.sso_partial;
+            s.refreshing_ids.retain(|id| !arrived.contains(id));
+            if first_load {
+                // Nothing was shown yet, so what's still empty isn't known to be.
+                s.partial = true;
+                s.status = Status::Ok;
+                s.viewer = Some(viewer);
+                s.token_source = Some(token.source);
+                s.fetched_at = Some(now);
+                s.sso_partial = sso_partial;
+            }
             s.pull_requests = views;
+            s.review_requests = review_views;
+            s.view_pull_requests = view_pull_requests;
         });
     };
     let (fetched, ()) = tokio::join!(
-        fetch(
-            poller,
-            &token,
-            reviewed_since,
-            first_load.then_some(&show_partial as &(dyn Fn(Fetched) + Send + Sync)),
-        ),
+        fetch(poller, &token, reviewed_since, &show),
         poller.sync(app, &token.value)
     );
     fetched
@@ -1160,7 +1228,7 @@ async fn fetch(
     poller: &Poller,
     token: &auth::Token,
     reviewed_since: NaiveDate,
-    on_partial: Option<&(dyn Fn(Fetched) + Send + Sync)>,
+    on_progress: &(dyn Fn(github::Progress<'_>) + Send + Sync),
 ) -> Result<Fetched, Problem> {
     let (include_authored, view_queries) = {
         let memory = poller.memory.lock().unwrap();
@@ -1173,27 +1241,57 @@ async fn fetch(
             .collect();
         (needs.open, queries)
     };
-    let adapter = on_partial.map(|show| {
-        move |partial: &github::Fetched| {
-            show(Fetched {
-                viewer: partial.viewer.clone(),
-                token_source: token.source,
-                sso_partial: partial.sso_partial,
-                pull_requests: partial.pull_requests.clone(),
-                review_pull_requests: Vec::new(),
-                view_pull_requests: HashMap::new(),
-            })
+    // The PRs in open sections are refetched without waiting for the
+    // searches. Only ones the last fetch knows can be, and none on a first load.
+    let plan = {
+        let state = poller.view_state.lock().unwrap().clone();
+        let latest = poller.latest.lock().unwrap();
+        let (own, known): (HashSet<String>, HashSet<String>) = match latest.as_ref() {
+            Some(fetched) => (
+                fetched
+                    .pull_requests
+                    .iter()
+                    .map(|pr| pr.id.clone())
+                    .collect(),
+                fetched
+                    .pull_requests
+                    .iter()
+                    .chain(&fetched.review_pull_requests)
+                    .chain(fetched.view_pull_requests.values().flatten())
+                    .map(|pr| pr.id.clone())
+                    .collect(),
+            ),
+            None => Default::default(),
+        };
+        let first: Vec<String> = state
+            .open_ids
+            .into_iter()
+            .filter(|id| known.contains(id))
+            .collect();
+        github::Plan {
+            own: first
+                .iter()
+                .filter(|id| own.contains(*id))
+                .cloned()
+                .collect(),
+            first,
+            reviews_tab: state.reviews_tab,
         }
-    });
+    };
+    log::info!(
+        "refresh timing: starting; phase 1 has {} PRs ({} own), reviews tab: {}",
+        plan.first.len(),
+        plan.own.len(),
+        plan.reviews_tab
+    );
     let fetched = github::fetch_open_pull_requests(
         &poller.http,
         &token.value,
         reviewed_since,
         include_authored,
         &view_queries,
-        adapter
-            .as_ref()
-            .map(|adapter| adapter as &(dyn Fn(&github::Fetched) + Send + Sync)),
+        &plan,
+        Some(on_progress),
     )
     .await
     .map_err(|e| match e {

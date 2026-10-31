@@ -203,19 +203,52 @@ export interface Needs {
   teams: [string, string][];
 }
 
+/** Which pull requests to fetch first, so the screen updates in phases. */
+export interface Plan {
+  /** Refetched at once, while the searches run: the PRs in sections that are open. */
+  first: string[];
+  /** Which of `first` are the viewer's own, since only those get required checks and merge states. */
+  own: string[];
+  /** The Review requests tab is the one being looked at, so its PRs come before the rest. */
+  reviewsTab: boolean;
+}
+
+/** Which searches found each PR, so one fetched partway through can be filed. */
+export interface Matches {
+  authored: string[];
+  requested: string[];
+  reviewed: string[];
+  /** Each enabled view's matches, by view id. */
+  views: Record<string, string[]>;
+}
+
+/** PRs that just arrived, handed over for display while the rest is fetched. */
+export interface Progress {
+  fresh: RawPullRequest[];
+  /** Known once the searches have returned. */
+  matches: Matches | null;
+  /** Empty until the searches have returned. */
+  viewer: string;
+  ssoPartial: boolean;
+}
+
+export const NO_PLAN: Plan = { first: [], own: [], reviewsTab: false };
+
 export interface Github {
   /**
    * `includeAuthored` is false to skip the search for your own open PRs
    * entirely. `views` is `[id, query]` pairs for enabled custom views, each
-   * already including `is:pr`. With `onPartial`, your own PRs are fetched
-   * first and passed to it as soon as they're in (without merge states, and
-   * with nothing else yet), then the rest is fetched.
+   * already including `is:pr`. The PRs on screen (`plan.first`) are refetched
+   * while the searches run, then the tab being looked at, then the other
+   * one. `onProgress` gets each phase's PRs as soon as they're in, again
+   * once required checks are in (if any needed them), and before merge states.
    */
   fetchOpenPullRequests(
     reviewedSince: string,
     includeAuthored: boolean,
     views: [string, string][],
-    onPartial?: (partial: Fetched) => void,
+    plan?: Plan,
+    onProgress?: (progress: Progress) => void,
   ): Promise<Fetched>;
   fetchDetails(ids: string[]): Promise<RawPullRequest[]>;
   /** `cursor` continues from a previous page's `endCursor`; `null` starts from the top. */
@@ -459,14 +492,66 @@ export function createGithub({
   }
 
   const github: Github = {
-    async fetchOpenPullRequests(reviewedSince, includeAuthored, views, onPartial) {
+    async fetchOpenPullRequests(
+      reviewedSince,
+      includeAuthored,
+      views,
+      plan = NO_PLAN,
+      onProgress,
+    ) {
+      const started = performance.now();
+      const lap = (what: string) =>
+        console.info(`refresh timing +${Math.round(performance.now() - started)}ms: ${what}`);
+      console.info(`refresh timing: starting; phase 1 has ${plan.first.length} PRs (${plan.own.length} own), reviews tab: ${plan.reviewsTab}`);
       const reviewed = `is:pr is:open reviewed-by:@me -author:@me archived:false updated:>=${reviewedSince}`;
       const emptySearch = { viewer: "", ids: [] as string[], ssoPartial: false };
-      const [authored, requested, reviewedByMe, viewResults] = await Promise.all([
+      const searches = Promise.all([
         includeAuthored ? searchIds(AUTHORED) : Promise.resolve(emptySearch),
         searchIds(REVIEW_REQUESTED),
         searchIds(reviewed),
         Promise.all(views.map(([, query]) => searchIds(query))),
+      ]).then((found) => {
+        lap("searches returned");
+        return found;
+      });
+      // Added to what the details query returns for your own PRs: required
+      // checks, then (after `show`) merge states, which double a PR's cost.
+      const fetchPart = async (
+        prs: RawPullRequest[],
+        own: Set<string>,
+        show: (fresh: RawPullRequest[]) => void,
+        name: string,
+      ) => {
+        const mine = prs.filter((pr) => own.has(pr.id));
+        if (prs.length > 0) {
+          show(prs);
+          lap(`${name} shown`);
+        }
+        if (mine.some(needsRequiredChecks)) {
+          await github.addRequiredChecks(mine);
+          lap(`${name} required checks done (${mine.length} own)`);
+          // Until now each PR kept the required checks it had, so the verdict
+          // doesn't flash; this brings in what changed.
+          show(mine);
+        }
+        await github.addMergeStates(mine);
+        lap(`${name} merge states done`);
+        return prs;
+      };
+      const firstPhase = async () => {
+        if (plan.first.length === 0) return [];
+        const fresh = await github.fetchDetails(plan.first);
+        lap(`phase 1 details in (${fresh.length} PRs)`);
+        return fetchPart(
+          fresh,
+          new Set(plan.own),
+          (shown) => onProgress?.({ fresh: shown, matches: null, viewer: "", ssoPartial: false }),
+          "phase 1",
+        );
+      };
+      const [first, [authored, requested, reviewedByMe, viewResults]] = await Promise.all([
+        firstPhase(),
+        searches,
       ]);
       const authoredIds = new Set(authored.ids);
       const requestedIds = new Set(requested.ids);
@@ -491,51 +576,53 @@ export function createGithub({
         reviewedByMe.ssoPartial ||
         viewResults.some((r) => r.ssoPartial);
 
-      let byId: Map<string, RawPullRequest>;
-      // Only your own PRs get the expensive merge state; done before
-      // anything clones from `byId`, so a PR that's also in a view carries it.
-      let pullRequests: RawPullRequest[];
-      if (onPartial && authored.ids.length > 0) {
-        // Your own PRs and the rest share the request slots, with your own
-        // asked for first: they finish first, and the rest starts in the
-        // slots they leave idle instead of waiting for all of them.
-        const limit = limiter(MAX_CONCURRENT);
-        const detailsOf = async (ids: string[]) => {
-          const replies = await Promise.all(
-            chunks(ids, BATCH_SIZE).map((batch) =>
-              limit(() => request<{ nodes: (RawPullRequest | null)[] }>(queries.details, { ids: batch })),
-            ),
-          );
-          return replies
-            .flatMap((reply) => reply.data.nodes)
-            .filter((node): node is RawPullRequest => node !== null);
-        };
-        const mine = async () => {
-          const own = await detailsOf(authored.ids);
-          // Before the first paint, so a red badge doesn't flash and turn green.
-          await github.addRequiredChecks(own);
-          onPartial({
-            viewer,
-            pullRequests: [...own],
-            reviewPullRequests: [],
-            viewPullRequests: {},
-            ssoPartial,
-          });
-          await github.addMergeStates(own);
-          return own;
-        };
-        const restIds = ids.filter((id) => !authoredIds.has(id));
-        const [own, rest] = await Promise.all([mine(), detailsOf(restIds)]);
-        pullRequests = own;
-        byId = new Map(rest.map((pr) => [pr.id, pr]));
-      } else {
-        const all = await github.fetchDetails(ids);
-        byId = new Map(all.map((pr) => [pr.id, pr]));
-        pullRequests = authored.ids.flatMap((id) => byId.get(id) ?? []);
-        await github.addRequiredChecks(pullRequests);
-        await github.addMergeStates(pullRequests);
-      }
-      for (const pr of pullRequests) byId.set(pr.id, pr);
+      const matches: Matches = {
+        authored: authored.ids,
+        requested: requested.ids,
+        reviewed: reviewedByMe.ids,
+        views: Object.fromEntries(viewIds.map(([id, ids]) => [id, ids])),
+      };
+      const inViews = new Set(viewIds.flatMap(([, ids]) => ids));
+      const inTab = (id: string) =>
+        plan.reviewsTab
+          ? requestedIds.has(id) || reviewedIds.has(id)
+          : authoredIds.has(id) || inViews.has(id);
+      const fetchedFirst = new Set(first.map((pr) => pr.id));
+      const wanted = ids.filter((id) => !fetchedFirst.has(id));
+
+      // The tab being looked at and the other one share the request slots,
+      // with the tab asked for first: it finishes first, and the other
+      // starts in the slots it leaves idle instead of waiting for all of it.
+      const limit = limiter(MAX_CONCURRENT);
+      const detailsOf = async (ids: string[]) => {
+        const replies = await Promise.all(
+          chunks(ids, BATCH_SIZE).map((batch) =>
+            limit(() => request<{ nodes: (RawPullRequest | null)[] }>(queries.details, { ids: batch })),
+          ),
+        );
+        return replies
+          .flatMap((reply) => reply.data.nodes)
+          .filter((node): node is RawPullRequest => node !== null);
+      };
+      const phase = async (name: string, ids: string[]) => {
+        const fresh = await detailsOf(ids);
+        lap(`${name} details in (${fresh.length} PRs)`);
+        return fetchPart(
+          fresh,
+          authoredIds,
+          (shown) => onProgress?.({ fresh: shown, matches, viewer, ssoPartial }),
+          name,
+        );
+      };
+      const [tab, other] = await Promise.all([
+        phase("phase 2", wanted.filter(inTab)),
+        phase("phase 3", wanted.filter((id) => !inTab(id))),
+      ]);
+      lap("all phases done");
+      // Only your own PRs got the expensive merge state; it's on the objects
+      // before anything clones from `byId`, so a PR that's also in a view carries it.
+      const byId = new Map([...first, ...tab, ...other].map((pr) => [pr.id, pr]));
+      const pullRequests = authored.ids.flatMap((id) => byId.get(id) ?? []);
 
       const reviewPullRequests = [...byId.values()].filter(
         (pr) => !authoredIds.has(pr.id) && (requestedIds.has(pr.id) || reviewedIds.has(pr.id)),

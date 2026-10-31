@@ -7,7 +7,7 @@ import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Switch } from "@/components/ui/switch";
 import { TeamChannelForm } from "../slack";
 import { ago } from "../format";
-import { useNow } from "../hooks";
+import { useDebugMode, useNow } from "../hooks";
 import type {
   SectionPref,
   SyncStatus,
@@ -66,6 +66,7 @@ export function SettingsPanel({
     notifications,
     sound,
   } = platform.features;
+  const [debugMode, setDebugMode] = useDebugMode();
   const [autostart, setAutostart] = useState<boolean | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [authError, setAuthError] = useState<string | null>(null);
@@ -260,6 +261,15 @@ export function SettingsPanel({
       <Section>
         <Heading>Sync</Heading>
         <SyncSetting sync={sync} />
+      </Section>
+      <Section>
+        <Heading>Developer</Heading>
+        <div className="flex items-center gap-2">
+          <Switch id="debug-mode" checked={debugMode} onCheckedChange={setDebugMode} />
+          <Label htmlFor="debug-mode" className="font-normal">
+            Debug mode: show which PRs a refresh is still updating
+          </Label>
+        </div>
       </Section>
       <SlackChannels channels={channels} />
       <Credits platform={platform} />

@@ -6,7 +6,7 @@ use review_pinger_core::github::{
 };
 
 use std::collections::{HashMap, HashSet};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use chrono::{DateTime, NaiveDate, Utc};
 use futures_util::{StreamExt, TryStreamExt, future, stream};
@@ -17,6 +17,7 @@ use serde_json::{Value, json};
 use tokio::sync::Semaphore;
 
 use crate::directory::{Directory, Found, Needs};
+use crate::engine::Matches;
 use types::{
     CheckState, FoundPullRequest, MergeStateStatus, Mergeable, MergedPullRequest, PullRequest,
     RequiredCheck, ReviewDecision, ReviewState, SearchedPullRequest,
@@ -63,26 +64,58 @@ pub fn http_client() -> reqwest::Client {
         .expect("HTTP client configuration is valid")
 }
 
-/// Fetches in three steps, because a single search query with all fields
-/// takes long enough to hit GitHub's timeout: list the open PR ids, fetch
-/// their details in concurrent batches, then fetch the expensive merge state
-/// only for the viewer's own PRs that could be ready to merge.
+/// Which pull requests to fetch first, so the screen updates in phases.
+#[derive(Default)]
+pub struct Plan {
+    /// Refetched at once, while the searches run: the PRs in sections that
+    /// are open, taken from the last fetch.
+    pub first: Vec<String>,
+    /// Which of `first` are the viewer's own, since only those get required
+    /// checks and merge states.
+    pub own: HashSet<String>,
+    /// The Review requests tab is the one being looked at, so its PRs come
+    /// before the rest.
+    pub reviews_tab: bool,
+}
+
+/// PRs that just arrived, handed over for display while the rest is fetched.
+pub struct Progress<'a> {
+    pub fresh: Vec<PullRequest>,
+    /// Known once the searches have returned.
+    pub found: Option<&'a Matches>,
+    /// Empty until the searches have returned.
+    pub viewer: &'a str,
+    pub sso_partial: bool,
+}
+
+/// Fetches in phases, because a single search query with all fields takes
+/// long enough to hit GitHub's timeout. The searches list the open PR ids
+/// (and run while the PRs on screen are refetched, so those show up first),
+/// then details are fetched in concurrent batches: the PRs of the tab being
+/// looked at, then the other tab's. The expensive merge state is only fetched
+/// for the viewer's own PRs that could be ready to merge.
 ///
 /// `reviewed_since` bounds the PRs the viewer reviewed earlier by last update;
 /// requested reviews are never bounded, since they're still waiting.
 ///
-/// With `on_partial`, the viewer's own PRs are fetched first and passed to it
-/// as soon as they're in (without merge states, and with nothing else yet),
-/// then everything else is fetched while the merge states are. That lets the
-/// first screen show My PRs in roughly a third of the time.
+/// `on_progress` is called with each phase's PRs as soon as they're in, before
+/// their merge states, so the screen updates without waiting for the rest.
 pub async fn fetch_open_pull_requests(
     http: &reqwest::Client,
     token: &str,
     reviewed_since: NaiveDate,
     include_authored: bool,
     views: &[(String, String)],
-    on_partial: Option<&(dyn Fn(&Fetched) + Send + Sync)>,
+    plan: &Plan,
+    on_progress: Option<&(dyn Fn(Progress<'_>) + Send + Sync)>,
 ) -> Result<Fetched, FetchError> {
+    let started = Instant::now();
+    let lap = |what: String| {
+        log::info!(
+            "refresh timing +{}ms: {what}",
+            started.elapsed().as_millis()
+        )
+    };
     let reviewed = format!(
         "is:pr is:open reviewed-by:@me -author:@me archived:false updated:>={reviewed_since}"
     );
@@ -98,13 +131,37 @@ pub async fn fetch_open_pull_requests(
             .iter()
             .map(|(_, query)| search_ids(http, token, query)),
     );
-    let (authored, requested, reviewed, view_results) = future::try_join4(
-        authored_search,
-        search_ids(http, token, REVIEW_REQUESTED),
-        search_ids(http, token, &reviewed),
-        view_searches,
-    )
-    .await?;
+    let searches = async {
+        let found = future::try_join4(
+            authored_search,
+            search_ids(http, token, REVIEW_REQUESTED),
+            search_ids(http, token, &reviewed),
+            view_searches,
+        )
+        .await;
+        lap("searches returned".into());
+        found
+    };
+    let first = async {
+        if plan.first.is_empty() {
+            return Ok(Vec::new());
+        }
+        let fresh = fetch_details(http, token, &plan.first).await?;
+        lap(format!("phase 1 details in ({} PRs)", fresh.len()));
+        fetch_part(http, token, fresh, &plan.own, started, "phase 1", |fresh| {
+            if let Some(show) = on_progress {
+                show(Progress {
+                    fresh,
+                    found: None,
+                    viewer: "",
+                    sso_partial: false,
+                });
+            }
+        })
+        .await
+    };
+    let (first, (authored, requested, reviewed, view_results)) =
+        future::try_join(first, searches).await?;
     let sso_partial = authored.sso_partial
         || requested.sso_partial
         || reviewed.sso_partial
@@ -139,54 +196,65 @@ pub async fn fetch_open_pull_requests(
         authored.viewer.clone()
     };
 
-    let mut by_id: HashMap<String, PullRequest>;
-    // Only your own PRs get the expensive merge state; write it back before
-    // anything clones from `by_id`, so a PR that's also in a view carries it.
-    let mut pull_requests: Vec<PullRequest>;
-    match on_partial.filter(|_| !authored.ids.is_empty()) {
-        Some(on_partial) => {
-            // Your own PRs and the rest share the request slots, with your
-            // own asked for first: they finish first, and the rest starts in
-            // the slots they leave idle instead of waiting for all of them.
-            let limiter = Semaphore::new(MAX_CONCURRENT);
-            let rest_ids: Vec<String> = ids
-                .iter()
-                .filter(|id| !authored_ids.contains(*id))
-                .cloned()
-                .collect();
-            let mine = async {
-                let mut own = details_sharing(http, token, &authored.ids, &limiter).await?;
-                // Before the first paint, so a red badge doesn't flash and turn green.
-                add_required_checks(http, token, &mut own).await;
-                on_partial(&Fetched {
-                    viewer: viewer.clone(),
-                    pull_requests: own.clone(),
-                    review_pull_requests: Vec::new(),
-                    view_pull_requests: HashMap::new(),
-                    sso_partial,
-                });
-                add_merge_states(http, token, &mut own).await?;
-                Ok::<_, FetchError>(own)
-            };
-            let (own, rest) =
-                future::try_join(mine, details_sharing(http, token, &rest_ids, &limiter)).await?;
-            pull_requests = own;
-            by_id = rest.into_iter().map(|pr| (pr.id.clone(), pr)).collect();
+    let found = Matches {
+        authored: authored_ids.clone(),
+        requested: requested_ids.clone(),
+        reviewed: reviewed_ids.clone(),
+        views: view_ids
+            .iter()
+            .map(|(id, ids)| (id.clone(), ids.iter().cloned().collect()))
+            .collect(),
+    };
+    let in_tab = |id: &String| {
+        if plan.reviews_tab {
+            requested_ids.contains(id) || reviewed_ids.contains(id)
+        } else {
+            authored_ids.contains(id) || found.views.values().any(|ids| ids.contains(id))
         }
-        None => {
-            let all = fetch_details(http, token, &ids).await?;
-            by_id = all.into_iter().map(|pr| (pr.id.clone(), pr)).collect();
-            pull_requests = authored_ids
-                .iter()
-                .filter_map(|id| by_id.get(id).cloned())
-                .collect();
-            add_required_checks(http, token, &mut pull_requests).await;
-            add_merge_states(http, token, &mut pull_requests).await?;
+    };
+    let fetched_first: HashSet<&String> = first.iter().map(|pr| &pr.id).collect();
+    let (tab_ids, other_ids): (Vec<String>, Vec<String>) = ids
+        .iter()
+        .filter(|id| !fetched_first.contains(id))
+        .cloned()
+        .partition(|id| in_tab(id));
+
+    // The tab being looked at and the other one share the request slots, with
+    // the tab asked for first: it finishes first, and the other starts in the
+    // slots it leaves idle instead of waiting for all of it.
+    let limiter = Semaphore::new(MAX_CONCURRENT);
+    let (own, viewer_ref) = (&authored_ids, &viewer);
+    let phase = |name: &'static str, ids: Vec<String>| {
+        let (limiter, found) = (&limiter, &found);
+        async move {
+            let fresh = details_sharing(http, token, &ids, limiter).await?;
+            lap(format!("{name} details in ({} PRs)", fresh.len()));
+            fetch_part(http, token, fresh, own, started, name, |fresh| {
+                if let Some(show) = on_progress {
+                    show(Progress {
+                        fresh,
+                        found: Some(found),
+                        viewer: viewer_ref,
+                        sso_partial,
+                    });
+                }
+            })
+            .await
         }
-    }
-    for pr in pull_requests.iter().cloned() {
-        by_id.insert(pr.id.clone(), pr);
-    }
+    };
+    let (tab, other) =
+        future::try_join(phase("phase 2", tab_ids), phase("phase 3", other_ids)).await?;
+    lap("all phases done".into());
+    let by_id: HashMap<String, PullRequest> = first
+        .into_iter()
+        .chain(tab)
+        .chain(other)
+        .map(|pr| (pr.id.clone(), pr))
+        .collect();
+    let pull_requests: Vec<PullRequest> = authored_ids
+        .iter()
+        .filter_map(|id| by_id.get(id).cloned())
+        .collect();
 
     let mut review_pull_requests: Vec<PullRequest> = by_id
         .values()
@@ -220,6 +288,45 @@ pub async fn fetch_open_pull_requests(
         view_pull_requests,
         sso_partial,
     })
+}
+
+/// Adds what only your own PRs need to `pull_requests`: required checks, then
+/// merge states. `show` gets the PRs as soon as they're in, and again once
+/// the required checks are (when any PR needed them), so a phase appears
+/// without waiting for either. Merge states double a PR's cost, so they come last.
+async fn fetch_part(
+    http: &reqwest::Client,
+    token: &str,
+    pull_requests: Vec<PullRequest>,
+    own: &HashSet<String>,
+    started: Instant,
+    phase: &str,
+    show: impl Fn(Vec<PullRequest>),
+) -> Result<Vec<PullRequest>, FetchError> {
+    let lap = |what: &str| {
+        log::info!(
+            "refresh timing +{}ms: {phase} {what}",
+            started.elapsed().as_millis()
+        )
+    };
+    let (mut mine, others): (Vec<_>, Vec<_>) = pull_requests
+        .into_iter()
+        .partition(|pr| own.contains(&pr.id));
+    if !mine.is_empty() || !others.is_empty() {
+        show(mine.iter().chain(&others).cloned().collect());
+        lap("shown");
+    }
+    if mine.iter().any(needs_required_checks) {
+        add_required_checks(http, token, &mut mine).await;
+        lap(&format!("required checks done ({} own)", mine.len()));
+        // Until now each PR kept the required checks it had, so the verdict
+        // doesn't flash; this brings in what changed.
+        show(mine.clone());
+    }
+    add_merge_states(http, token, &mut mine).await?;
+    lap("merge states done");
+    mine.extend(others);
+    Ok(mine)
 }
 
 /// One page of your merged PRs, newest first. `cursor` continues from a
@@ -1616,6 +1723,7 @@ mod tests {
             since,
             true,
             &[],
+            &Plan::default(),
             None,
         ))
         .expect("fetch succeeds");
@@ -1654,6 +1762,7 @@ mod tests {
             since,
             true,
             &[],
+            &Plan::default(),
             None,
         ))
         .expect("fetch succeeds");
@@ -1716,6 +1825,7 @@ mod tests {
             since,
             true,
             &[],
+            &Plan::default(),
             None,
         ))
         .expect("fetch succeeds");
@@ -1793,6 +1903,7 @@ mod tests {
             since,
             true,
             &views,
+            &Plan::default(),
             None,
         ))
         .expect("fetch succeeds");

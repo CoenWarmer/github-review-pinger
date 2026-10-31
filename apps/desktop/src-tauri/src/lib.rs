@@ -246,6 +246,12 @@ fn refresh(poller: State<Arc<Poller>>) {
     poller.refresh();
 }
 
+/// Tells the poller what the popover is showing, so a refresh fetches that first.
+#[tauri::command]
+fn set_view_state(poller: State<Arc<Poller>>, reviews_tab: bool, open_ids: Vec<String>) {
+    poller.set_view_state(reviews_tab, open_ids);
+}
+
 #[tauri::command]
 async fn save_token(
     app: AppHandle,
@@ -340,6 +346,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             get_snapshot,
             refresh,
+            set_view_state,
             visit,
             card_current,
             card_resize,

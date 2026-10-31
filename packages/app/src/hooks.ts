@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import {
   listsOf,
   loadSavedLists,
@@ -92,4 +92,102 @@ export function useApplyTheme(theme: Theme | undefined) {
       // Only a start-up nicety, so losing it is fine.
     }
   }, [theme]);
+}
+
+/** What a section tells the view state: the PRs it shows while expanded, none otherwise. */
+const ReportOpenContext = createContext<(section: string, ids: string[]) => void>(() => {});
+export const ReportOpenProvider = ReportOpenContext.Provider;
+
+/**
+ * Tells the host which list tab is showing and which PRs are in expanded
+ * sections. Sections report in through `ReportOpenProvider`, and the host is
+ * told once per batch of changes. The stats and settings tabs keep the last
+ * list tab, since that's what a refresh will land on.
+ */
+export function useReportViewState(tab: string): (section: string, ids: string[]) => void {
+  const platform = usePlatform();
+  const sections = useRef(new Map<string, string[]>());
+  const listTab = useRef(false);
+  if (tab === "mine" || tab === "reviews") listTab.current = tab === "reviews";
+  const scheduled = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const send = useCallback(() => {
+    if (scheduled.current) return;
+    scheduled.current = setTimeout(() => {
+      scheduled.current = null;
+      platform.setViewState({
+        reviewsTab: listTab.current,
+        openIds: [...sections.current.values()].flat(),
+      });
+    }, 0);
+  }, [platform]);
+
+  useEffect(send, [send, tab]);
+  useEffect(
+    () => () => {
+      // Reset too, or a remount (StrictMode does one) would think a send is still pending.
+      if (scheduled.current) clearTimeout(scheduled.current);
+      scheduled.current = null;
+    },
+    [],
+  );
+  return useCallback(
+    (section, ids) => {
+      if (ids.length === 0) sections.current.delete(section);
+      else sections.current.set(section, ids);
+      send();
+    },
+    [send],
+  );
+}
+
+/** Reports a section's PRs while it's expanded. */
+export function useReportOpen(section: string, open: boolean, ids: string[]) {
+  const report = useContext(ReportOpenContext);
+  const key = ids.join(",");
+  useEffect(() => {
+    report(section, open ? key.split(",").filter(Boolean) : []);
+    return () => report(section, []);
+  }, [report, section, open, key]);
+}
+
+const DEBUG_KEY = "reviewPinger.debugMode";
+const debugListeners = new Set<() => void>();
+
+function readDebugMode(): boolean {
+  try {
+    return localStorage.getItem(DEBUG_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+/** Debug mode, a setting of this device: shows what a refresh is doing. */
+export function useDebugMode(): [boolean, (on: boolean) => void] {
+  const on = useSyncExternalStore(
+    (listener) => {
+      debugListeners.add(listener);
+      return () => debugListeners.delete(listener);
+    },
+    readDebugMode,
+  );
+  const set = useCallback((next: boolean) => {
+    try {
+      localStorage.setItem(DEBUG_KEY, next ? "1" : "0");
+    } catch {
+      // Without storage the toggle just won't stick.
+    }
+    debugListeners.forEach((listener) => listener());
+  }, []);
+  return [on, set];
+}
+
+/** The PRs the running refresh hasn't brought back yet. */
+export const RefreshingContext = createContext<ReadonlySet<string>>(new Set());
+
+/** Whether to mark this PR as being refreshed: only in debug mode. */
+export function useIsRefreshing(id: string): boolean {
+  const [debug] = useDebugMode();
+  const refreshing = useContext(RefreshingContext);
+  return debug && refreshing.has(id);
 }

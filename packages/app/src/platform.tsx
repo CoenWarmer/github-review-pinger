@@ -11,6 +11,14 @@ import type {
   TokenSource,
 } from "./types";
 
+/** What the popover shows, for the host to refresh first. */
+export interface ViewState {
+  /** The Review requests tab, rather than My PRs. */
+  reviewsTab: boolean;
+  /** Ids of the PRs in sections that are expanded. */
+  openIds: string[];
+}
+
 /**
  * What the UI needs from whatever hosts it: the desktop app talks to its Rust
  * shell, the web app to the PR logic running in the browser.
@@ -50,6 +58,11 @@ export interface Platform {
   /** Calls `callback` with every new snapshot. Returns how to stop listening. */
   onSnapshot(callback: (snapshot: Snapshot) => void): () => void;
   refresh(): void;
+  /**
+   * Tells the host what's on screen, so a refresh can fetch that first: the
+   * list tab being looked at, and the PRs in sections that are expanded.
+   */
+  setViewState(state: ViewState): void;
 
   /** Opens a pull request, comment or review, and has the PR refreshed first next time. */
   visit(id: string, url: string): void;
