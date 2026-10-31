@@ -14,6 +14,7 @@ const queries = {
   mergeState: graphql("merge_state"),
   mergedSearch: graphql("merged_search"),
   prSearch: graphql("pr_search"),
+  prDetails: graphql("pr_details"),
   statsMerged: graphql("stats_merged"),
 };
 

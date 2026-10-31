@@ -1,6 +1,7 @@
 import { createContext, useContext, type ReactNode } from "react";
 import type {
   CiStats,
+  PrDetailsData,
   FoundPr,
   ReviewStatsData,
   SectionPref,
@@ -70,6 +71,11 @@ export interface Platform {
   openUrl(url: string): void;
   snooze(id: string, days: number): void;
   unsnooze(id: string): void;
+  /**
+   * Puts a PR in a section by hand (`needsAction`, `waiting`, ...), or with
+   * `null` lets its state decide again. Saved and synced.
+   */
+  placePullRequest(id: string, section: string | null): void;
 
   /** Rejects with a message to show when the link isn't a Slack link. */
   setTeamChannel(team: string, link: string): Promise<void>;
@@ -86,19 +92,44 @@ export interface Platform {
    */
   searchPullRequests(text: string): Promise<FoundPr[]>;
 
+  /**
+   * A PR's description, size and timeline as GitHub answers, for its
+   * "Details" fold-out; `null` for a PR that's gone. Its files come 100 at a
+   * time, from the cursor `after` on (the first page without). Rejects with a
+   * message to show.
+   */
+  loadPrDetails(id: string, after?: string | null): Promise<PrDetailsData | null>;
+
   /** The teams you belong to (`org/slug`). Rejects with a message to show. */
   listTeams(): Promise<string[]>;
   /**
    * Your merged PRs over the last `days`, and a team's (`org/slug`) when one
-   * is given. Rejects with a message to show.
+   * is given. With `repos` (`owner/name`s) only merges in those repos count.
+   * Rejects with a message to show.
    */
-  loadStats(team: string | null, days: number, previous?: boolean): Promise<StatsData>;
+  loadStats(
+    team: string | null,
+    days: number,
+    previous?: boolean,
+    repos?: string[],
+  ): Promise<StatsData>;
+  /**
+   * The repos you merged in or reviewed in over the last `days`, lowercase
+   * `owner/name`, sorted: what the statistics can be narrowed to. Rejects
+   * with a message to show.
+   */
+  listStatsRepos(days: number): Promise<string[]>;
   /**
    * The reviews submitted over the last `days`: yours, and each member's of
    * a team (`org/slug`) when one is given and it's small enough. Rejects with
    * a message to show.
    */
-  loadReviewStats(team: string | null, days: number, previous?: boolean): Promise<ReviewStatsData>;
+  loadReviewStats(
+    team: string | null,
+    days: number,
+    previous?: boolean,
+    repos?: string[],
+  ): Promise<ReviewStatsData>;
 
   /**
    * Builds you created in the last `days` (or with `previous` in the same

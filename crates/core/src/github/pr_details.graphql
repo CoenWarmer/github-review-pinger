@@ -1,0 +1,121 @@
+# What the "Details" fold-out of a PR shows: its size, description, and when
+# things happened. Asked for one PR at a time, when it's opened, so the
+# polling query doesn't pay for the description or the timeline.
+#
+# The events that happen early (ready for review) and the activity that goes
+# on (reviews, comments) are two selections, so a long PR's many comments
+# can't push its first events out.
+#
+# The changed files come 100 at a time, from `$after` on (null for the first
+# page), and with the base branch's CODEOWNERS they say how many files each
+# owning team has. Asking again for a later page repeats the rest, which a PR
+# with hundreds of files makes worth it only once or twice.
+query PrDetails($id: ID!, $after: String) {
+  node(id: $id) {
+    ... on PullRequest {
+      body
+      additions
+      deletions
+      changedFiles
+      createdAt
+      mergedAt
+      closedAt
+      isDraft
+      author {
+        login
+      }
+      files(first: 100, after: $after) {
+        pageInfo {
+          hasNextPage
+          endCursor
+        }
+        nodes {
+          path
+        }
+      }
+      # The file GitHub reads rules from, in the places it looks, as of the branch merged into.
+      baseRef {
+        target {
+          ... on Commit {
+            inGithub: file(path: ".github/CODEOWNERS") {
+              object {
+                ... on Blob {
+                  text
+                }
+              }
+            }
+            inRoot: file(path: "CODEOWNERS") {
+              object {
+                ... on Blob {
+                  text
+                }
+              }
+            }
+            inDocs: file(path: "docs/CODEOWNERS") {
+              object {
+                ... on Blob {
+                  text
+                }
+              }
+            }
+          }
+        }
+      }
+      # Pending requests only: GitHub drops the code-owner flag with the request.
+      reviewRequests(first: 50) {
+        nodes {
+          asCodeOwner
+          requestedReviewer {
+            __typename
+            ... on User {
+              login
+            }
+            ... on Team {
+              slug
+              organization {
+                login
+              }
+            }
+          }
+        }
+      }
+      events: timelineItems(first: 50, itemTypes: [READY_FOR_REVIEW_EVENT, CONVERT_TO_DRAFT_EVENT]) {
+        nodes {
+          __typename
+          ... on ReadyForReviewEvent {
+            createdAt
+          }
+          ... on ConvertToDraftEvent {
+            createdAt
+          }
+        }
+      }
+      activity: timelineItems(last: 100, itemTypes: [PULL_REQUEST_REVIEW, ISSUE_COMMENT]) {
+        nodes {
+          __typename
+          ... on IssueComment {
+            createdAt
+            url
+            author {
+              login
+            }
+          }
+          ... on PullRequestReview {
+            state
+            submittedAt
+            url
+            author {
+              login
+            }
+            comments(first: 30) {
+              nodes {
+                createdAt
+                url
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

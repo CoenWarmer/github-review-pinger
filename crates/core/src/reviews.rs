@@ -20,6 +20,20 @@ pub enum ReviewGroup {
     Draft,
 }
 
+impl ReviewGroup {
+    /// The section a PR was dragged into, by the name the UI and the sync
+    /// gist use; `None` for anything else.
+    pub fn from_placement(key: &str) -> Option<Self> {
+        Some(match key {
+            "needsReview" => ReviewGroup::NeedsReview,
+            "waitingOnAuthor" => ReviewGroup::WaitingOnAuthor,
+            "snoozed" => ReviewGroup::Snoozed,
+            "draft" => ReviewGroup::Draft,
+            _ => return None,
+        })
+    }
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ReviewView {
@@ -30,6 +44,8 @@ pub struct ReviewView {
     pub repo: String,
     pub author: String,
     pub group: ReviewGroup,
+    /// Dragged into `group` by hand, rather than put there by its state.
+    pub placed: bool,
     pub open_since: DateTime<Utc>,
     /// When it became the viewer's turn; only for requested PRs.
     pub waiting_since: Option<DateTime<Utc>>,
@@ -101,7 +117,13 @@ fn view(pr: &PullRequest, viewer: &str, rules: &Rules, now: DateTime<Utc>) -> Op
         .get(&pr.id)
         .copied()
         .filter(|&until| until > now);
-    let group = if pr.is_draft {
+    let placed_in = rules
+        .placements
+        .get(&pr.id)
+        .and_then(|key| ReviewGroup::from_placement(key));
+    let group = if let Some(group) = placed_in {
+        group
+    } else if pr.is_draft {
         ReviewGroup::Draft
     } else if snoozed_until.is_some() {
         ReviewGroup::Snoozed
@@ -119,6 +141,7 @@ fn view(pr: &PullRequest, viewer: &str, rules: &Rules, now: DateTime<Utc>) -> Op
         repo: pr.repository.name_with_owner.clone(),
         author: author.to_string(),
         group,
+        placed: placed_in.is_some(),
         open_since,
         waiting_since,
         rerequested: requested && mine.is_some(),
@@ -248,6 +271,7 @@ mod tests {
             ignored_logins: &[],
             dormant_after: chrono::Duration::days(30),
             snoozed,
+            placements: &HashMap::new(),
         };
         derive(&[pr(overrides)], ME, &rules, at(NOW)).pop()
     }
@@ -412,12 +436,38 @@ mod tests {
     }
 
     #[test]
+    fn a_review_dragged_into_a_section_stays_there() {
+        let placements = HashMap::from([("PR_1".to_string(), "waitingOnAuthor".to_string())]);
+        let rules = Rules {
+            directory: &Directory::default(),
+            ignored_logins: &[],
+            dormant_after: chrono::Duration::days(30),
+            snoozed: &HashMap::new(),
+            placements: &placements,
+        };
+        let placed = derive(&[pr(json!({}))], ME, &rules, at(NOW)).remove(0);
+        assert_eq!(
+            (placed.group, placed.placed),
+            (ReviewGroup::WaitingOnAuthor, true)
+        );
+        // A name from the other list doesn't apply here.
+        let placements = HashMap::from([("PR_1".to_string(), "waiting".to_string())]);
+        let rules = Rules {
+            placements: &placements,
+            ..rules
+        };
+        let natural = derive(&[pr(json!({}))], ME, &rules, at(NOW)).remove(0);
+        assert!(!natural.placed);
+    }
+
+    #[test]
     fn longest_waiting_comes_first() {
         let rules = Rules {
             directory: &Directory::default(),
             ignored_logins: &[],
             dormant_after: chrono::Duration::days(30),
             snoozed: &HashMap::new(),
+            placements: &HashMap::new(),
         };
         let mut newer = pr(json!({ "id": "newer", "createdAt": "2026-10-08T09:00:00Z" }));
         newer.number = 2;

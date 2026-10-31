@@ -1,3 +1,4 @@
+import { useDroppable } from "@dnd-kit/core";
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import {
   ArrowDownWideNarrow,
@@ -22,13 +23,6 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { cn } from "@/lib/utils";
 import { PrRow } from "./components/PrRow";
@@ -37,6 +31,8 @@ import { ReviewRow } from "./components/ReviewRow";
 import { RingsLoader } from "./components/RingsLoader";
 import { UpdateBanner } from "./components/UpdateBanner";
 import { SettingsPanel } from "./components/SettingsPanel";
+import { PlacementDnd, useDragging } from "./components/Placement";
+import { RepoPicker } from "./components/RepoPicker";
 import { StatsSettings } from "./components/StatsSettings";
 import { Setup, problemMessage } from "./components/Setup";
 import { elapsed } from "./format";
@@ -97,8 +93,6 @@ function Empty({ children }: { children: ReactNode }) {
   );
 }
 
-/** The repo filter's "no repo chosen" (a Select can't have an empty value). */
-const ALL_REPOS = "__all__";
 
 function Banner({ children }: { children: ReactNode }) {
   return <p className="m-0 border-t bg-warning/15 px-3 py-2">{children}</p>;
@@ -155,6 +149,8 @@ function Section<
   title,
   rows,
   defaultOpen,
+  emptyText,
+  dropKey,
   render,
 }: {
   /** Names the section for remembering its sort, e.g. `mine:approved`. */
@@ -163,6 +159,10 @@ function Section<
   rows: T[];
   /** Every section can be collapsed; this is just whether it starts that way. */
   defaultOpen: boolean;
+  /** Shows the section even with no rows, saying this in it; without it, an empty section is left out. */
+  emptyText?: string;
+  /** The section's name (`waiting`, ...) when PRs can be dragged into it. */
+  dropKey?: string;
   render: (row: T) => ReactNode;
 }) {
   const [open, setOpen] = useState(defaultOpen);
@@ -172,7 +172,14 @@ function Section<
     open,
     rows.map((row) => row.id),
   );
-  if (rows.length === 0) return null;
+  const dragging = useDragging();
+  const { setNodeRef, isOver } = useDroppable({
+    id: dropKey ?? id,
+    disabled: dropKey === undefined,
+  });
+  // While something is dragged every section it can go into shows, even empty.
+  const droppable = dropKey !== undefined && dragging;
+  if (rows.length === 0 && emptyText === undefined && !droppable) return null;
 
   const heading = (
     <>
@@ -182,7 +189,7 @@ function Section<
 
   return (
     <Collapsible asChild open={open} onOpenChange={setOpen}>
-      <section>
+      <section ref={setNodeRef} className={cn(isOver && "bg-accent/60")}>
         <h2 className="sticky top-0 z-10 m-0 flex items-center justify-between border-b bg-background px-3 py-1 text-[11px] font-semibold tracking-wide text-muted-foreground uppercase">
           <CollapsibleTrigger className="flex cursor-pointer items-center gap-1 border-0 bg-transparent p-0 font-[inherit] tracking-[inherit] uppercase">
             {open ? (
@@ -192,11 +199,22 @@ function Section<
             )}
             {heading}
           </CollapsibleTrigger>
-          <SortMenu value={sort} onChange={setSort} />
+          {/* Hidden, not left out, when empty, so the bar keeps the others' height. */}
+          <span className={cn(rows.length === 0 && "invisible")}>
+            <SortMenu value={sort} onChange={setSort} />
+          </span>
         </h2>
         <CollapsibleContent asChild>
           <ul className="m-0 list-none p-0">
-            {sortRows(rows, sort).map(render)}
+            {rows.length === 0 ? (
+              <li className="px-3 py-2 text-xs text-muted-foreground">
+                {droppable && emptyText === undefined
+                  ? "Drop here"
+                  : emptyText}
+              </li>
+            ) : (
+              sortRows(rows, sort).map(render)
+            )}
           </ul>
         </CollapsibleContent>
       </section>
@@ -299,7 +317,7 @@ function AppContent() {
   const now = useNow();
   const [tab, setTab] = useState<Tab>("mine");
   const [query, setQuery] = useState("");
-  const [repo, setRepo] = useState(ALL_REPOS);
+  const [repos, setRepos] = useState<string[]>([]);
   const reportOpen = useReportViewState(tab);
   const refreshingIds = useMemo(
     () => new Set(snapshot?.refreshingIds ?? []),
@@ -334,7 +352,7 @@ function AppContent() {
   const allReviews = snapshot.reviewRequests;
   // The repo filter narrows every list, but not the tab counts or the statistics.
   const inRepo = <T extends { repo: string }>(rows: T[]): T[] =>
-    repo === ALL_REPOS ? rows : rows.filter((row) => row.repo === repo);
+    repos.length === 0 ? rows : rows.filter((row) => repos.includes(row.repo));
   const prs = inRepo(allPrs);
   const reviews = inRepo(allReviews);
   const merged = inRepo(snapshot.mergedPullRequests);
@@ -351,6 +369,13 @@ function AppContent() {
       ).map((pr) => pr.repo),
     ),
   ].sort((a, b) => a.localeCompare(b));
+  // A chosen repo stays pickable (to untick it) even once it has no PRs.
+  const pickable = [
+    ...repos.filter((name) => !repoOptions.includes(name)),
+    ...repoOptions,
+  ].sort((a, b) => a.localeCompare(b));
+  const describePr = (id: string) =>
+    [...allPrs, ...allReviews].find((pr) => pr.id === id) ?? null;
   const counts: Partial<Record<Tab, number>> = {
     mine: allPrs.filter(
       (pr) =>
@@ -421,7 +446,7 @@ function AppContent() {
             onValueChange={(value) => {
               setTab(value as Tab);
               // Each tab has its own repos.
-              setRepo(ALL_REPOS);
+              setRepos([]);
             }}
             className="gap-0 py-1"
           >
@@ -462,37 +487,26 @@ function AppContent() {
                 onChange={(e) => setQuery(e.currentTarget.value)}
                 className="h-7 min-w-0 flex-1 text-xs md:text-xs"
               />
-              {(repoOptions.length > 1 || repo !== ALL_REPOS) && (
-                <Select value={repo} onValueChange={setRepo}>
-                  <SelectTrigger
-                    size="sm"
-                    aria-label="Filter by repository"
-                    className="w-32 shrink-0 text-xs data-[size=sm]:h-7"
-                  >
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value={ALL_REPOS} className="text-xs whitespace-nowrap">
-                      All repos
-                    </SelectItem>
-                    {repoOptions.map((name) => (
-                      <SelectItem key={name} value={name} className="text-xs whitespace-nowrap">
-                        {name}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+              {(pickable.length > 1 || repos.length > 0) && (
+                <RepoPicker
+                  options={pickable}
+                  chosen={repos}
+                  onChange={setRepos}
+                  ariaLabel="Filter by repository"
+                  className="w-32 shrink-0"
+                />
               )}
             </div>
           )}
           {/* Pinned over the list, so a notice appearing doesn't push the rows down. */}
           <div className="relative min-h-0 flex-1">
+            <PlacementDnd describe={describePr}>
             <ScrollArea className="h-full">
               {search ? (
                 <SearchResults
-                  key={`${tab}:${repo}:${query.trim()}`}
+                  key={`${tab}:${repos.join(",")}:${query.trim()}`}
                   query={query}
-                  repo={repo === ALL_REPOS ? null : repo}
+                  repos={repos}
                   shownIds={search.ids}
                   rows={search.rows}
                   now={now}
@@ -567,7 +581,15 @@ function AppContent() {
                           title={SECTION_TITLES[pref.section]}
                           rows={prs.filter((pr) => pr.group === pref.section)}
                           defaultOpen={!STARTS_COLLAPSED.has(pref.section)}
-                          render={(pr) => <PrRow key={pr.id} pr={pr} now={now} />}
+                          emptyText={
+                            pref.section === "needsAction"
+                              ? "Nothing needs your action."
+                              : undefined
+                          }
+                          dropKey={pref.section}
+                          render={(pr) => (
+                            <PrRow key={pr.id} pr={pr} now={now} draggable />
+                          )}
                         />
                       );
                     })
@@ -592,11 +614,15 @@ function AppContent() {
                     title={title}
                     rows={reviews.filter((pr) => pr.group === group)}
                     defaultOpen={group !== "snoozed" && group !== "draft"}
-                    render={(pr) => <ReviewRow key={pr.id} pr={pr} now={now} />}
+                    dropKey={group}
+                    render={(pr) => (
+                      <ReviewRow key={pr.id} pr={pr} now={now} draggable />
+                    )}
                   />
                 ))
               )}
             </ScrollArea>
+            </PlacementDnd>
             <div className="absolute inset-x-0 bottom-0 z-10 bg-background">
               {snapshot.status.kind === "error" && (
                 <Banner>

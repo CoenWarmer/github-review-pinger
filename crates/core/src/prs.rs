@@ -39,6 +39,23 @@ pub enum Group {
     Draft,
 }
 
+impl Group {
+    /// The section a PR was dragged into, by the name the UI and the sync
+    /// gist use. `None` for anything else, so a hand-edited gist or a newer
+    /// device's section can't put a PR somewhere that doesn't exist.
+    pub fn from_placement(key: &str) -> Option<Self> {
+        Some(match key {
+            "approved" => Group::Approved,
+            "needsAction" => Group::NeedsAction,
+            "waiting" => Group::Waiting,
+            "snoozed" => Group::Snoozed,
+            "dormant" => Group::Dormant,
+            "draft" => Group::Draft,
+            _ => return None,
+        })
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum Checks {
@@ -103,6 +120,8 @@ pub struct PrView {
     pub url: String,
     pub repo: String,
     pub group: Group,
+    /// Dragged into `group` by hand, rather than put there by its state.
+    pub placed: bool,
     pub actions: Vec<Action>,
     pub open_since: DateTime<Utc>,
     pub quiet_since: DateTime<Utc>,
@@ -163,6 +182,9 @@ pub struct Rules<'a> {
     pub dormant_after: chrono::Duration,
     /// Snooze end times by pull request id.
     pub snoozed: &'a HashMap<String, DateTime<Utc>>,
+    /// Sections PRs were dragged into by hand, by pull request id; these win
+    /// over where a PR's state would put it.
+    pub placements: &'a HashMap<String, String>,
 }
 
 pub fn derive(prs: &[PullRequest], viewer: &str, rules: &Rules, now: DateTime<Utc>) -> Vec<PrView> {
@@ -240,7 +262,13 @@ fn view(pr: &PullRequest, people: &People, rules: &Rules, now: DateTime<Utc>) ->
         .copied()
         .filter(|&until| until > now);
 
-    let group = if pr.is_draft {
+    let placed_in = rules
+        .placements
+        .get(&pr.id)
+        .and_then(|key| Group::from_placement(key));
+    let group = if let Some(group) = placed_in {
+        group
+    } else if pr.is_draft {
         Group::Draft
     } else if snoozed_until.is_some() {
         Group::Snoozed
@@ -261,6 +289,7 @@ fn view(pr: &PullRequest, people: &People, rules: &Rules, now: DateTime<Utc>) ->
         url: pr.url.clone(),
         repo: pr.repository.name_with_owner.clone(),
         group,
+        placed: placed_in.is_some(),
         actions,
         open_since,
         quiet_since,
@@ -804,6 +833,7 @@ mod tests {
             ignored_logins: ignored,
             dormant_after: chrono::Duration::days(30),
             snoozed,
+            placements: &HashMap::new(),
         };
         derive(&prs, ME, &rules, at(NOW))
     }
@@ -1541,6 +1571,39 @@ mod tests {
             "commits": { "nodes": [commit("2026-08-01T09:00:00Z", "SUCCESS")] },
         }));
         assert_eq!(pr.group, Group::Draft);
+    }
+
+    #[test]
+    fn a_pr_dragged_into_a_section_stays_there_until_put_back() {
+        let pr = || with(json!({ "mergeable": "CONFLICTING" }));
+        let rules = |placements: &HashMap<String, String>| {
+            derive(
+                &[pr()],
+                ME,
+                &Rules {
+                    directory: &Directory::default(),
+                    ignored_logins: &[],
+                    dormant_after: chrono::Duration::days(30),
+                    snoozed: &HashMap::new(),
+                    placements,
+                },
+                at(NOW),
+            )
+            .remove(0)
+        };
+        let natural = rules(&HashMap::new());
+        assert_eq!((natural.group, natural.placed), (Group::NeedsAction, false));
+
+        let waiting = HashMap::from([("PR_1".to_string(), "waiting".to_string())]);
+        let placed = rules(&waiting);
+        assert_eq!((placed.group, placed.placed), (Group::Waiting, true));
+        // What the state says is still true of it.
+        assert!(!placed.actions.is_empty());
+
+        // A section this version doesn't have is ignored.
+        let unknown = HashMap::from([("PR_1".to_string(), "elsewhere".to_string())]);
+        let ignored = rules(&unknown);
+        assert_eq!((ignored.group, ignored.placed), (Group::NeedsAction, false));
     }
 
     #[test]

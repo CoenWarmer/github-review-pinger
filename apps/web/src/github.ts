@@ -3,6 +3,8 @@
 // concurrent batches, then fetch the expensive merge state only for the
 // viewer's own PRs that could be ready to merge.
 
+import type { PrDetailsData } from "@review-pinger/app";
+
 const ENDPOINT = "https://api.github.com/graphql";
 const REST = "https://api.github.com";
 const MAX_SEARCH_PAGES = 10;
@@ -35,6 +37,7 @@ export interface Queries {
   mergeState: string;
   mergedSearch: string;
   prSearch: string;
+  prDetails: string;
   statsMerged: string;
 }
 
@@ -169,15 +172,55 @@ export const MEMBER_COUNT_CAP = 150;
 const MEMBERS_PER_QUERY = 8;
 const MEMBER_QUERIES_AT_ONCE = 10;
 
+/** ` repo:a/b repo:c/d`, which GitHub matches as any of them; empty for no repos. */
+function repoQualifiers(repos: string[]): string {
+  return repos.map((repo) => ` repo:${repo}`).join("");
+}
+
+/**
+ * What a team's merge search is scoped to: `org:<org>`, or with repos chosen
+ * just those of them in the org (`repo:` and `org:` together would match
+ * either). Null when repos are chosen and none are in the org.
+ */
+export function teamScope(org: string, repos: string[]): string | null {
+  if (repos.length === 0) return `org:${org}`;
+  const prefix = `${org.toLowerCase()}/`;
+  const inside = repos.filter((repo) => repo.toLowerCase().startsWith(prefix));
+  return inside.length > 0 ? repoQualifiers(inside).trimStart() : null;
+}
+
+/** What to ask a contributions collection for: the total, or with repos chosen the count in each. */
+function reviewFields(repos: string[]): string {
+  return repos.length === 0
+    ? "totalPullRequestReviewContributions"
+    : "pullRequestReviewContributionsByRepository(maxRepositories: 100) { repository { nameWithOwner } contributions { totalCount } }";
+}
+
+interface ReviewCollection {
+  totalPullRequestReviewContributions?: number;
+  pullRequestReviewContributionsByRepository?: {
+    repository: { nameWithOwner: string };
+    contributions: { totalCount: number };
+  }[];
+}
+
+/** The reviews in a contributions collection, in `repos` when any are chosen. */
+function reviewCount(collection: ReviewCollection, repos: string[]): number {
+  if (repos.length === 0) return collection.totalPullRequestReviewContributions ?? 0;
+  return (collection.pullRequestReviewContributionsByRepository ?? [])
+    .filter((entry) => repos.includes(entry.repository.nameWithOwner.toLowerCase()))
+    .reduce((sum, entry) => sum + entry.contributions.totalCount, 0);
+}
+
 /**
  * Search texts that count PRs merged in the date `range` (GitHub's `merged:`
- * syntax, such as `>=2026-10-01`) in `org` by any
+ * syntax, such as `>=2026-10-01`) within `scope` (see `teamScope`) by any
  * of `logins`: several `author:` qualifiers match any of them, but only so
  * many fit in one search, so the logins are split across as few as will hold
  * them.
  */
-export function mergedBySearches(range: string, org: string, logins: string[]): string[] {
-  const start = `is:pr is:merged merged:${range} org:${org}`;
+export function mergedBySearches(range: string, scope: string, logins: string[]): string[] {
+  const start = `is:pr is:merged merged:${range} ${scope}`;
   const searches: string[] = [];
   let current = start;
   for (const login of logins) {
@@ -266,17 +309,33 @@ export interface Github {
     to: string,
     /** False for an earlier window that's only compared with: just your own counts. */
     byMember?: boolean,
+    /** Lowercase `owner/name`s to count reviews in; none counts them all. */
+    repos?: string[],
   ): Promise<ReviewStatsData>;
+  /**
+   * The repos you merged in or reviewed in between `from` and `to` (ISO
+   * times), lowercase `owner/name`, sorted: what the statistics can be
+   * narrowed to.
+   */
+  fetchStatsRepos(from: string, to: string): Promise<string[]>;
   /** The teams you belong to, as `org/slug`. Needs `read:org`. */
   fetchMyTeams(): Promise<string[]>;
+  /** One PR's description, size and timeline as GitHub answers, for the "Details" fold-out; null for a PR that's gone. */
+  fetchPrDetails(id: string, after?: string | null): Promise<PrDetailsData | null>;
   /**
    * The statistics for the merged-date `range` (GitHub's `merged:` syntax,
    * such as `>=2026-10-01` or `2026-08-30..2026-09-28`), with `team`
    * (`org/slug`) counted too when chosen. Without `byMember`, as for an
    * earlier window that's only compared with, the team is counted in total
-   * rather than member by member.
+   * rather than member by member. With `repos` (lowercase `owner/name`) only
+   * merges in those repos count.
    */
-  fetchStats(team: string | null, range: string, byMember?: boolean): Promise<StatsData>;
+  fetchStats(
+    team: string | null,
+    range: string,
+    byMember?: boolean,
+    repos?: string[],
+  ): Promise<StatsData>;
   addMergeStates(pullRequests: RawPullRequest[]): Promise<void>;
   /** Best effort: leaves `requiredChecks` unset when GitHub can't say. */
   addRequiredChecks(pullRequests: RawPullRequest[]): Promise<void>;
@@ -700,6 +759,11 @@ export function createGithub({
         }));
     },
 
+    async fetchPrDetails(id, after = null) {
+      const reply = await request<{ node: PrDetailsData | null }>(queries.prDetails, { id, after });
+      return reply.data.node;
+    },
+
     async fetchMyTeams() {
       const orgs = await request<{
         viewer: { login: string; organizations: { nodes: ({ login: string } | null)[] } };
@@ -726,12 +790,43 @@ export function createGithub({
         .sort();
     },
 
-    async fetchReviewStats(team, from, to, byMember = true) {
-      const countQuery =
-        "query($from: DateTime!, $to: DateTime!, $org: ID) { viewer { contributionsCollection(from: $from, to: $to, organizationID: $org) { totalPullRequestReviewContributions } } }";
-      const countOf = (data: {
-        viewer: { contributionsCollection: { totalPullRequestReviewContributions: number } };
-      }) => data.viewer.contributionsCollection.totalPullRequestReviewContributions;
+    async fetchStatsRepos(from, to) {
+      const reply = await request<{
+        merged: { nodes: ({ repository?: { nameWithOwner: string } } | null)[] };
+        viewer: {
+          contributionsCollection: {
+            pullRequestReviewContributionsByRepository: { repository: { nameWithOwner: string } }[];
+          };
+        };
+      }>(
+        `query($q: String!, $from: DateTime!, $to: DateTime!) {
+          merged: search(type: ISSUE, query: $q, first: 100) {
+            nodes { ... on PullRequest { repository { nameWithOwner } } }
+          }
+          viewer {
+            contributionsCollection(from: $from, to: $to) {
+              pullRequestReviewContributionsByRepository(maxRepositories: 100) {
+                repository { nameWithOwner }
+              }
+            }
+          }
+        }`,
+        { q: `is:pr is:merged author:@me merged:>=${from.slice(0, 10)}`, from, to },
+      );
+      const names = [
+        ...reply.data.merged.nodes.map((node) => node?.repository?.nameWithOwner),
+        ...reply.data.viewer.contributionsCollection.pullRequestReviewContributionsByRepository.map(
+          (entry) => entry.repository.nameWithOwner,
+        ),
+      ];
+      return [...new Set(names.flatMap((name) => (name ? [name.toLowerCase()] : [])))].sort();
+    },
+
+    async fetchReviewStats(team, from, to, byMember = true, repos = []) {
+      const fields = reviewFields(repos);
+      const countQuery = `query($from: DateTime!, $to: DateTime!, $org: ID) { viewer { contributionsCollection(from: $from, to: $to, organizationID: $org) { ${fields} } } }`;
+      const countOf = (data: { viewer: { contributionsCollection: ReviewCollection } }) =>
+        reviewCount(data.viewer.contributionsCollection, repos);
       const mine = async () => countOf((await request<Parameters<typeof countOf>[0]>(countQuery, { from, to, org: null })).data);
       const teamPart = async (): Promise<{
         inOrg: number | null;
@@ -760,23 +855,20 @@ export function createGithub({
           if (!byMember || logins.length > MEMBER_COUNT_CAP) return null;
           const replies = await mapLimit(chunks(logins, MEMBERS_PER_QUERY), MEMBER_QUERIES_AT_ONCE, (batch) =>
             request<
-              Record<
-                string,
-                { c: { totalPullRequestReviewContributions: number } } | null
-              >
+              Record<string, { c: ReviewCollection } | null>
             >(
               `query($from: DateTime!, $to: DateTime!, $org: ID!) {\n${batch
                 .map(
                   (login, i) =>
-                    `u${i}: user(login: ${JSON.stringify(login)}) { c: contributionsCollection(from: $from, to: $to, organizationID: $org) { totalPullRequestReviewContributions } }`,
+                    `u${i}: user(login: ${JSON.stringify(login)}) { c: contributionsCollection(from: $from, to: $to, organizationID: $org) { ${fields} } }`,
                 )
                 .join("\n")}\n}`,
               { from, to, org: orgId },
             ).then((reply) =>
               // A login GitHub doesn't know is left out rather than counted as zero.
               batch.flatMap((_, i) => {
-                const count = reply.data[`u${i}`]?.c.totalPullRequestReviewContributions;
-                return count === undefined ? [] : [count];
+                const collection = reply.data[`u${i}`]?.c;
+                return collection ? [reviewCount(collection, repos)] : [];
               }),
             ),
           );
@@ -794,7 +886,7 @@ export function createGithub({
       };
     },
 
-    async fetchStats(team, range, byMember = true) {
+    async fetchStats(team, range, byMember = true, repos = []) {
       interface Mine {
         search: {
           issueCount: number;
@@ -812,7 +904,7 @@ export function createGithub({
       }
       const mine = async () => {
         const reply = await request<Mine>(queries.statsMerged, {
-          q: `is:pr is:merged author:@me merged:${range} sort:updated-desc`,
+          q: `is:pr is:merged author:@me merged:${range}${repoQualifiers(repos)} sort:updated-desc`,
         });
         const sample = reply.data.search.nodes.flatMap((pr) =>
           // A PR with no merge time can't have merged; there's nothing to time.
@@ -863,9 +955,21 @@ export function createGithub({
         // Members are read a page at a time up to a limit, so a team that
         // reaches it may have more.
         const capped = logins.length >= MAX_MEMBER_PAGES * 100;
-        // Your merges in the same org, so the two compare.
+        const scope = teamScope(org, repos);
+        if (scope === null) {
+          // None of the chosen repos is the team's, so nobody merged anything there.
+          const counted = byMember && logins.length <= MEMBER_COUNT_CAP;
+          return {
+            merged: 0,
+            capped,
+            members: logins.length,
+            mineInOrg: 0,
+            counts: counted ? logins.map(() => 0) : null,
+          };
+        }
+        // Your merges in the same scope, so the two compare.
         const mineInOrg = async () => {
-          const text = `is:pr is:merged author:@me merged:${range} org:${org}`;
+          const text = `is:pr is:merged author:@me merged:${range} ${scope}`;
           const reply = await request<{ me: { issueCount: number } | null }>(
             `query { me: search(type: ISSUE, query: ${JSON.stringify(text)}) { issueCount } }`,
           );
@@ -884,7 +988,7 @@ export function createGithub({
                   `query {\n${batch
                     .map(
                       (login, i) =>
-                        `m${i}: search(type: ISSUE, query: ${JSON.stringify(`is:pr is:merged merged:${range} org:${org} author:${login}`)}) { issueCount }`,
+                        `m${i}: search(type: ISSUE, query: ${JSON.stringify(`is:pr is:merged merged:${range} ${scope} author:${login}`)}) { issueCount }`,
                     )
                     .join("\n")}\n}`,
                 ).then((reply) => batch.map((_, i) => reply.data[`m${i}`]?.issueCount ?? 0)),
@@ -892,7 +996,7 @@ export function createGithub({
             const counts = replies.flat();
             return { total: counts.reduce((sum, count) => sum + count, 0), counts };
           }
-          const searches = mergedBySearches(range, org, logins);
+          const searches = mergedBySearches(range, scope, logins);
           const text = `query {\n${searches
             .map((s, i) => `s${i}: search(type: ISSUE, query: ${JSON.stringify(s)}) { issueCount }`)
             .join("\n")}\n}`;

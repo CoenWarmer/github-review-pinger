@@ -197,6 +197,24 @@ pub fn diff<Tz: TimeZone>(
         .chain(reviews.iter().map(|v| v.id.as_str()))
         .chain(other_ids.iter().map(String::as_str))
         .collect();
+    // A placement is forgotten once its PR has been gone for a while: put back
+    // like any other, so the other devices let go of it too.
+    let forget_before = now - chrono::Duration::days(crate::memory::PLACEMENT_FORGET_AFTER_DAYS);
+    let gone: Vec<String> = memory
+        .placements
+        .iter_mut()
+        .filter_map(|(id, placement)| {
+            if open.contains(id.as_str()) {
+                placement.seen_at = now;
+                None
+            } else {
+                (placement.seen_at < forget_before).then(|| id.clone())
+            }
+        })
+        .collect();
+    for id in gone {
+        memory.set_placement(&id, None, now);
+    }
     // A snooze outlives a poll that misses its PR, which GitHub's search
     // sometimes does, so it isn't forgotten before it ends.
     memory.pull_requests.retain(|id, pr| {
@@ -347,6 +365,7 @@ mod tests {
             url: String::new(),
             repo: "o/r".to_string(),
             group,
+            placed: false,
             actions: Vec::new(),
             open_since: at(quiet_since),
             quiet_since: at(quiet_since),
@@ -406,6 +425,7 @@ mod tests {
             repo: "o/r".to_string(),
             author: "ana".to_string(),
             group,
+            placed: false,
             open_since: at(TUESDAY),
             waiting_since: waiting_since.map(at),
             rerequested: false,
@@ -449,6 +469,33 @@ mod tests {
     fn nothing_vanishes_on_the_very_first_poll() {
         let memory = Memory::default();
         assert!(vanished_own_prs(&[], &memory).is_empty());
+    }
+
+    #[test]
+    fn a_placement_is_kept_while_its_pr_is_around_and_forgotten_a_week_after_it_goes() {
+        let mut memory = Memory::default();
+        memory.set_placement("a", Some("waiting"), at(TUESDAY));
+        let run = |views: &[PrView], memory: &mut Memory, when: &str| {
+            diff(
+                views,
+                &[],
+                &[],
+                memory,
+                at(when),
+                Duration::hours(24),
+                Duration::hours(24),
+                &Amsterdam,
+            );
+        };
+        let views = [view("a", Group::Waiting, TUESDAY, vec![])];
+        run(&views, &mut memory, "2026-10-06T09:00:00Z");
+        // Missed by a few polls over a few days: still placed.
+        run(&[], &mut memory, "2026-10-10T09:00:00Z");
+        assert!(memory.placements.contains_key("a"));
+        // Gone for over a week: put back, which the gist is told too.
+        run(&[], &mut memory, "2026-10-14T09:00:00Z");
+        assert!(memory.placements.is_empty());
+        assert!(memory.sync.placements.contains_key("a"));
     }
 
     #[test]

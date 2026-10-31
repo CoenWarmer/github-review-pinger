@@ -5,3 +5,22 @@
   padding-top: calc(env(safe-area-inset-top) + 0.5rem);
   padding-bottom: env(safe-area-inset-bottom);
 }
+
+/*
+ * iOS Safari lets the whole page be dragged, tabs included, and bounces it
+ * past the edges. Pinning the page to the screen leaves only the lists to
+ * scroll, and containing their overscroll keeps the end of a list from
+ * pulling the page along.
+ */
+html,
+body {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  overflow: hidden;
+  overscroll-behavior: none;
+}
+
+[data-radix-scroll-area-viewport] {
+  overscroll-behavior: contain;
+}

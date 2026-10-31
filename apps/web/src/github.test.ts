@@ -3,6 +3,7 @@ import { describe, it } from "node:test";
 import {
   createGithub,
   mergedBySearches,
+  teamScope,
   couldBeReady,
   FetchError,
   needsRequiredChecks,
@@ -11,7 +12,7 @@ import {
   type RawPullRequest,
 } from "./github.ts";
 
-const queries: Queries = { search: "SEARCH", details: "DETAILS", mergeState: "MERGE", mergedSearch: "MERGED", prSearch: "PRSEARCH", statsMerged: "STATS" };
+const queries: Queries = { search: "SEARCH", details: "DETAILS", mergeState: "MERGE", mergedSearch: "MERGED", prSearch: "PRSEARCH", prDetails: "PRDETAILS", statsMerged: "STATS" };
 
 type Handler = (body: {
   query: string;
@@ -440,13 +441,68 @@ describe("couldBeReady", () => {
 });
 
 describe("statistics", () => {
+  it("scopes a team's searches to the chosen repos in its org", () => {
+    assert.equal(teamScope("o", []), "org:o");
+    assert.equal(teamScope("o", ["o/a", "x/b", "O/c"]), "repo:o/a repo:O/c");
+    assert.equal(teamScope("y", ["o/a"]), null);
+  });
+
+  it("asks for one PR's details by id and hands back the node", async () => {
+    const seen: Record<string, unknown>[] = [];
+    const gh = github(({ query, variables }) => {
+      assert.equal(query, "PRDETAILS");
+      seen.push(variables);
+      return reply({ node: { body: "hi", additions: 1, deletions: 2, changedFiles: 3 } });
+    });
+    const details = await gh.fetchPrDetails("PR_1");
+    assert.deepEqual(seen, [{ id: "PR_1", after: null }]);
+    assert.equal(details?.body, "hi");
+  });
+
+  it("lists the repos you merged or reviewed in, lowercase and once each", async () => {
+    const gh = github(() =>
+      reply({
+        merged: { nodes: [{ repository: { nameWithOwner: "O/B" } }, null, { repository: { nameWithOwner: "o/a" } }] },
+        viewer: {
+          contributionsCollection: {
+            pullRequestReviewContributionsByRepository: [{ repository: { nameWithOwner: "o/b" } }, { repository: { nameWithOwner: "x/y" } }],
+          },
+        },
+      }),
+    );
+    assert.deepEqual(await gh.fetchStatsRepos("2026-09-29T00:00:00.000Z", "2026-10-29T00:00:00.000Z"), ["o/a", "o/b", "x/y"]);
+  });
+
+  it("searches only the chosen repos for your merges, and returns zeros for a team outside them", async () => {
+    const seen: string[] = [];
+    const gh = github(({ query, variables }) => {
+      if (query === "STATS") {
+        seen.push(String(variables.q));
+        return reply({ search: { issueCount: 3, nodes: [] } });
+      }
+      if (query.includes("members(first: 100")) {
+        return reply({ t0: { team: { members: { nodes: [{ login: "ana" }], pageInfo: { hasNextPage: false, endCursor: null } } } } });
+      }
+      seen.push(query);
+      return reply({});
+    });
+    const stats = await gh.fetchStats("o/core", ">=2026-09-29", true, ["x/y"]);
+    assert.equal(seen[0], "is:pr is:merged author:@me merged:>=2026-09-29 repo:x/y sort:updated-desc");
+    assert.equal(stats.mergedByMe, 3);
+    assert.equal(stats.mergedByTeam, 0);
+    assert.equal(stats.mergedByMeInTeamOrg, 0);
+    assert.deepEqual(stats.teamMemberMerged, [0]);
+    // Nothing else was asked: no search could match.
+    assert.equal(seen.length, 1);
+  });
+
   it("splits team members across searches that fit, each login in exactly one", () => {
-    assert.deepEqual(mergedBySearches(">=2026-10-01", "o", []), []);
-    assert.deepEqual(mergedBySearches(">=2026-10-01", "o", ["ana", "bo"]), [
+    assert.deepEqual(mergedBySearches(">=2026-10-01", "org:o", []), []);
+    assert.deepEqual(mergedBySearches(">=2026-10-01", "org:o", ["ana", "bo"]), [
       "is:pr is:merged merged:>=2026-10-01 org:o author:ana author:bo",
     ]);
     const many = Array.from({ length: 120 }, (_, i) => `member-number-${i}`);
-    const searches = mergedBySearches(">=2026-10-01", "o", many);
+    const searches = mergedBySearches(">=2026-10-01", "org:o", many);
     assert.ok(searches.length > 1);
     assert.ok(searches.every((s) => s.length <= 250));
     assert.equal(searches.join(" ").split(" author:").length - 1, many.length);
@@ -678,6 +734,29 @@ describe("review statistics", () => {
     const stats = await gh.fetchReviewStats("o/core", ...WINDOW);
     assert.deepEqual(stats.teamMemberReviews, [4]);
     assert.equal(stats.teamMemberCount, 2);
+  });
+
+  it("counts your reviews in the chosen repos only, from the per-repo counts", async () => {
+    const seen: { query: string; variables: Record<string, unknown> }[] = [];
+    const entry = (name: string, totalCount: number) => ({
+      repository: { nameWithOwner: name },
+      contributions: { totalCount },
+    });
+    const gh = github(({ query, variables }) => {
+      seen.push({ query, variables });
+      if (query.includes("organization(login: $org) { id }")) return reply({ organization: { id: "ORG1" } });
+      if (query.includes("members(first: 100")) {
+        return reply({ t0: { team: { members: { nodes: [{ login: "ana" }], pageInfo: { hasNextPage: false, endCursor: null } } } } });
+      }
+      const collection = {
+        pullRequestReviewContributionsByRepository: [entry("O/Core", 4), entry("o/other", 3), entry("x/y", 2)],
+      };
+      if (query.includes("u0:")) return reply({ u0: { c: collection } });
+      return reply({ viewer: { contributionsCollection: collection } });
+    });
+    const stats = await gh.fetchReviewStats("o/core", ...WINDOW, true, ["o/core", "x/y"]);
+    assert.deepEqual(stats, { reviewsByMe: 6, reviewsByMeInTeamOrg: 6, teamMemberCount: 1, teamMemberReviews: [6] });
+    assert.ok(seen.every((s) => !s.query.includes("totalPullRequestReviewContributions")));
   });
 
   it("is just your own count without a team", async () => {

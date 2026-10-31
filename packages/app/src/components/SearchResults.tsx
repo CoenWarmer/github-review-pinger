@@ -69,6 +69,20 @@ type GithubSearch =
   | { kind: "done"; found: FoundPr[] }
   | { kind: "failed"; message: string };
 
+/** GitHub rejects search text over 256 characters. */
+const MAX_SEARCH_CHARS = 250;
+
+/** The query with a `repo:` for each chosen repo, as many as fit (GitHub matches any of them). */
+function searchText(query: string, repos: string[]): string {
+  let text = query;
+  for (const repo of repos) {
+    const qualifier = ` repo:${repo}`;
+    if (text.length + qualifier.length > MAX_SEARCH_CHARS) break;
+    text += qualifier;
+  }
+  return text;
+}
+
 /**
  * What typing in the search box shows: the already fetched PRs that match
  * (`rows`, rendered by the caller), and a button that asks GitHub instead.
@@ -76,14 +90,14 @@ type GithubSearch =
  */
 export function SearchResults({
   query,
-  repo,
+  repos,
   shownIds,
   rows,
   now,
 }: {
   query: string;
-  /** `owner/name` when the list is narrowed to one repo, so GitHub's search is too. */
-  repo: string | null;
+  /** The `owner/name`s the list is narrowed to, so GitHub's search is too; none for all. */
+  repos: string[];
   /** The ids of the PRs in `rows`, which GitHub's results leave out. */
   shownIds: string[];
   rows: ReactNode;
@@ -103,8 +117,17 @@ export function SearchResults({
   async function searchGithub() {
     setSearch({ kind: "searching" });
     try {
-      const found = await platform.searchPullRequests(repo ? `${query.trim()} repo:${repo}` : query.trim());
-      if (mounted.current) setSearch({ kind: "done", found });
+      const found = await platform.searchPullRequests(searchText(query.trim(), repos));
+      if (mounted.current) {
+        // Qualifiers that didn't fit in the search are applied to what came back.
+        setSearch({
+          kind: "done",
+          found:
+            repos.length === 0
+              ? found
+              : found.filter((pr) => repos.includes(pr.repo)),
+        });
+      }
     } catch (e) {
       if (mounted.current) setSearch({ kind: "failed", message: String(e) });
     }

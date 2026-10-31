@@ -5,6 +5,7 @@
 
 import type {
   MergedPr,
+  PrDetailsData,
   Problem,
   PullRequest,
   ReviewRequest,
@@ -28,11 +29,13 @@ import {
   type Progress,
   type RawMergedPullRequest,
   type RawPullRequest,
+  type RequiredCheck,
 } from "./github.ts";
-import { applyProgress, emptyFetched } from "./progress.ts";
+import { applyProgress, emptyFetched, withKnownRequiredChecks } from "./progress.ts";
 
 const TOKEN_KEY = "reviewPinger.token";
 const STATE_KEY = "reviewPinger.state";
+const REQUIRED_KEY = "reviewPinger.requiredChecks.v1";
 
 const POLL_INTERVAL_MS = 120_000;
 const MAX_BACKOFF_MS = 600_000;
@@ -81,6 +84,7 @@ export interface PingerLike {
   derived(now: string): string | undefined | null;
   applyRefresh(fresh: string): void;
   setSnooze(id: string, days: number | undefined | null, now: string): void;
+  setPlacement(id: string, section: string | undefined | null, now: string): void;
   directoryNeeds(now: string): string;
   mergeDirectory(asked: string, found: string, now: string): boolean;
   directoryDenied(): boolean;
@@ -159,6 +163,8 @@ export class Engine {
   private viewState = { reviewsTab: false, openIds: new Set<string>() };
   /** The last complete fetch, which a poll's phases are patched into for display. */
   private lastFetched: Fetched | null = null;
+  /** The required checks of failing PRs as of the last complete fetch, kept across visits. */
+  private knownRequired = new Map<string, RequiredCheck[]>();
   /** Ids of the viewer's own PRs, which are the only ones that need a merge state. */
   private ownIds = new Set<string>();
   /** The Merged section's latest automatic fetch, and what "Load more" has
@@ -268,6 +274,7 @@ export class Engine {
     this.started = true;
     this.pinger = await this.deps.loadPinger(this.deps.storage.get(STATE_KEY));
     this.token = this.deps.storage.get(TOKEN_KEY);
+    this.loadRequired();
     this.github = this.token ? this.deps.createGithub(this.token) : null;
     this.publish({
       hasSavedToken: this.token !== null,
@@ -396,8 +403,9 @@ export class Engine {
       const firstLoad = this.snapshot.fetchedAt === null;
       let shown = this.lastFetched ?? emptyFetched();
       const showProgress = (progress: Progress) => {
-        shown = applyProgress(shown, progress);
-        this.showProgress(shown, now, firstLoad, progress.fresh);
+        const fresh = withKnownRequiredChecks(progress.fresh, this.knownRequired);
+        shown = applyProgress(shown, { ...progress, fresh });
+        this.showProgress(shown, now, firstLoad, fresh);
       };
       const plan = this.plan();
       const [fetched, mergedPage] = await Promise.all([
@@ -413,6 +421,7 @@ export class Engine {
       ]);
       this.ownIds = new Set(fetched.pullRequests.map((pr) => pr.id));
       this.lastFetched = fetched;
+      this.rememberRequired(fetched);
       const tz = this.deps.tzOffsetMinutes?.() ?? -new Date().getTimezoneOffset();
       const update: Update = JSON.parse(this.pinger.poll(JSON.stringify(fetched), now, tz));
       if (mergedPage) {
@@ -458,6 +467,23 @@ export class Engine {
       this.publish({ refreshing: false, refreshingIds: [], status: { kind: "error", problem } });
     }
     this.schedule(delay);
+  }
+
+  /** Keeps the required checks the fetch found, for showing the next start's PRs right. */
+  private rememberRequired(fetched: Fetched) {
+    this.knownRequired = new Map(
+      fetched.pullRequests.flatMap((pr) => (pr.requiredChecks ? [[pr.id, pr.requiredChecks] as const] : [])),
+    );
+    this.deps.storage.set(REQUIRED_KEY, JSON.stringify([...this.knownRequired]));
+  }
+
+  private loadRequired() {
+    try {
+      const saved = JSON.parse(this.deps.storage.get(REQUIRED_KEY) ?? "[]") as [string, RequiredCheck[]][];
+      this.knownRequired = new Map(Array.isArray(saved) ? saved : []);
+    } catch {
+      this.knownRequired = new Map();
+    }
   }
 
   /**
@@ -525,6 +551,14 @@ export class Engine {
 
   snooze(id: string, days: number | undefined) {
     this.pinger.setSnooze(id, days, this.nowIso());
+    this.persist();
+    this.rederive();
+    this.syncSoon();
+  }
+
+  /** Puts a PR in a section by hand, or with `null` lets its state decide again. */
+  place(id: string, section: string | null) {
+    this.pinger.setPlacement(id, section, this.nowIso());
     this.persist();
     this.rederive();
     this.syncSoon();
@@ -646,6 +680,16 @@ export class Engine {
     }
   }
 
+  /** A PR's description, size and timeline, for its "Details" fold-out. Rejects with a message to show. */
+  async loadPrDetails(id: string, after: string | null = null): Promise<PrDetailsData | null> {
+    if (!this.github) throw "There's no token to load details with.";
+    try {
+      return await this.github.fetchPrDetails(id, after);
+    } catch (e) {
+      throw e instanceof Error ? e.message : String(e);
+    }
+  }
+
   /** The teams you belong to, for the statistics. Rejects with a message to show. */
   async listTeams(): Promise<string[]> {
     if (!this.github) throw "There's no token to look teams up with.";
@@ -657,18 +701,38 @@ export class Engine {
   }
 
   /**
+   * The repos the statistics can be narrowed to: those you merged in or
+   * reviewed in over the last `days`. Rejects with a message to show.
+   */
+  async listStatsRepos(days: number): Promise<string[]> {
+    if (!this.github) throw "There's no token to load statistics with.";
+    const to = this.now();
+    const from = new Date(to.getTime() - days * 86_400_000);
+    try {
+      return await this.github.fetchStatsRepos(from.toISOString(), to.toISOString());
+    } catch (e) {
+      throw e instanceof Error ? e.message : String(e);
+    }
+  }
+
+  /**
    * The statistics for the last `days`, or with `previous` for the same
    * number of days before those, which is only compared with. Rejects with a
    * message to show.
    */
-  async loadStats(team: string | null, days: number, previous = false): Promise<StatsData> {
+  async loadStats(
+    team: string | null,
+    days: number,
+    previous = false,
+    repos: string[] = [],
+  ): Promise<StatsData> {
     if (!this.github) throw "There's no token to load statistics with.";
     const day = (back: number) =>
       new Date(this.now().getTime() - back * 86_400_000).toISOString().slice(0, 10);
     // The earlier window is the same length and ends the day before this one starts.
     const range = previous ? `${day(2 * days)}..${day(days + 1)}` : `>=${day(days)}`;
     try {
-      return await this.github.fetchStats(team, range, !previous);
+      return await this.github.fetchStats(team, range, !previous, lowercase(repos));
     } catch (e) {
       throw e instanceof Error ? e.message : String(e);
     }
@@ -682,13 +746,20 @@ export class Engine {
     team: string | null,
     days: number,
     previous = false,
+    repos: string[] = [],
   ): Promise<ReviewStatsData> {
     if (!this.github) throw "There's no token to load statistics with.";
     // The earlier window is the same length and ends where this one starts.
     const to = new Date(this.now().getTime() - (previous ? days * 86_400_000 : 0));
     const from = new Date(to.getTime() - days * 86_400_000);
     try {
-      return await this.github.fetchReviewStats(team, from.toISOString(), to.toISOString(), !previous);
+      return await this.github.fetchReviewStats(
+        team,
+        from.toISOString(),
+        to.toISOString(),
+        !previous,
+        lowercase(repos),
+      );
     } catch (e) {
       throw e instanceof Error ? e.message : String(e);
     }
@@ -835,3 +906,8 @@ export class Engine {
 }
 
 export type { RawPullRequest };
+
+/** Repo names are searched and compared in lowercase, without repeats. */
+function lowercase(repos: string[]): string[] {
+  return [...new Set(repos.map((repo) => repo.toLowerCase()))].sort();
+}

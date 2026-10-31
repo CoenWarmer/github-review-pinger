@@ -9,6 +9,8 @@ import { checksProgress, dayAndTime, elapsed, queueProgress, remaining } from ".
 import { TeamChannelForm, TeamChip } from "../slack";
 import type { Action, PullRequest, Reviewer, ReviewerState } from "../types";
 import { PrContextMenu } from "./PrContextMenu";
+import { DetailsToggle, PrDetails } from "./PrDetails";
+import { UndoPlacement, useDraggableRow } from "./Placement";
 import { RefreshIndicator } from "./RefreshIndicator";
 
 /** Opens a PR on GitHub, and has it refreshed first the next time the list shows. */
@@ -168,8 +170,19 @@ export function SnoozeControl({ pr }: { pr: Pick<PullRequest, "id" | "snoozedUnt
   );
 }
 
-export function PrRow({ pr, now }: { pr: PullRequest; now: number }) {
+export function PrRow({
+  pr,
+  now,
+  draggable = false,
+}: {
+  pr: PullRequest;
+  now: number;
+  /** Can be dragged into another section; only where one can be dropped on. */
+  draggable?: boolean;
+}) {
   const visitPr = useVisitPr();
+  const drag = useDraggableRow(pr.id, pr.group, draggable);
+  const [detailsOpen, setDetailsOpen] = useState(false);
   const [askingTeam, setAskingTeam] = useState<string | null>(null);
   const showActions =
     pr.group === "approved" || pr.group === "needsAction" || pr.group === "waiting";
@@ -228,7 +241,14 @@ export function PrRow({ pr, now }: { pr: PullRequest; now: number }) {
 
   return (
     <PrContextMenu url={pr.url}>
-      <li className="group relative border-b hover:bg-accent/50 focus-within:bg-accent/50">
+      <li
+        ref={drag.ref}
+        {...drag.listeners}
+        className={cn(
+          "group relative border-b hover:bg-accent/50 focus-within:bg-accent/50",
+          drag.isDragging && "opacity-40",
+        )}
+      >
         <button
           type="button"
           className="flex w-full cursor-pointer flex-col gap-[3px] border-0 bg-transparent px-3 py-3 text-left outline-none"
@@ -271,17 +291,42 @@ export function PrRow({ pr, now }: { pr: PullRequest; now: number }) {
         </button>
         {askingTeam && <TeamChannelForm team={askingTeam} onDone={() => setAskingTeam(null)} />}
         <RefreshIndicator id={pr.id} />
-        {pr.group !== "draft" && <RowActions pr={pr} />}
+        <RowActions
+          pr={pr}
+          snooze={pr.group !== "draft"}
+          detailsOpen={detailsOpen}
+          onToggleDetails={() => setDetailsOpen((open) => !open)}
+        />
+        {pr.placed && <UndoPlacement id={pr.id} />}
+        {detailsOpen && <PrDetails id={pr.id} url={pr.url} now={now} />}
       </li>
     </PrContextMenu>
   );
 }
 
 /** Revealed on hover so rows stay uncluttered. */
-export function RowActions({ pr }: { pr: Pick<PullRequest, "id" | "snoozedUntil"> }) {
+export function RowActions({
+  pr,
+  snooze,
+  detailsOpen,
+  onToggleDetails,
+}: {
+  pr: Pick<PullRequest, "id" | "snoozedUntil">;
+  /** Drafts can't be snoozed. */
+  snooze: boolean;
+  detailsOpen: boolean;
+  onToggleDetails: () => void;
+}) {
   return (
-    <span className="invisible absolute top-1.5 right-2 rounded-md border bg-popover px-1 text-xs group-focus-within:visible group-hover:visible [@media(hover:none)]:visible">
-      <SnoozeControl pr={pr} />
+    <span
+      className={cn(
+        "absolute top-1.5 right-2 flex items-center rounded-md border bg-popover px-1 text-xs group-focus-within:visible group-hover:visible [@media(hover:none)]:visible",
+        // Stays put while folded out, so it's where you left it to fold in.
+        detailsOpen ? "visible" : "invisible",
+      )}
+    >
+      <DetailsToggle open={detailsOpen} onToggle={onToggleDetails} />
+      {snooze && <SnoozeControl pr={pr} />}
     </span>
   );
 }

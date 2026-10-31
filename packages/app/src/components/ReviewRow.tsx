@@ -12,18 +12,39 @@ import {
   RowActions,
   useVisitPr,
 } from "./PrRow";
+import { cn } from "@/lib/utils";
 import { PrContextMenu } from "./PrContextMenu";
+import { PrDetails } from "./PrDetails";
+import { UndoPlacement, useDraggableRow } from "./Placement";
 import { RefreshIndicator } from "./RefreshIndicator";
 
-export function ReviewRow({ pr, now }: { pr: ReviewRequest; now: number }) {
+export function ReviewRow({
+  pr,
+  now,
+  draggable = false,
+}: {
+  pr: ReviewRequest;
+  now: number;
+  /** Can be dragged into another section; only where one can be dropped on. */
+  draggable?: boolean;
+}) {
   const visitPr = useVisitPr();
+  const drag = useDraggableRow(pr.id, pr.group, draggable);
+  const [detailsOpen, setDetailsOpen] = useState(false);
   const [askingTeam, setAskingTeam] = useState<string | null>(null);
   const waiting = pr.waitingSince && `waiting ${elapsed(pr.waitingSince, now)}`;
   const reviewed = pr.reviewedAt && `reviewed ${elapsed(pr.reviewedAt, now)} ago`;
 
   return (
     <PrContextMenu url={pr.url}>
-      <li className="group relative border-b hover:bg-accent/50 focus-within:bg-accent/50">
+      <li
+        ref={drag.ref}
+        {...drag.listeners}
+        className={cn(
+          "group relative border-b hover:bg-accent/50 focus-within:bg-accent/50",
+          drag.isDragging && "opacity-40",
+        )}
+      >
         <button
           type="button"
           className="flex w-full cursor-pointer flex-col gap-[3px] border-0 bg-transparent px-3 py-2 text-left outline-none"
@@ -64,7 +85,14 @@ export function ReviewRow({ pr, now }: { pr: ReviewRequest; now: number }) {
         </button>
         {askingTeam && <TeamChannelForm team={askingTeam} onDone={() => setAskingTeam(null)} />}
         <RefreshIndicator id={pr.id} />
-        {pr.group !== "draft" && <RowActions pr={pr} />}
+        <RowActions
+          pr={pr}
+          snooze={pr.group !== "draft"}
+          detailsOpen={detailsOpen}
+          onToggleDetails={() => setDetailsOpen((open) => !open)}
+        />
+        {pr.placed && <UndoPlacement id={pr.id} />}
+        {detailsOpen && <PrDetails id={pr.id} url={pr.url} now={now} />}
       </li>
     </PrContextMenu>
   );

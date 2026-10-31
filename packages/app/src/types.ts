@@ -76,6 +76,70 @@ export interface StatsData {
   }[];
 }
 
+/** Who a review was asked of, as GitHub names them. */
+export type DetailReviewer =
+  | { __typename: "User"; login: string }
+  | { __typename: "Team"; slug: string; organization: { login: string } }
+  // Bots and other kinds GitHub may add.
+  | { __typename: string };
+
+/** A file looked up by path: `null` when the branch has none there. */
+export type CodeownersFile = { object: { text?: string } | null } | null;
+
+/**
+ * What a PR's "Details" fold-out is drawn from, as GitHub answers
+ * (`pr_details.graphql`); `details.ts` shapes it, the same for every host.
+ */
+export interface PrDetailsData {
+  body: string;
+  additions: number;
+  deletions: number;
+  changedFiles: number;
+  createdAt: string;
+  mergedAt: string | null;
+  closedAt: string | null;
+  isDraft: boolean;
+  author: { login: string } | null;
+  /** The changed files, a page of 100 from the cursor asked for. */
+  files: { pageInfo: { hasNextPage: boolean; endCursor: string | null }; nodes: ({ path: string } | null)[] };
+  /** The base branch's CODEOWNERS wherever GitHub finds one, in the order it looks. */
+  baseRef: {
+    target: {
+      inGithub?: CodeownersFile;
+      inRoot?: CodeownersFile;
+      inDocs?: CodeownersFile;
+    } | null;
+  } | null;
+  /** Pending requests only: GitHub drops the code-owner flag with the request. */
+  reviewRequests: {
+    nodes: ({ asCodeOwner: boolean; requestedReviewer: DetailReviewer | null } | null)[];
+  };
+  /** The early events: ready for review, and back to draft. */
+  events: {
+    nodes: (
+      | { __typename: "ReadyForReviewEvent" | "ConvertToDraftEvent"; createdAt: string }
+      | { __typename: string }
+      | null
+    )[];
+  };
+  /** The latest reviews and comments. */
+  activity: {
+    nodes: (
+      | { __typename: "IssueComment"; createdAt: string; url: string; author: { login: string } | null }
+      | {
+          __typename: "PullRequestReview";
+          state: string;
+          submittedAt: string | null;
+          url: string;
+          author: { login: string } | null;
+          comments: { nodes: ({ createdAt: string; url: string } | null)[] };
+        }
+      | { __typename: string }
+      | null
+    )[];
+  };
+}
+
 /** What the review chart is drawn from, over a window of days. */
 export interface ReviewStatsData {
   /** Reviews you submitted, in any repo. */
@@ -152,6 +216,8 @@ export interface PullRequest {
   url: string;
   repo: string;
   group: Group;
+  /** Dragged into `group` by hand, rather than put there by its state. */
+  placed: boolean;
   actions: Action[];
   openSince: string;
   quietSince: string;
@@ -183,6 +249,8 @@ export interface ReviewRequest {
   repo: string;
   author: string;
   group: ReviewGroup;
+  /** Dragged into `group` by hand, rather than put there by its state. */
+  placed: boolean;
   openSince: string;
   /** When it became your turn; only for requested PRs. */
   waitingSince: string | null;

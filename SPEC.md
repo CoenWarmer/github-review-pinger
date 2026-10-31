@@ -187,6 +187,8 @@ bottom:
    active first within each.
 2. **Needs your action**: ready to merge first, then changes requested, new
    feedback, conflicts, CI failing; most recently active first within each.
+   Shown even when empty, with "Nothing needs your action.", so it's always
+   clear nothing is waiting on you; the other sections are left out when empty.
 3. **Waiting on others**: reviews, running checks, or auto-merge; sorted by
    most recently active first.
 4. **Snoozed**: collapsed, most recently active first, with the snooze end
@@ -196,6 +198,33 @@ bottom:
 7. **Merged**: collapsed; off by default. Your own PRs merged in the last two
    days, newest first, with a "Load more" button that fetches 5 further
    (older) ones at a time.
+
+Each row has a **Details** toggle, which folds out below it: lines added and
+deleted and files changed, how many files each code-owning team owns as a
+horizontal bar chart (from the CODEOWNERS file of the branch the PR merges into, counted over up to 500
+files), a timeline, and the first lines of the description
+as markdown (no raw HTML or images; links open outside the app). The timeline
+(the `react-otel-trace-waterfall` component) has a "PR Timeline" row, from when it
+was opened to now or its merge, with markers for opening, being marked ready
+for review, going back to draft and merging, and below it a row per code owner
+and per other reviewer who has commented or reviewed (up to six), from when the
+PR was ready, with a marker for each comment and for each approval or change
+request, each a button that opens that comment or review on GitHub (the PR's
+own markers open the PR). Code owners still being waited on run to now. GitHub only says who is
+a code owner for review requests still pending, so one who has reviewed since
+shows as an ordinary reviewer. Details are fetched when a row is folded out,
+not with the poll, and kept for two minutes.
+
+A PR can be **dragged into another section** (of My PRs, or of Review
+Requests), which keeps it there whatever its state says. Sections that are
+empty still show while dragging, so they can be dropped on; merged PRs and
+custom views can't be dragged or dropped on. Its row gets an "Undo move"
+button, which puts it back where its state places it. Dropping into Snoozed
+doesn't snooze, and a PR moved out of Approved or Needs your action stops
+counting in the tray (counts follow the section it's shown in). Placements
+are synced like snoozes, one entry per PR with the time of its last change,
+and forgotten once the PR has been gone for a week (or 30 days after being
+put back, in the gist).
 
 A **custom view** adds its own section: a name and a GitHub search query
 (`is:pr` is always added, so it can't return issues), the same syntax

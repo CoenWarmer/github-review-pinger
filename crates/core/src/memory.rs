@@ -63,6 +63,31 @@ pub struct Memory {
     /// `mine:approved`). A section missing here keeps the default order.
     #[serde(default)]
     pub section_sorts: BTreeMap<String, String>,
+    /// PRs dragged into a section by hand, by pull request id.
+    #[serde(default)]
+    pub placements: HashMap<String, Placement>,
+}
+
+/// How long a placed PR can go unseen before its placement is forgotten. A
+/// PR GitHub's search misses for a poll or two keeps its place meanwhile.
+pub const PLACEMENT_FORGET_AFTER_DAYS: i64 = 7;
+
+/// The section a PR was dragged into.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Placement {
+    /// The section's name (`needsAction`, `waiting`, ...), which the list the
+    /// PR is in then reads as its own.
+    pub section: String,
+    /// The last time the PR was in a fetch, so placements of PRs that have
+    /// closed are forgotten.
+    pub seen_at: DateTime<Utc>,
+}
+
+/// Whether `key` could be a section name: short, and made of what the UI
+/// names sections with, so a hand-edited gist can't put anything else in memory.
+pub fn clean_placement(key: &str) -> bool {
+    !key.is_empty() && key.len() <= 30 && key.chars().all(|c| c.is_ascii_alphabetic())
 }
 
 /// The pipeline the CI statistics look at until another is chosen.
@@ -217,6 +242,44 @@ impl Memory {
             .iter()
             .filter_map(|(id, pr)| pr.snoozed_until.map(|until| (id.clone(), until)))
             .collect()
+    }
+
+    /// The sections PRs were dragged into, by pull request id.
+    pub fn placements(&self) -> HashMap<String, String> {
+        self.placements
+            .iter()
+            .map(|(id, placement)| (id.clone(), placement.section.clone()))
+            .collect()
+    }
+
+    /// Puts a PR in a section by hand, or with `None` lets its state decide
+    /// again. Returns whether `section` could be one; one that's already in
+    /// effect changes nothing, so isn't synced.
+    pub fn set_placement(&mut self, id: &str, section: Option<&str>, now: DateTime<Utc>) -> bool {
+        match section {
+            Some(section) => {
+                if !clean_placement(section) {
+                    return false;
+                }
+                if self.placements.get(id).map(|p| p.section.as_str()) == Some(section) {
+                    return true;
+                }
+                self.placements.insert(
+                    id.to_string(),
+                    Placement {
+                        section: section.to_string(),
+                        seen_at: now,
+                    },
+                );
+            }
+            None => {
+                if self.placements.remove(id).is_none() {
+                    return true;
+                }
+            }
+        }
+        self.sync.placements.insert(id.to_string(), now);
+        true
     }
 
     pub fn record_check_duration(&mut self, repo: &str, secs: u64) {

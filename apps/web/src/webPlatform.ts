@@ -45,6 +45,7 @@ export function createWebPlatform(engine: Engine): Platform {
     openUrl: openExternal,
     snooze: (id, days) => engine.snooze(id, days),
     unsnooze: (id) => engine.snooze(id, undefined),
+    placePullRequest: (id, section) => engine.place(id, section),
 
     setTeamChannel: (team, link) => rejectWithMessage(() => engine.setTeamChannel(team, link)),
     removeTeamChannel: (team) => engine.removeTeamChannel(team),
@@ -54,8 +55,11 @@ export function createWebPlatform(engine: Engine): Platform {
     loadMoreMerged: () => engine.loadMoreMerged(),
     searchPullRequests: (text) => engine.searchPullRequests(text),
     listTeams: () => engine.listTeams(),
-    loadStats: (team, days, previous) => engine.loadStats(team, days, previous),
-    loadReviewStats: (team, days, previous) => engine.loadReviewStats(team, days, previous),
+    loadPrDetails: (id, after) => engine.loadPrDetails(id, after),
+    loadStats: (team, days, previous, repos) => engine.loadStats(team, days, previous, repos),
+    loadReviewStats: (team, days, previous, repos) =>
+      engine.loadReviewStats(team, days, previous, repos),
+    listStatsRepos: (days) => engine.listStatsRepos(days),
     setBuildkitePipeline: (name) => rejectWithMessage(() => engine.setBuildkitePipeline(name)),
     // Needs the Buildkite CLI, which only the desktop app can run.
     loadCiStats: async () => ({ kind: "error", message: "Not available in the browser." }),

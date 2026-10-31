@@ -67,6 +67,10 @@ pub struct SyncDoc {
     /// sections, since people change them one at a time but rarely at once.
     #[serde(default)]
     pub section_sorts: Option<Stamped<BTreeMap<String, String>>>,
+    /// The section each PR was dragged into by hand, by PR id; `None` once
+    /// put back.
+    #[serde(default)]
+    pub placements: BTreeMap<String, Stamped<Option<String>>>,
 }
 
 /// A custom view's definition, as it crosses the gist: the id is the map key.
@@ -96,6 +100,8 @@ pub struct SyncMemory {
     pub buildkite_pipeline_changed_at: Option<DateTime<Utc>>,
     /// When the section sorts last changed here or were taken from the gist.
     pub section_sorts_changed_at: Option<DateTime<Utc>>,
+    /// When each PR's placement last changed here or was taken from the gist.
+    pub placements: HashMap<String, DateTime<Utc>>,
 }
 
 /// The outcome of merging the gist into a device.
@@ -125,6 +131,7 @@ impl SyncDoc {
         newest(&mut self.snoozes, &other.snoozes);
         newest(&mut self.team_channels, &other.team_channels);
         newest(&mut self.views, &other.views);
+        newest(&mut self.placements, &other.placements);
         if let Some(theirs) = &other.sections
             && self
                 .sections
@@ -158,6 +165,9 @@ impl SyncDoc {
         self.team_channels
             .retain(|_, entry| entry.at > cutoff || entry.value.is_some());
         self.views
+            .retain(|_, entry| entry.at > cutoff || entry.value.is_some());
+        // A placement stays as long as its PR does; only the ones put back are forgotten.
+        self.placements
             .retain(|_, entry| entry.at > cutoff || entry.value.is_some());
     }
 }
@@ -227,6 +237,22 @@ fn local_doc(memory: &mut Memory, now: DateTime<Utc>) -> SyncDoc {
         doc.section_sorts = Some(Stamped {
             value: memory.section_sorts.clone(),
             at,
+        });
+    }
+    for (id, placement) in &memory.placements {
+        let at = *memory.sync.placements.entry(id.clone()).or_insert(now);
+        doc.placements.insert(
+            id.clone(),
+            Stamped {
+                value: Some(placement.section.clone()),
+                at,
+            },
+        );
+    }
+    for (id, at) in &memory.sync.placements {
+        doc.placements.entry(id.clone()).or_insert(Stamped {
+            value: None,
+            at: *at,
         });
     }
     for view in &memory.views {
@@ -344,6 +370,41 @@ fn apply(memory: &mut Memory, merged: &SyncDoc, now: DateTime<Utc>) -> bool {
             changed = true;
         }
     }
+    for (id, entry) in &merged.placements {
+        if memory
+            .sync
+            .placements
+            .get(id)
+            .is_some_and(|own| entry.at <= *own)
+        {
+            continue;
+        }
+        // A hand-edited gist shouldn't put anything odd in memory.
+        let section = match &entry.value {
+            Some(section) if !crate::memory::clean_placement(section) => continue,
+            other => other.clone(),
+        };
+        memory.sync.placements.insert(id.clone(), entry.at);
+        let current = memory.placements.get(id).map(|p| p.section.as_str());
+        if current == section.as_deref() {
+            continue;
+        }
+        match section {
+            Some(section) => {
+                memory.placements.insert(
+                    id.clone(),
+                    crate::memory::Placement {
+                        section,
+                        seen_at: now,
+                    },
+                );
+            }
+            None => {
+                memory.placements.remove(id);
+            }
+        }
+        changed = true;
+    }
     for (id, entry) in &merged.views {
         if memory
             .sync
@@ -396,6 +457,10 @@ pub fn reconcile(memory: &mut Memory, remote: Option<SyncDoc>, now: DateTime<Utc
         .sync
         .views
         .retain(|id, _| merged.views.contains_key(id));
+    memory
+        .sync
+        .placements
+        .retain(|id, _| merged.placements.contains_key(id));
 
     let changed = apply(memory, &merged, now);
     let current = remote.is_some_and(|doc| doc == merged);
@@ -479,6 +544,48 @@ mod tests {
         assert!(!can_sync(Some("")));
         // Fine-grained tokens send no header.
         assert!(!can_sync(None));
+    }
+
+    #[test]
+    fn a_placement_reaches_another_device_and_putting_it_back_does_too() {
+        let mut desktop = Memory::default();
+        desktop.set_placement("pr1", Some("waiting"), at(NOW));
+        let uploaded = reconcile(&mut desktop, None, at(NOW)).upload.unwrap();
+        assert_eq!(uploaded.placements["pr1"].value.as_deref(), Some("waiting"));
+
+        let mut phone = Memory::default();
+        let result = reconcile(
+            &mut phone,
+            Some(uploaded.clone()),
+            at("2026-10-28T12:01:00Z"),
+        );
+        assert!(result.changed);
+        assert_eq!(phone.placements()["pr1"], "waiting");
+
+        // Put back on the phone: the desktop lets go of it too.
+        phone.set_placement("pr1", None, at("2026-10-28T13:00:00Z"));
+        let upload = reconcile(&mut phone, Some(uploaded), at("2026-10-28T13:00:00Z"))
+            .upload
+            .unwrap();
+        assert_eq!(upload.placements["pr1"].value, None);
+        let result = reconcile(&mut desktop, Some(upload), at("2026-10-28T13:01:00Z"));
+        assert!(result.changed);
+        assert!(desktop.placements().is_empty());
+    }
+
+    #[test]
+    fn a_hand_edited_gist_cannot_put_a_strange_placement_in_memory() {
+        let mut memory = Memory::default();
+        let mut remote = SyncDoc::default();
+        remote.placements.insert(
+            "pr1".into(),
+            Stamped {
+                value: Some("not a section!".into()),
+                at: at("2026-10-27T09:00:00Z"),
+            },
+        );
+        reconcile(&mut memory, Some(remote), at(NOW));
+        assert!(memory.placements().is_empty());
     }
 
     #[test]

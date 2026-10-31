@@ -73,6 +73,18 @@ impl Pinger {
         js(self.0.set_snooze(id, days, now))
     }
 
+    /// Puts a PR in a section by hand, or lets its state decide again when
+    /// `section` is missing.
+    #[wasm_bindgen(js_name = setPlacement)]
+    pub fn set_placement(
+        &mut self,
+        id: &str,
+        section: Option<String>,
+        now: &str,
+    ) -> Result<(), JsError> {
+        js(self.0.set_placement(id, section.as_deref(), now))
+    }
+
     /// The teams, `{ teams: [[org, slug], …] }`, whose members to look up.
     #[wasm_bindgen(js_name = directoryNeeds)]
     pub fn directory_needs(&self, now: &str) -> Result<String, JsError> {

@@ -201,6 +201,19 @@ impl Poller {
         self.sync_wake.notify_one();
     }
 
+    /// Puts a PR in a section by hand, or with `None` lets its state decide again.
+    pub fn set_placement(&self, app: &AppHandle, id: &str, section: Option<&str>) {
+        {
+            let mut memory = self.memory.lock().unwrap();
+            if !memory.set_placement(id, section, Utc::now()) {
+                return;
+            }
+            self.save(&memory);
+        }
+        self.rederive(app);
+        self.sync_wake.notify_one();
+    }
+
     /// Saves the Slack channel for a team. Fails when the link isn't a
     /// Slack link.
     pub fn set_team_channel(&self, app: &AppHandle, team: &str, link: &str) -> Result<(), String> {
@@ -277,11 +290,34 @@ impl Poller {
             .map_err(fetch_error_message)
     }
 
+    /// A PR's description, size and timeline, for its "Details" fold-out.
+    /// Rejects with a message to show.
+    pub async fn pr_details(
+        &self,
+        id: &str,
+        after: Option<&str>,
+    ) -> Result<serde_json::Value, String> {
+        let token = self.search_token().await?;
+        github::fetch_pr_details(&self.http, &token, id, after)
+            .await
+            .map_err(fetch_error_message)
+    }
+
     /// The teams you belong to (`org/slug`), for the statistics' team choice.
     /// Rejects with a message to show.
     pub async fn my_teams(&self) -> Result<Vec<String>, String> {
         let token = self.search_token().await?;
         github::fetch_my_teams(&self.http, &token)
+            .await
+            .map_err(fetch_error_message)
+    }
+
+    /// The repos the statistics can be narrowed to: those you merged in or
+    /// reviewed in over the last `days`. Rejects with a message to show.
+    pub async fn stats_repos(&self, days: i64) -> Result<Vec<String>, String> {
+        let token = self.search_token().await?;
+        let to = Utc::now();
+        github::fetch_stats_repos(&self.http, &token, to - chrono::Duration::days(days), to)
             .await
             .map_err(fetch_error_message)
     }
@@ -293,6 +329,7 @@ impl Poller {
         team: Option<String>,
         days: i64,
         previous: bool,
+        repos: Vec<String>,
     ) -> Result<github::StatsData, String> {
         let token = self.search_token().await?;
         let today = Utc::now().date_naive();
@@ -308,9 +345,15 @@ impl Poller {
                 until: None,
             }
         };
-        github::fetch_stats(&self.http, &token, team.as_deref(), window)
-            .await
-            .map_err(fetch_error_message)
+        github::fetch_stats(
+            &self.http,
+            &token,
+            team.as_deref(),
+            window,
+            &lowercase(repos),
+        )
+        .await
+        .map_err(fetch_error_message)
     }
 
     /// The reviews submitted in the last `days`, with `team` (`org/slug`)
@@ -320,6 +363,7 @@ impl Poller {
         team: Option<String>,
         days: i64,
         previous: bool,
+        repos: Vec<String>,
     ) -> Result<github::ReviewStatsData, String> {
         let token = self.search_token().await?;
         let now = Utc::now();
@@ -330,9 +374,17 @@ impl Poller {
             now
         };
         let from = to - chrono::Duration::days(days);
-        github::fetch_review_stats(&self.http, &token, team.as_deref(), from, to, !previous)
-            .await
-            .map_err(fetch_error_message)
+        github::fetch_review_stats(
+            &self.http,
+            &token,
+            team.as_deref(),
+            from,
+            to,
+            !previous,
+            &lowercase(repos),
+        )
+        .await
+        .map_err(fetch_error_message)
     }
 
     /// Statistics over the builds on PRs you authored, from the Buildkite CLI,
@@ -1366,6 +1418,14 @@ fn tray_text(
         Some(format!("{needs_action} · {needs_review}")),
         format!("Review Pinger: {prs} your action, {reviews} waiting on you"),
     )
+}
+
+/// Repo names compared and searched in lowercase, without repeats.
+fn lowercase(repos: Vec<String>) -> Vec<String> {
+    let mut repos: Vec<String> = repos.iter().map(|repo| repo.to_lowercase()).collect();
+    repos.sort();
+    repos.dedup();
+    repos
 }
 
 #[cfg(test)]

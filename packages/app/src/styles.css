@@ -115,3 +115,25 @@
     @apply rounded-none border-0;
   }
 }
+
+/*
+ * The waterfall's label column is a fixed 280px, more than the popover has
+ * room for, and its info bar and axis count in minutes, which a PR that lives
+ * for days can't use (PrDetails draws its own axis labels).
+ */
+.pr-trace [style*="width: 280px"] {
+  width: 130px !important;
+}
+.pr-trace > div > div:first-child {
+  display: none !important;
+}
+/* Collapsed, not removed: the timeline is sized from the axis's width. */
+.pr-trace > div > div:nth-child(2) > div > div:first-child {
+  max-height: 0;
+  overflow: hidden;
+  border: 0 !important;
+}
+/* Rows here have nothing to expand, so the waterfall's empty chevron slot only pushes the labels right. */
+.pr-trace [role="rowheader"] > span:first-child:empty {
+  display: none;
+}

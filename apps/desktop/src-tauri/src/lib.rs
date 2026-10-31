@@ -154,6 +154,15 @@ async fn search_pull_requests(
 }
 
 #[tauri::command]
+async fn load_pr_details(
+    id: String,
+    after: Option<String>,
+    poller: State<'_, Arc<Poller>>,
+) -> Result<serde_json::Value, String> {
+    poller.pr_details(&id, after.as_deref()).await
+}
+
+#[tauri::command]
 async fn my_teams(poller: State<'_, Arc<Poller>>) -> Result<Vec<String>, String> {
     poller.my_teams().await
 }
@@ -163,9 +172,10 @@ async fn load_stats(
     team: Option<String>,
     days: i64,
     previous: bool,
+    repos: Vec<String>,
     poller: State<'_, Arc<Poller>>,
 ) -> Result<github::StatsData, String> {
-    poller.stats(team, days, previous).await
+    poller.stats(team, days, previous, repos).await
 }
 
 #[tauri::command]
@@ -173,9 +183,18 @@ async fn load_review_stats(
     team: Option<String>,
     days: i64,
     previous: bool,
+    repos: Vec<String>,
     poller: State<'_, Arc<Poller>>,
 ) -> Result<github::ReviewStatsData, String> {
-    poller.review_stats(team, days, previous).await
+    poller.review_stats(team, days, previous, repos).await
+}
+
+#[tauri::command]
+async fn load_stats_repos(
+    days: i64,
+    poller: State<'_, Arc<Poller>>,
+) -> Result<Vec<String>, String> {
+    poller.stats_repos(days).await
 }
 
 /// Statistics over the builds on PRs you authored, from the Buildkite CLI.
@@ -308,6 +327,16 @@ fn snooze(app: AppHandle, poller: State<Arc<Poller>>, id: String, days: u32) {
 }
 
 #[tauri::command]
+fn place_pull_request(
+    app: AppHandle,
+    poller: State<Arc<Poller>>,
+    id: String,
+    section: Option<String>,
+) {
+    poller.set_placement(&app, &id, section.as_deref());
+}
+
+#[tauri::command]
 fn unsnooze(app: AppHandle, poller: State<Arc<Poller>>, id: String) {
     poller.set_snooze(&app, &id, None);
 }
@@ -364,6 +393,8 @@ pub fn run() {
             my_teams,
             load_stats,
             load_review_stats,
+            load_stats_repos,
+            load_pr_details,
             load_ci_stats,
             set_buildkite_pipeline,
             add_view,
@@ -378,6 +409,7 @@ pub fn run() {
             set_auth_source,
             snooze,
             unsnooze,
+            place_pull_request,
             get_autostart,
             set_autostart,
             updater::pending_update,
