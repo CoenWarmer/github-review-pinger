@@ -1,4 +1,29 @@
-import type { Fetched, Progress, RawPullRequest } from "./github.ts";
+import {
+  needsRequiredChecks,
+  type Fetched,
+  type Progress,
+  type RawPullRequest,
+  type RequiredCheck,
+} from "./github.ts";
+
+/**
+ * PRs whose checks fail, so which are required decides if that counts, get
+ * the required checks `known` from an earlier fetch while the real ones are
+ * still being looked up. Without them a PR with only an optional check
+ * failing flashes "CI failing" on every start, before the lookup says
+ * otherwise. They're a guess, replaced as soon as the lookup is in.
+ */
+export function withKnownRequiredChecks(
+  fresh: RawPullRequest[],
+  known: ReadonlyMap<string, RequiredCheck[]>,
+): RawPullRequest[] {
+  return fresh.map((pr) => {
+    const checks = known.get(pr.id);
+    return pr.requiredChecks == null && checks && needsRequiredChecks(pr)
+      ? { ...pr, requiredChecks: checks }
+      : pr;
+  });
+}
 
 /** A fetch with nothing in it yet, to build up from the first phase of a first load. */
 export function emptyFetched(): Fetched {
