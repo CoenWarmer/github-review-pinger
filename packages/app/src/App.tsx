@@ -187,7 +187,10 @@ function Section<
             )}
             {heading}
           </CollapsibleTrigger>
-          {rows.length > 0 && <SortMenu value={sort} onChange={setSort} />}
+          {/* Hidden, not left out, when empty, so the bar keeps the others' height. */}
+          <span className={cn(rows.length === 0 && "invisible")}>
+            <SortMenu value={sort} onChange={setSort} />
+          </span>
         </h2>
         <CollapsibleContent asChild>
           <ul className="m-0 list-none p-0">
