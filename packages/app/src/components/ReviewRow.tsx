@@ -14,6 +14,7 @@ import {
 } from "./PrRow";
 import { cn } from "@/lib/utils";
 import { PrContextMenu } from "./PrContextMenu";
+import { PrDetails } from "./PrDetails";
 import { UndoPlacement, useDraggableRow } from "./Placement";
 import { RefreshIndicator } from "./RefreshIndicator";
 
@@ -29,6 +30,7 @@ export function ReviewRow({
 }) {
   const visitPr = useVisitPr();
   const drag = useDraggableRow(pr.id, pr.group, draggable);
+  const [detailsOpen, setDetailsOpen] = useState(false);
   const [askingTeam, setAskingTeam] = useState<string | null>(null);
   const waiting = pr.waitingSince && `waiting ${elapsed(pr.waitingSince, now)}`;
   const reviewed = pr.reviewedAt && `reviewed ${elapsed(pr.reviewedAt, now)} ago`;
@@ -83,8 +85,14 @@ export function ReviewRow({
         </button>
         {askingTeam && <TeamChannelForm team={askingTeam} onDone={() => setAskingTeam(null)} />}
         <RefreshIndicator id={pr.id} />
-        {pr.group !== "draft" && <RowActions pr={pr} />}
+        <RowActions
+          pr={pr}
+          snooze={pr.group !== "draft"}
+          detailsOpen={detailsOpen}
+          onToggleDetails={() => setDetailsOpen((open) => !open)}
+        />
         {pr.placed && <UndoPlacement id={pr.id} />}
+        {detailsOpen && <PrDetails id={pr.id} url={pr.url} now={now} />}
       </li>
     </PrContextMenu>
   );

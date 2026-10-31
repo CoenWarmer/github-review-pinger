@@ -133,6 +133,9 @@ class FakeGithub implements Github {
   async fetchReviewStats() {
     return { reviewsByMe: 0, reviewsByMeInTeamOrg: null, teamMemberCount: 0, teamMemberReviews: null };
   }
+  async fetchPrDetails() {
+    return null;
+  }
   async fetchStatsRepos() {
     return [];
   }

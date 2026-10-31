@@ -290,6 +290,15 @@ impl Poller {
             .map_err(fetch_error_message)
     }
 
+    /// A PR's description, size and timeline, for its "Details" fold-out.
+    /// Rejects with a message to show.
+    pub async fn pr_details(&self, id: &str) -> Result<serde_json::Value, String> {
+        let token = self.search_token().await?;
+        github::fetch_pr_details(&self.http, &token, id)
+            .await
+            .map_err(fetch_error_message)
+    }
+
     /// The teams you belong to (`org/slug`), for the statistics' team choice.
     /// Rejects with a message to show.
     pub async fn my_teams(&self) -> Result<Vec<String>, String> {

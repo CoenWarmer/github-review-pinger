@@ -1,6 +1,7 @@
 import { createContext, useContext, type ReactNode } from "react";
 import type {
   CiStats,
+  PrDetailsData,
   FoundPr,
   ReviewStatsData,
   SectionPref,
@@ -90,6 +91,12 @@ export interface Platform {
    * search qualifiers). Rejects with a message to show.
    */
   searchPullRequests(text: string): Promise<FoundPr[]>;
+
+  /**
+   * A PR's description, size and timeline as GitHub answers, for its
+   * "Details" fold-out; `null` for a PR that's gone. Rejects with a message to show.
+   */
+  loadPrDetails(id: string): Promise<PrDetailsData | null>;
 
   /** The teams you belong to (`org/slug`). Rejects with a message to show. */
   listTeams(): Promise<string[]>;

@@ -5,6 +5,7 @@
 
 import type {
   MergedPr,
+  PrDetailsData,
   Problem,
   PullRequest,
   ReviewRequest,
@@ -674,6 +675,16 @@ export class Engine {
     if (!this.github) throw "There's no token to search with.";
     try {
       return await this.github.searchPullRequests(text);
+    } catch (e) {
+      throw e instanceof Error ? e.message : String(e);
+    }
+  }
+
+  /** A PR's description, size and timeline, for its "Details" fold-out. Rejects with a message to show. */
+  async loadPrDetails(id: string): Promise<PrDetailsData | null> {
+    if (!this.github) throw "There's no token to load details with.";
+    try {
+      return await this.github.fetchPrDetails(id);
     } catch (e) {
       throw e instanceof Error ? e.message : String(e);
     }

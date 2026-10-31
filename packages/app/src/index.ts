@@ -6,6 +6,8 @@ export type {
   CardNotification,
   CiStats,
   FoundPr,
+  PrDetailsData,
+  DetailReviewer,
   ReviewStatsData,
   StatsData,
   MergedPr,

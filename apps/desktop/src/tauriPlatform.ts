@@ -64,6 +64,7 @@ export const tauriPlatform: Platform = {
   loadMoreMerged: () => invoke("load_more_merged"),
   searchPullRequests: (text) => invoke("search_pull_requests", { text }),
   listTeams: () => invoke("my_teams"),
+  loadPrDetails: (id) => invoke("load_pr_details", { id }),
   loadStats: (team, days, previous = false, repos = []) =>
     invoke("load_stats", { team, days, previous, repos }),
   loadCiStats: (days, previous = false) => invoke("load_ci_stats", { days, previous }),

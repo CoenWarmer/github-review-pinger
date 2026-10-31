@@ -3,6 +3,8 @@
 // concurrent batches, then fetch the expensive merge state only for the
 // viewer's own PRs that could be ready to merge.
 
+import type { PrDetailsData } from "@review-pinger/app";
+
 const ENDPOINT = "https://api.github.com/graphql";
 const REST = "https://api.github.com";
 const MAX_SEARCH_PAGES = 10;
@@ -35,6 +37,7 @@ export interface Queries {
   mergeState: string;
   mergedSearch: string;
   prSearch: string;
+  prDetails: string;
   statsMerged: string;
 }
 
@@ -317,6 +320,8 @@ export interface Github {
   fetchStatsRepos(from: string, to: string): Promise<string[]>;
   /** The teams you belong to, as `org/slug`. Needs `read:org`. */
   fetchMyTeams(): Promise<string[]>;
+  /** One PR's description, size and timeline as GitHub answers, for the "Details" fold-out; null for a PR that's gone. */
+  fetchPrDetails(id: string): Promise<PrDetailsData | null>;
   /**
    * The statistics for the merged-date `range` (GitHub's `merged:` syntax,
    * such as `>=2026-10-01` or `2026-08-30..2026-09-28`), with `team`
@@ -752,6 +757,11 @@ export function createGithub({
           state: pr.state === "MERGED" ? "merged" : pr.state === "CLOSED" ? "closed" : pr.isDraft ? "draft" : "open",
           updatedAt: pr.updatedAt,
         }));
+    },
+
+    async fetchPrDetails(id) {
+      const reply = await request<{ node: PrDetailsData | null }>(queries.prDetails, { id });
+      return reply.data.node;
     },
 
     async fetchMyTeams() {

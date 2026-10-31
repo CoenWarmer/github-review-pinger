@@ -55,6 +55,7 @@ export function createWebPlatform(engine: Engine): Platform {
     loadMoreMerged: () => engine.loadMoreMerged(),
     searchPullRequests: (text) => engine.searchPullRequests(text),
     listTeams: () => engine.listTeams(),
+    loadPrDetails: (id) => engine.loadPrDetails(id),
     loadStats: (team, days, previous, repos) => engine.loadStats(team, days, previous, repos),
     loadReviewStats: (team, days, previous, repos) =>
       engine.loadReviewStats(team, days, previous, repos),

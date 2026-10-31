@@ -1,0 +1,76 @@
+# What the "Details" fold-out of a PR shows: its size, description, and when
+# things happened. Asked for one PR at a time, when it's opened, so the
+# polling query doesn't pay for the description or the timeline.
+#
+# The events that happen early (ready for review) and the activity that goes
+# on (reviews, comments) are two selections, so a long PR's many comments
+# can't push its first events out.
+query PrDetails($id: ID!) {
+  node(id: $id) {
+    ... on PullRequest {
+      body
+      additions
+      deletions
+      changedFiles
+      createdAt
+      mergedAt
+      closedAt
+      isDraft
+      author {
+        login
+      }
+      # Pending requests only: GitHub drops the code-owner flag with the request.
+      reviewRequests(first: 50) {
+        nodes {
+          asCodeOwner
+          requestedReviewer {
+            __typename
+            ... on User {
+              login
+            }
+            ... on Team {
+              slug
+              organization {
+                login
+              }
+            }
+          }
+        }
+      }
+      events: timelineItems(first: 50, itemTypes: [READY_FOR_REVIEW_EVENT, CONVERT_TO_DRAFT_EVENT]) {
+        nodes {
+          __typename
+          ... on ReadyForReviewEvent {
+            createdAt
+          }
+          ... on ConvertToDraftEvent {
+            createdAt
+          }
+        }
+      }
+      activity: timelineItems(last: 100, itemTypes: [PULL_REQUEST_REVIEW, ISSUE_COMMENT]) {
+        nodes {
+          __typename
+          ... on IssueComment {
+            createdAt
+            author {
+              login
+            }
+          }
+          ... on PullRequestReview {
+            state
+            submittedAt
+            author {
+              login
+            }
+            comments(first: 30) {
+              nodes {
+                createdAt
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

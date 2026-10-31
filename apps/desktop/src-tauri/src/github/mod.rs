@@ -1,7 +1,7 @@
 pub use review_pinger_core::github::types;
 use review_pinger_core::github::{
     DETAILS_QUERY, MAX_CHECK_PAGES, MERGE_STATE_QUERY, MERGED_QUERY, MERGED_SEARCH,
-    MERGED_SEARCH_QUERY, PR_SEARCH_QUERY, RequiredChecksReply, SEARCH_QUERY, STATS_MERGED_QUERY,
+    MERGED_SEARCH_QUERY, PR_DETAILS_QUERY, PR_SEARCH_QUERY, RequiredChecksReply, SEARCH_QUERY, STATS_MERGED_QUERY,
     needs_required_checks, required_checks_query,
 };
 
@@ -392,6 +392,18 @@ pub async fn search_pull_requests(
         .flatten()
         .map(Into::into)
         .collect())
+}
+
+/// One PR's description, size and timeline as GitHub answers, for the
+/// "Details" fold-out, which shapes it. `Null` for a PR that's gone.
+pub async fn fetch_pr_details(
+    http: &reqwest::Client,
+    token: &str,
+    id: &str,
+) -> Result<Value, FetchError> {
+    let reply: Response<Value> =
+        request(http, token, PR_DETAILS_QUERY, json!({ "id": id })).await?;
+    Ok(reply.data["node"].clone())
 }
 
 #[derive(Deserialize)]

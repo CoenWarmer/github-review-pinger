@@ -154,6 +154,14 @@ async fn search_pull_requests(
 }
 
 #[tauri::command]
+async fn load_pr_details(
+    id: String,
+    poller: State<'_, Arc<Poller>>,
+) -> Result<serde_json::Value, String> {
+    poller.pr_details(&id).await
+}
+
+#[tauri::command]
 async fn my_teams(poller: State<'_, Arc<Poller>>) -> Result<Vec<String>, String> {
     poller.my_teams().await
 }
@@ -385,6 +393,7 @@ pub fn run() {
             load_stats,
             load_review_stats,
             load_stats_repos,
+            load_pr_details,
             load_ci_stats,
             set_buildkite_pipeline,
             add_view,

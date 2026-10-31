@@ -12,7 +12,7 @@ import {
   type RawPullRequest,
 } from "./github.ts";
 
-const queries: Queries = { search: "SEARCH", details: "DETAILS", mergeState: "MERGE", mergedSearch: "MERGED", prSearch: "PRSEARCH", statsMerged: "STATS" };
+const queries: Queries = { search: "SEARCH", details: "DETAILS", mergeState: "MERGE", mergedSearch: "MERGED", prSearch: "PRSEARCH", prDetails: "PRDETAILS", statsMerged: "STATS" };
 
 type Handler = (body: {
   query: string;
@@ -445,6 +445,18 @@ describe("statistics", () => {
     assert.equal(teamScope("o", []), "org:o");
     assert.equal(teamScope("o", ["o/a", "x/b", "O/c"]), "repo:o/a repo:O/c");
     assert.equal(teamScope("y", ["o/a"]), null);
+  });
+
+  it("asks for one PR's details by id and hands back the node", async () => {
+    const seen: Record<string, unknown>[] = [];
+    const gh = github(({ query, variables }) => {
+      assert.equal(query, "PRDETAILS");
+      seen.push(variables);
+      return reply({ node: { body: "hi", additions: 1, deletions: 2, changedFiles: 3 } });
+    });
+    const details = await gh.fetchPrDetails("PR_1");
+    assert.deepEqual(seen, [{ id: "PR_1" }]);
+    assert.equal(details?.body, "hi");
   });
 
   it("lists the repos you merged or reviewed in, lowercase and once each", async () => {

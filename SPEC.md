@@ -199,6 +199,19 @@ bottom:
    days, newest first, with a "Load more" button that fetches 5 further
    (older) ones at a time.
 
+Each row has a **Details** toggle, which folds out below it: lines added and
+deleted and files changed, a timeline, and the first lines of the description
+as markdown (no raw HTML or images; links open outside the app). The timeline
+(the `react-otel-trace-waterfall` component) has a row for the PR, from when it
+was opened to now or its merge, with markers for opening, being marked ready
+for review, going back to draft and merging, and below it a row per code owner
+and per other reviewer who has commented or reviewed (up to six), from when the
+PR was ready, with a marker for each comment and for each approval or change
+request. Code owners still being waited on run to now. GitHub only says who is
+a code owner for review requests still pending, so one who has reviewed since
+shows as an ordinary reviewer. Details are fetched when a row is folded out,
+not with the poll, and kept for two minutes.
+
 A PR can be **dragged into another section** (of My PRs, or of Review
 Requests), which keeps it there whatever its state says. Sections that are
 empty still show while dragging, so they can be dropped on; merged PRs and
