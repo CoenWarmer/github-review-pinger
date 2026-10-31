@@ -6,7 +6,7 @@ use review_pinger_core::github::{
 };
 
 use std::collections::{HashMap, HashSet};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use chrono::{DateTime, NaiveDate, Utc};
 use futures_util::{StreamExt, TryStreamExt, future, stream};
@@ -109,6 +109,13 @@ pub async fn fetch_open_pull_requests(
     plan: &Plan,
     on_progress: Option<&(dyn Fn(Progress<'_>) + Send + Sync)>,
 ) -> Result<Fetched, FetchError> {
+    let started = Instant::now();
+    let lap = |what: String| {
+        log::info!(
+            "refresh timing +{}ms: {what}",
+            started.elapsed().as_millis()
+        )
+    };
     let reviewed = format!(
         "is:pr is:open reviewed-by:@me -author:@me archived:false updated:>={reviewed_since}"
     );
@@ -124,18 +131,24 @@ pub async fn fetch_open_pull_requests(
             .iter()
             .map(|(_, query)| search_ids(http, token, query)),
     );
-    let searches = future::try_join4(
-        authored_search,
-        search_ids(http, token, REVIEW_REQUESTED),
-        search_ids(http, token, &reviewed),
-        view_searches,
-    );
+    let searches = async {
+        let found = future::try_join4(
+            authored_search,
+            search_ids(http, token, REVIEW_REQUESTED),
+            search_ids(http, token, &reviewed),
+            view_searches,
+        )
+        .await;
+        lap("searches returned".into());
+        found
+    };
     let first = async {
         if plan.first.is_empty() {
             return Ok(Vec::new());
         }
         let fresh = fetch_details(http, token, &plan.first).await?;
-        fetch_part(http, token, fresh, &plan.own, |fresh| {
+        lap(format!("phase 1 details in ({} PRs)", fresh.len()));
+        fetch_part(http, token, fresh, &plan.own, started, "phase 1", |fresh| {
             if let Some(show) = on_progress {
                 show(Progress {
                     fresh,
@@ -211,11 +224,12 @@ pub async fn fetch_open_pull_requests(
     // slots it leaves idle instead of waiting for all of it.
     let limiter = Semaphore::new(MAX_CONCURRENT);
     let (own, viewer_ref) = (&authored_ids, &viewer);
-    let phase = |ids: Vec<String>| {
+    let phase = |name: &'static str, ids: Vec<String>| {
         let (limiter, found) = (&limiter, &found);
         async move {
             let fresh = details_sharing(http, token, &ids, limiter).await?;
-            fetch_part(http, token, fresh, own, |fresh| {
+            lap(format!("{name} details in ({} PRs)", fresh.len()));
+            fetch_part(http, token, fresh, own, started, name, |fresh| {
                 if let Some(show) = on_progress {
                     show(Progress {
                         fresh,
@@ -228,7 +242,9 @@ pub async fn fetch_open_pull_requests(
             .await
         }
     };
-    let (tab, other) = future::try_join(phase(tab_ids), phase(other_ids)).await?;
+    let (tab, other) =
+        future::try_join(phase("phase 2", tab_ids), phase("phase 3", other_ids)).await?;
+    lap("all phases done".into());
     let by_id: HashMap<String, PullRequest> = first
         .into_iter()
         .chain(tab)
@@ -282,17 +298,28 @@ async fn fetch_part(
     token: &str,
     pull_requests: Vec<PullRequest>,
     own: &HashSet<String>,
+    started: Instant,
+    phase: &str,
     show: impl FnOnce(Vec<PullRequest>),
 ) -> Result<Vec<PullRequest>, FetchError> {
+    let lap = |what: &str| {
+        log::info!(
+            "refresh timing +{}ms: {phase} {what}",
+            started.elapsed().as_millis()
+        )
+    };
     let (mut mine, others): (Vec<_>, Vec<_>) = pull_requests
         .into_iter()
         .partition(|pr| own.contains(&pr.id));
     // Before the first paint, so a red badge doesn't flash and turn green.
     add_required_checks(http, token, &mut mine).await;
+    lap(&format!("required checks done ({} own)", mine.len()));
     if !mine.is_empty() || !others.is_empty() {
         show(mine.iter().chain(&others).cloned().collect());
+        lap("shown");
     }
     add_merge_states(http, token, &mut mine).await?;
+    lap("merge states done");
     mine.extend(others);
     Ok(mine)
 }

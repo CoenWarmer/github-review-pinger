@@ -1134,7 +1134,12 @@ async fn fetch_and_sync(
     reviewed_since: NaiveDate,
     first_load: bool,
 ) -> Result<Fetched, Problem> {
+    let resolving = std::time::Instant::now();
     let token = resolve_token(poller).await?;
+    log::info!(
+        "refresh timing: token resolved in {}ms",
+        resolving.elapsed().as_millis()
+    );
     // The last fetch with each phase patched in, for display only.
     let working: Mutex<Option<Fetched>> = Mutex::new(poller.latest.lock().unwrap().clone());
     let show = |progress: github::Progress<'_>| {
@@ -1273,6 +1278,12 @@ async fn fetch(
             reviews_tab: state.reviews_tab,
         }
     };
+    log::info!(
+        "refresh timing: starting; phase 1 has {} PRs ({} own), reviews tab: {}",
+        plan.first.len(),
+        plan.own.len(),
+        plan.reviews_tab
+    );
     let fetched = github::fetch_open_pull_requests(
         &poller.http,
         &token.value,
