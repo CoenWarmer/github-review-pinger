@@ -125,7 +125,9 @@ export function useReportViewState(tab: string): (section: string, ids: string[]
   useEffect(send, [send, tab]);
   useEffect(
     () => () => {
+      // Reset too, or a remount (StrictMode does one) would think a send is still pending.
       if (scheduled.current) clearTimeout(scheduled.current);
+      scheduled.current = null;
     },
     [],
   );
