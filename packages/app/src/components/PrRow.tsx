@@ -196,6 +196,13 @@ export function PrRow({ pr, now }: { pr: PullRequest; now: number }) {
                 }`
               : undefined,
         },
+        // "Ready to merge" already implies green checks.
+        pr.checks === "passing" &&
+          !pr.actions.includes("readyToMerge") && {
+            key: "checksPassed",
+            label: "Checks passed",
+            variant: "success" as const,
+          },
         pr.autoMerge && {
           key: "autoMerge",
           label: "Auto-merge",
