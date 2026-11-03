@@ -619,7 +619,7 @@ fn requested_teams(pr: &PullRequest) -> BTreeSet<String> {
         .collect()
 }
 
-fn code_owner_teams(pr: &PullRequest, people: &People) -> Vec<CodeOwnerTeam> {
+pub(crate) fn code_owner_teams(pr: &PullRequest, people: &People) -> Vec<CodeOwnerTeam> {
     let org = pr
         .repository
         .name_with_owner

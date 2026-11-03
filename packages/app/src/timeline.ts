@@ -1,4 +1,4 @@
-import type { CodeOwnerTeam, PullRequest } from "./types";
+import type { CodeOwnerTeam, PullRequest, ReviewRequest } from "./types";
 
 const DAY_MS = 24 * 60 * 60_000;
 /** The chart is never narrower than this, so a phone scrolls it rather than squashes it. */
@@ -37,7 +37,7 @@ export interface Timeline {
 }
 
 /** Older saved lists don't have `codeOwnerTeams`, so fall back to the pending team chips. */
-function teamsOf(pr: PullRequest): CodeOwnerTeam[] {
+function teamsOf(pr: PullRequest | ReviewRequest): CodeOwnerTeam[] {
   return (
     pr.codeOwnerTeams ??
     pr.reviewers.flatMap((reviewer) =>
@@ -61,8 +61,8 @@ function dayTicks(start: number, end: number, stepDays: number): number[] {
   return ticks;
 }
 
-/** Your open PRs, newest first, each with the teams that own what it changes. */
-export function buildTimeline(prs: PullRequest[], now: number): Timeline {
+/** Open PRs, newest first, each with the teams that own what it changes. */
+export function buildTimeline(prs: (PullRequest | ReviewRequest)[], now: number): Timeline {
   const oldest = Math.min(now, ...prs.map((pr) => Date.parse(pr.openSince)));
   // A little room before the oldest bar. The other end is now, at the chart's edge.
   const start = oldest - Math.max((now - oldest) * 0.02, DAY_MS / 4);

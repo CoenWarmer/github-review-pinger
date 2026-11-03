@@ -275,6 +275,9 @@ export interface ReviewRequest {
   lastActivity: string;
   snoozedUntil: string | null;
   reviewers: Reviewer[];
+  /** The teams that own what it changes, as far as its requests say. Missing
+   * in lists saved before it existed. */
+  codeOwnerTeams?: CodeOwnerTeam[];
 }
 
 export type Problem =

@@ -1,9 +1,10 @@
 import { useLayoutEffect, useMemo, useRef } from "react";
 import { cn } from "@/lib/utils";
 import { elapsed } from "../format";
+import { useReportOpen } from "../hooks";
 import { usePlatform } from "../platform";
 import { buildTimeline, type Timeline as Chart, type TimelinePr, type TimelineTeam } from "../timeline";
-import type { PullRequest } from "../types";
+import type { PullRequest, ReviewRequest } from "../types";
 
 /** Width of the column of titles and team names. */
 const NAME_COLUMN = 280;
@@ -192,13 +193,25 @@ function Scroller({ chart, now }: { chart: Chart; now: number }) {
   );
 }
 
-/** Your open PRs as bars, each with the teams that own what it changes underneath. */
-export function Timeline({ pullRequests, now }: { pullRequests: PullRequest[]; now: number }) {
+/** Open PRs as bars, each with the teams that own what it changes underneath. */
+export function Timeline({
+  pullRequests,
+  emptyText,
+  now,
+}: {
+  pullRequests: (PullRequest | ReviewRequest)[];
+  emptyText: string;
+  now: number;
+}) {
   const chart = useMemo(() => buildTimeline(pullRequests, now), [pullRequests, now]);
+  // These are on screen, so a refresh should fetch them first, as with an open section.
+  useReportOpen(
+    "timeline",
+    true,
+    chart.prs.map((pr) => pr.id),
+  );
   if (chart.prs.length === 0) {
-    return (
-      <p className="m-0 px-3 py-6 text-center text-muted-foreground">No open pull requests.</p>
-    );
+    return <p className="m-0 px-3 py-6 text-center text-muted-foreground">{emptyText}</p>;
   }
   return (
     <div className="flex h-full flex-col">

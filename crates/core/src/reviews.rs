@@ -58,6 +58,8 @@ pub struct ReviewView {
     pub snoozed_until: Option<DateTime<Utc>>,
     /// Everyone but the viewer and the author.
     pub reviewers: Vec<Reviewer>,
+    /// The teams that own what this PR changes, as far as its requests say.
+    pub code_owner_teams: Vec<prs::CodeOwnerTeam>,
 }
 
 impl ReviewView {
@@ -150,6 +152,7 @@ fn view(pr: &PullRequest, viewer: &str, rules: &Rules, now: DateTime<Utc>) -> Op
         last_activity: prs::last_activity(pr, &people, open_since),
         snoozed_until,
         reviewers,
+        code_owner_teams: prs::code_owner_teams(pr, &people),
     })
 }
 
@@ -458,6 +461,22 @@ mod tests {
         };
         let natural = derive(&[pr(json!({}))], ME, &rules, at(NOW)).remove(0);
         assert!(!natural.placed);
+    }
+
+    #[test]
+    fn lists_the_code_owning_teams() {
+        let view = derive_one(json!({
+            "reviewRequests": { "nodes": [
+                { "asCodeOwner": true, "requestedReviewer": team("core") },
+            ] },
+        }))
+        .unwrap();
+        let owners: Vec<&str> = view
+            .code_owner_teams
+            .iter()
+            .map(|owner| owner.team.as_str())
+            .collect();
+        assert_eq!(owners, ["o/core"]);
     }
 
     #[test]

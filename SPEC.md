@@ -173,8 +173,8 @@ both are zero there is no title at all.
 ## Popover
 
 **My PRs** and **Review Requests**, each with a count badge (the numbers in the
-tray), then **Timeline**, **Statistics** and **Settings**, shown as icons at the
-end of the tab bar. The tab choice is not remembered between openings.
+tray), then **Statistics** and **Settings**, shown as icons at the end of the tab
+bar. The tab choice is not remembered between openings.
 
 ### My PRs
 
@@ -291,14 +291,18 @@ order above), Oldest first and Newest first (by open clock), Recently active,
 and Repository. The choice is per section and remembered across restarts in
 the webview's local storage; the icon is highlighted when it isn't Default.
 
-### Timeline
+### Timeline view
 
-A Gantt chart of your own open PRs, the ones in My PRs apart from Merged and
-custom views.
-While this tab is showing, the desktop popover widens to 800 px (animated over
-about 200 ms, or at once when the system asks for reduced motion), staying
-centered under the tray icon as far as the screen allows, and it narrows again
-on leaving the tab. The web app's page keeps whatever size it has.
+My PRs and Review Requests each have a toggle beside the filter, with icons for
+a list view (the default) and a timeline view. The choice is shared by both tabs.
+
+The timeline view is a Gantt chart of the tab's open PRs, leaving out My PRs'
+Merged section and custom views. While it's showing, the desktop popover widens
+to 800 px (animated over about 200 ms, or at once when the system asks for
+reduced motion), staying centered under the tray icon as far as the screen
+allows, and it narrows again on returning to the list or going to another tab.
+The web app's page keeps whatever size it has. The filter and repo picker narrow
+the chart, without the list's search of GitHub.
 
 - **Rows**: one per PR, newest first, with its code-owning teams
   underneath, alphabetically. GitHub only flags code owners on pending requests,

@@ -435,6 +435,7 @@ mod tests {
             last_activity: at(TUESDAY),
             snoozed_until: None,
             reviewers: Vec::new(),
+            code_owner_teams: Vec::new(),
         }
     }
 
