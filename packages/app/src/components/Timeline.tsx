@@ -1,5 +1,5 @@
 import { useLayoutEffect, useMemo, useRef, useState, type PointerEvent, type ReactNode } from "react";
-import { Check, Circle, ZoomOut } from "lucide-react";
+import { Check, Circle, Maximize2, ZoomOut } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { elapsed } from "../format";
@@ -7,7 +7,9 @@ import { useReportOpen } from "../hooks";
 import { usePlatform } from "../platform";
 import {
   buildTimeline,
+  FIT_ALL,
   formatDuration,
+  zoomOut,
   zoomRange,
   type Timeline as Chart,
   type TimelinePr,
@@ -241,6 +243,15 @@ function BarTip({ tip }: { tip: Tip }) {
   );
 }
 
+/** The stretch of time the axis shows. */
+function axisLabel(chart: Chart): string {
+  const end = chart.live ? "now" : chart.hourly ? tickLabel(chart.to, true) : shortDate(chart.to);
+  const start = chart.hourly
+    ? `${shortDate(chart.from)} ${tickLabel(chart.from, true)}`
+    : shortDate(chart.from);
+  return `${start} – ${end}`;
+}
+
 /** A bar's tooltip, at the pointer. */
 interface Tip {
   text: string;
@@ -436,19 +447,36 @@ export function Timeline({
   return (
     <div className="flex h-full flex-col">
       <Legend>
-        {range ? (
-          <span className="ml-auto flex items-center gap-1.5 tabular-nums">
-            {chart.hourly
-              ? `${shortDate(range.from)} ${tickLabel(range.from, true)} – ${tickLabel(range.to, true)}`
-              : `${shortDate(range.from)} – ${shortDate(range.to)}`}
+        <span className="ml-auto flex items-center gap-1 tabular-nums">
+          <span className="mr-1">{axisLabel(chart)}</span>
+          <Button
+            type="button"
+            variant="outline"
+            size="icon-xs"
+            aria-label="Zoom out"
+            title="Zoom out"
+            disabled={!chart.canZoomOut}
+            onClick={() => setRange(zoomOut(chart))}
+          >
+            <ZoomOut />
+          </Button>
+          <Button
+            type="button"
+            variant="outline"
+            size="icon-xs"
+            aria-label="Fit all pull requests"
+            title="Fit all pull requests"
+            disabled={!chart.canZoomOut}
+            onClick={() => setRange(FIT_ALL)}
+          >
+            <Maximize2 />
+          </Button>
+          {range && (
             <Button type="button" variant="outline" size="xs" onClick={() => setRange(null)}>
-              <ZoomOut />
-              Reset zoom
+              7 days
             </Button>
-          </span>
-        ) : (
-          <span className="ml-auto">Drag across the bars to zoom</span>
-        )}
+          )}
+        </span>
       </Legend>
       <Scroller chart={chart} now={now} range={range} onZoom={setRange} />
     </div>

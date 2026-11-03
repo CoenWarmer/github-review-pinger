@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { PullRequest } from "@review-pinger/app";
-import { buildTimeline, formatDuration, zoomRange } from "../../../packages/app/src/timeline.ts";
+import { buildTimeline, FIT_ALL, formatDuration, zoomOut, zoomRange } from "../../../packages/app/src/timeline.ts";
 
 const NOW = Date.parse("2026-10-10T12:00:00Z");
 const DAY = 24 * 60 * 60_000;
@@ -37,7 +37,7 @@ const owner = (
 
 describe("buildTimeline", () => {
   it("is empty with no pull requests", () => {
-    const chart = buildTimeline([], NOW);
+    const chart = buildTimeline([], NOW, FIT_ALL);
     assert.deepEqual(chart.prs, []);
     assert.ok(Number.isFinite(chart.trackPx));
   });
@@ -60,7 +60,7 @@ describe("buildTimeline", () => {
   });
 
   it("ends the axis at now, so a pending team's bar reaches the edge", () => {
-    const chart = buildTimeline([pr("a", 200, [owner("o/waiting", 4)])], NOW);
+    const chart = buildTimeline([pr("a", 200, [owner("o/waiting", 4)])], NOW, FIT_ALL);
     assert.equal(chart.prs[0].teams[0].end, 1);
   });
 
@@ -88,21 +88,21 @@ describe("buildTimeline", () => {
 
   it("says which PRs are approved, but never a draft", () => {
     const approved = (group: string) =>
-      buildTimeline([{ ...pr("a", 1, [], group), approved: true } as PullRequest], NOW).prs[0].approved;
+      buildTimeline([{ ...pr("a", 1, [], group), approved: true } as PullRequest], NOW, FIT_ALL).prs[0].approved;
     assert.equal(approved("approved"), true);
     assert.equal(approved("draft"), false);
-    assert.equal(buildTimeline([pr("a", 1, [])], NOW).prs[0].approved, false);
+    assert.equal(buildTimeline([pr("a", 1, [])], NOW, FIT_ALL).prs[0].approved, false);
   });
 
   it("keeps a team with no known response to a mark where it was requested", () => {
-    const chart = buildTimeline([pr("a", 10, [owner("o/gone", 5, false)])], NOW);
+    const chart = buildTimeline([pr("a", 10, [owner("o/gone", 5, false)])], NOW, FIT_ALL);
     const [gone] = chart.prs[0].teams;
     assert.equal(gone.start, gone.end);
     assert.ok(gone.start > chart.prs[0].start);
   });
 
   it("starts a team no earlier than the PR, or at it when the request isn't known", () => {
-    const chart = buildTimeline([pr("a", 5, [owner("o/early", 9), owner("o/unknown", null)])], NOW);
+    const chart = buildTimeline([pr("a", 5, [owner("o/early", 9), owner("o/unknown", null)])], NOW, FIT_ALL);
     const [row] = chart.prs;
     assert.equal(row.teams[0].start, row.start);
     assert.equal(row.teams[1].start, row.start);
@@ -125,11 +125,11 @@ describe("buildTimeline", () => {
       ]);
 
     it("is one open stretch for a PR that was never a draft", () => {
-      assert.deepEqual(shape(buildTimeline([history(5, [])], NOW)), [["open", 5]]);
+      assert.deepEqual(shape(buildTimeline([history(5, [])], NOW, FIT_ALL)), [["open", 5]]);
     });
 
     it("starts with a draft stretch for one opened as a draft", () => {
-      const chart = buildTimeline([history(10, [[10, 4]])], NOW);
+      const chart = buildTimeline([history(10, [[10, 4]])], NOW, FIT_ALL);
       assert.deepEqual(shape(chart), [
         ["draft", 6],
         ["open", 4],
@@ -138,7 +138,7 @@ describe("buildTimeline", () => {
     });
 
     it("shows one that went back to draft for a while", () => {
-      assert.deepEqual(shape(buildTimeline([history(10, [[6, 3]])], NOW)), [
+      assert.deepEqual(shape(buildTimeline([history(10, [[6, 3]])], NOW, FIT_ALL)), [
         ["open", 4],
         ["draft", 3],
         ["open", 3],
@@ -160,7 +160,7 @@ describe("buildTimeline", () => {
     });
 
     it("runs the whole bar and axis from when it was created", () => {
-      const chart = buildTimeline([history(10, [[10, 4]])], NOW);
+      const chart = buildTimeline([history(10, [[10, 4]])], NOW, FIT_ALL);
       assert.equal(chart.prs[0].durationMs, 10 * DAY);
       assert.ok(chart.from <= NOW - 10 * DAY);
     });
@@ -178,7 +178,7 @@ describe("buildTimeline", () => {
   });
 
   it("marks drafts", () => {
-    assert.equal(buildTimeline([pr("d", 1, [], "draft")], NOW).prs[0].draft, true);
+    assert.equal(buildTimeline([pr("d", 1, [], "draft")], NOW, FIT_ALL).prs[0].draft, true);
   });
 
   it("falls back to pending team chips for lists saved before codeOwnerTeams", () => {
@@ -186,7 +186,7 @@ describe("buildTimeline", () => {
       ...pr("a", 1),
       reviewers: [{ team: "o/web", requestedAt: daysAgo(1) }, { team: null, requestedAt: null }],
     } as unknown as PullRequest;
-    assert.deepEqual(buildTimeline([saved], NOW).prs[0].teams.map((team) => team.team), ["o/web"]);
+    assert.deepEqual(buildTimeline([saved], NOW, FIT_ALL).prs[0].teams.map((team) => team.team), ["o/web"]);
   });
 
   describe("zoomed in", () => {
@@ -265,7 +265,7 @@ describe("buildTimeline", () => {
   });
 
   it("gives a bar's whole duration, even where a zoom cuts it off", () => {
-    const whole = buildTimeline([pr("a", 10, [owner("o/t", 8)])], NOW).prs[0];
+    const whole = buildTimeline([pr("a", 10, [owner("o/t", 8)])], NOW, FIT_ALL).prs[0];
     assert.equal(whole.durationMs, 10 * DAY);
     assert.equal(whole.teams[0].durationMs, 8 * DAY);
     const zoomed = buildTimeline([pr("a", 10, [owner("o/t", 8)])], NOW, { from: NOW - 6 * DAY, to: NOW - 4 * DAY }).prs[0];
@@ -294,13 +294,69 @@ describe("buildTimeline", () => {
     });
   });
 
-  it("scrolls rather than squashes around one very old PR", () => {
-    const chart = buildTimeline([pr("old", 400, []), pr("new", 1, [])], NOW);
-    assert.ok(chart.trackPx >= 400 * 16);
+  describe("zoom levels", () => {
+    const prs = [pr("old", 40, []), pr("new", 1, [])];
+
+    it("starts on the last 7 days, whatever the PRs", () => {
+      for (const list of [prs, [pr("new", 1, [])], []]) {
+        const chart = buildTimeline(list, NOW);
+        assert.equal(chart.from, NOW - 7 * DAY);
+        assert.equal(chart.to, NOW);
+        assert.equal(chart.nowPosition, 1);
+      }
+    });
+
+    it("fits the longest bar when zoomed all the way out, in the same width", () => {
+      const chart = buildTimeline([pr("old", 400, []), pr("new", 1, [])], NOW, FIT_ALL);
+      assert.ok(chart.from < NOW - 400 * DAY);
+      assert.equal(chart.prs[1].start > 0, true);
+      assert.equal(chart.prs[1].end, 1);
+      assert.equal(chart.trackPx, 480);
+      assert.equal(chart.canZoomOut, false);
+    });
+
+    it("can't zoom out past 7 days when every bar is shorter", () => {
+      const list = [pr("new", 1, [])];
+      assert.equal(buildTimeline(list, NOW).canZoomOut, false);
+      assert.equal(buildTimeline(list, NOW, FIT_ALL).from, NOW - 7 * DAY);
+    });
+
+    it("doubles when zooming out, until everything fits", () => {
+      let chart = buildTimeline(prs, NOW);
+      assert.equal(chart.canZoomOut, true);
+      chart = buildTimeline(prs, NOW, zoomOut(chart));
+      assert.equal(chart.from, NOW - 14 * DAY);
+      assert.equal(chart.nowPosition, 1);
+      chart = buildTimeline(prs, NOW, zoomOut(chart));
+      assert.equal(chart.from, NOW - 28 * DAY);
+      chart = buildTimeline(prs, NOW, zoomOut(chart));
+      assert.equal(chart.canZoomOut, false);
+      assert.ok(chart.from < NOW - 40 * DAY);
+    });
+
+    it("zooms out around the middle of a stretch before now, reaching now in the end", () => {
+      const inner = { from: NOW - 20 * DAY, to: NOW - 18 * DAY };
+      const chart = buildTimeline(prs, NOW, inner);
+      assert.equal(chart.canZoomOut, true);
+      assert.deepEqual(zoomOut(chart), { from: NOW - 21 * DAY, to: NOW - 17 * DAY });
+      const near = buildTimeline(prs, NOW, { from: NOW - 6 * DAY, to: NOW - 2 * DAY });
+      assert.deepEqual(zoomOut(near), { from: NOW - 8 * DAY, to: NOW, live: true });
+    });
+
+    it("keeps following now after zooming in to a stretch reaching it", () => {
+      const axis = buildTimeline(prs, NOW);
+      const range = zoomRange(axis, 0.5, 1);
+      assert.equal(range.live, true);
+      const later = NOW + 3600_000;
+      const chart = buildTimeline(prs, later, range);
+      assert.equal(chart.to, later);
+      assert.equal(chart.nowPosition, 1);
+      assert.equal(zoomRange(axis, 0.5, 0.9).live, undefined);
+    });
   });
 
-  it("keeps a minimum width, and labels within the axis, before now", () => {
-    const chart = buildTimeline([pr("a", 10, [])], NOW);
+  it("keeps its width, and labels within the axis, before now", () => {
+    const chart = buildTimeline([pr("a", 10, [])], NOW, FIT_ALL);
     assert.equal(chart.trackPx, 480);
     assert.ok(chart.ticks.length > 0);
     for (const { at, position } of chart.ticks) {

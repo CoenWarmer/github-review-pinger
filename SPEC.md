@@ -314,11 +314,13 @@ the chart, without the list's search of GitHub.
   hour" below that), even where a zoom cuts it off, and what it stands for. A PR with
   several stretches also says how long its whole bar is. A team's length is left out when
   the time of its request isn't known.
-- **Zoom**: dragging across the bars or the axis highlights a stretch of time, and
-  releasing zooms the chart to fit it in the window, down to an hour. It can be
-  done again to go further in. "Reset zoom" goes back to the whole axis, and so
-  does switching tab or view. All the rows stay, empty where a PR has nothing in
-  that stretch. A click without a drag still opens the PR. On touch, a sideways
+- **Zoom**: the chart always fits the window, and starts on the last 7 days. Dragging
+  across the bars or the axis highlights a stretch of time, and releasing zooms to
+  it, down to an hour; a stretch reaching now keeps following it. Zoom out doubles
+  what's shown, and Fit all goes straight to the end: until the longest bar fits, or
+  no further than 7 days if every bar is shorter. "7 days" goes back to the start,
+  and so does switching tab or view. All the rows stay, empty where a PR has nothing
+  in that stretch. A click without a drag still opens the PR. On touch, a sideways
   drag zooms and a vertical one scrolls.
 - **PR bars**: from when it was created to now, split into stretches: dashed while
   it was a draft, worked out from when it was marked ready or back to draft within

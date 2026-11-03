@@ -3,9 +3,9 @@ import type { CodeOwnerTeam, PullRequest, ReviewRequest } from "./types";
 const HOUR_MS = 60 * 60_000;
 const DAY_MS = 24 * HOUR_MS;
 /** The chart is never narrower than this, so a phone scrolls it rather than squashes it. */
-const MIN_TRACK_PX = 480;
-/** Past this the chart scrolls, so one very old PR can't squash the rest. */
-const MIN_PX_PER_DAY = 16;
+const TRACK_PX = 480;
+/** What the chart shows until it's zoomed. */
+const DEFAULT_DAYS = 7;
 /** How far apart date labels have to be to stay readable. */
 const MIN_TICK_PX = 64;
 const TICK_HOURS = [1, 2, 3, 6, 12, 24, 48, 168, 336, 720, 2160, 4320, 8760];
@@ -16,7 +16,12 @@ const MIN_ZOOM_MS = HOUR_MS;
 export interface TimelineRange {
   from: number;
   to: number;
+  /** It ends at now, whenever that is, rather than at `to`. */
+  live?: boolean;
 }
+
+/** As far out as it goes: everything, until the longest bar fits. */
+export const FIT_ALL: TimelineRange = { from: 0, to: 0, live: true };
 
 /** Where a bar falls along the axis, from 0 to 1, cut off at the axis's ends. */
 interface Placed {
@@ -51,6 +56,11 @@ export interface TimelinePr extends Placed {
 
 export interface Timeline extends TimelineRange {
   prs: TimelinePr[];
+  now: number;
+  /** As far back as the axis can start: where the longest bar fits, or the default. */
+  earliest: number;
+  /** There's more to see by zooming out. */
+  canZoomOut: boolean;
   /** The least the bars' track takes, in pixels. */
   trackPx: number;
   /** Times to label, each with where it falls along the axis. */
@@ -134,7 +144,7 @@ function pieces(
 
 /**
  * Open PRs, newest first, each with the teams that own what it changes. Without
- * a `range` the axis runs from the oldest PR to now.
+ * a `range` the axis shows the last week.
  */
 export function buildTimeline(
   prs: (PullRequest | ReviewRequest)[],
@@ -145,9 +155,12 @@ export function buildTimeline(
     // A list saved before it existed doesn't say.
     pr.createdAt ? Date.parse(pr.createdAt) : Date.parse(pr.openSince);
   const oldest = Math.min(now, ...prs.map(createdAt));
-  // A little room before the oldest bar. The other end is now, at the chart's edge.
-  const from = range?.from ?? oldest - Math.max((now - oldest) * 0.02, DAY_MS / 4);
-  const to = range?.to ?? now;
+  const week = now - DEFAULT_DAYS * DAY_MS;
+  // A little room before the oldest bar.
+  const earliest = Math.min(oldest - Math.max((now - oldest) * 0.02, DAY_MS / 4), week);
+  const from = range ? Math.max(range.from, earliest) : week;
+  const live = !range || !!range.live;
+  const to = live ? now : range.to;
   const position = (ms: number) => (ms - from) / (to - from);
   const place = (start: number, end: number): Placed => ({
     start: Math.max(position(start), 0),
@@ -190,10 +203,7 @@ export function buildTimeline(
     // All end at now, so the shortest bar is the newest PR.
     .sort((a, b) => a.durationMs - b.durationMs);
 
-  const days = (to - from) / DAY_MS;
-  // A zoom fits the window, as that's what was asked to be seen.
-  const trackPx = range ? MIN_TRACK_PX : Math.max(MIN_TRACK_PX, days * MIN_PX_PER_DAY);
-  const pxPerHour = trackPx / (days * 24);
+  const pxPerHour = TRACK_PX / ((to - from) / HOUR_MS);
   const stepHours = TICK_HOURS.find((step) => step * pxPerHour >= MIN_TICK_PX) ?? 8760;
   const showsNow = to >= now;
   const ticks = timeTicks(from, to, stepHours)
@@ -206,9 +216,13 @@ export function buildTimeline(
 
   return {
     prs: rows,
+    now,
     from,
     to,
-    trackPx,
+    live,
+    earliest,
+    canZoomOut: from > earliest || !live,
+    trackPx: TRACK_PX,
     ticks,
     hourly: stepHours < 24,
     nowPosition: showsNow ? position(now) : null,
@@ -218,11 +232,25 @@ export function buildTimeline(
 /** The range between two places along the axis (from 0 to 1, either way round). */
 export function zoomRange(axis: TimelineRange, a: number, b: number): TimelineRange {
   const at = (fraction: number) => axis.from + fraction * (axis.to - axis.from);
+  const end = (from: number, to: number): TimelineRange =>
+    // Reaching the end of an axis that ends at now, it keeps on doing that.
+    axis.live && to >= axis.to ? { from, to, live: true } : { from, to };
   const from = at(Math.min(a, b));
   const to = at(Math.max(a, b));
-  if (to - from >= MIN_ZOOM_MS) return { from, to };
+  if (to - from >= MIN_ZOOM_MS) return end(from, to);
   // Too narrow to read: widen it around its middle, staying on the axis.
   const start = Math.max((from + to - MIN_ZOOM_MS) / 2, axis.from);
-  const end = Math.min(start + MIN_ZOOM_MS, axis.to);
-  return { from: end - MIN_ZOOM_MS, to: end };
+  const stop = Math.min(start + MIN_ZOOM_MS, axis.to);
+  return end(stop - MIN_ZOOM_MS, stop);
+}
+
+/** Twice as much as `chart` shows, around its middle, up to everything. */
+export function zoomOut(chart: Timeline): TimelineRange {
+  const span = (chart.to - chart.from) * 2;
+  const middle = (chart.from + chart.to) / 2;
+  const to = chart.live ? chart.now : Math.min(middle + span / 2, chart.now);
+  const from = Math.max(to - span, chart.earliest);
+  const stop = Math.min(from + span, chart.now);
+  if (from <= chart.earliest && stop >= chart.now) return FIT_ALL;
+  return stop >= chart.now ? { from, to: stop, live: true } : { from, to: stop };
 }
