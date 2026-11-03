@@ -232,7 +232,7 @@ function Names({ pr, now }: { pr: TimelinePr; now: number }) {
 function Legend() {
   const swatch = "inline-block h-2 w-4 rounded-[2px]";
   return (
-    <p className="m-0 flex min-h-[33px] flex-wrap items-center gap-x-3 border-b px-3 py-1 text-[11px] text-muted-foreground">
+    <p className="m-0 flex min-h-[33px] flex-wrap justify-end items-center gap-x-3 border-b px-3 py-1 text-[11px] text-muted-foreground">
       <span className="flex items-center gap-1">
         <span className={cn(swatch, DRAFT)} /> Draft
       </span>
@@ -540,7 +540,7 @@ export function Timeline({
   if (pullRequests.length === 0) return empty(emptyText);
   return (
     <div className="flex h-full flex-col">
-      <div className="flex min-h-[33px] items-center gap-1 border-b px-3 py-1 text-[11px] text-muted-foreground tabular-nums">
+      <div className="flex min-h-[33px] items-center gap-1 border-b px-3 py-2 text-[11px] text-muted-foreground tabular-nums">
         <Select
           value={state}
           onValueChange={(value) => setState(value as TimelineState)}
