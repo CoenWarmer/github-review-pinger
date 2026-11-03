@@ -7,7 +7,6 @@ use std::fs::{self, OpenOptions};
 use std::future::Future;
 use std::io::Write;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
 
 use chrono::Utc;
@@ -25,7 +24,6 @@ const COST_SELECTION: &str =
 const MAX_LOG_BYTES: u64 = 5 * 1024 * 1024;
 
 static LOG: OnceLock<Mutex<PathBuf>> = OnceLock::new();
-static CYCLE: AtomicU64 = AtomicU64::new(0);
 
 tokio::task_local! {
     /// What set off the request, and which run of it.
@@ -42,7 +40,8 @@ pub fn init(path: PathBuf) {
 
 /// Marks every request made by `work` as set off by `trigger`, as one run.
 pub async fn during<F: Future>(trigger: &'static str, work: F) -> F::Output {
-    let cycle = CYCLE.fetch_add(1, Ordering::Relaxed) + 1;
+    // Its start, so a run's number stays its own across restarts.
+    let cycle = Utc::now().timestamp_millis().unsigned_abs();
     TRIGGER.scope((trigger, cycle), work).await
 }
 

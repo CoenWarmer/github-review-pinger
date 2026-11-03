@@ -38,6 +38,9 @@ const STATE_KEY = "reviewPinger.state";
 const REQUIRED_KEY = "reviewPinger.requiredChecks.v1";
 
 const POLL_INTERVAL_MS = 120_000;
+/** Coming back to the page sooner than this after a refresh began doesn't start another:
+ * a full refresh is most of what the rate limit goes on, and that one is recent enough. */
+const SHOWN_REFRESH_AFTER_MS = 60_000;
 const MAX_BACKOFF_MS = 600_000;
 const SYNC_DELAY_MS = 1_000;
 /// Gists are listed 100 at a time.
@@ -179,6 +182,9 @@ export class Engine {
   private syncTimer: ReturnType<typeof setTimeout> | null = null;
   private timer: ReturnType<typeof setTimeout> | null = null;
   private failures = 0;
+  /** When GitHub's rate limit lifts, once it has been reached. */
+  private rateLimitedUntil = 0;
+  private lastPollStartedAt = 0;
   private visible = true;
   private started = false;
   private stopped = false;
@@ -313,10 +319,13 @@ export class Engine {
   /** Refreshes the PRs you opened first, then the whole list. */
   private async shown() {
     if (!this.github || !this.pinger) return;
+    const now = this.now().getTime();
+    // It would only fail; what was visited is still there for when it lifts.
+    if (now < this.rateLimitedUntil) return;
     const ids = [...this.visited];
     this.visited.clear();
     if (ids.length > 0) await this.refreshVisited(ids);
-    await this.poll();
+    if (now - this.lastPollStartedAt >= SHOWN_REFRESH_AFTER_MS) await this.poll();
   }
 
   private async refreshVisited(ids: string[]) {
@@ -369,6 +378,7 @@ export class Engine {
   }
 
   private async pollOnce() {
+    this.lastPollStartedAt = this.now().getTime();
     const github = this.github;
     if (!github) {
       this.publish({ status: { kind: "error", problem: { code: "noToken" } } });
@@ -419,6 +429,7 @@ export class Engine {
         needs.merged ? github.fetchMergedPage(null, MERGED_PAGE_SIZE) : Promise.resolve(null),
         this.sync(),
       ]);
+      this.rateLimitedUntil = 0;
       this.ownIds = new Set(fetched.pullRequests.map((pr) => pr.id));
       this.lastFetched = fetched;
       this.rememberRequired(fetched);
@@ -463,6 +474,9 @@ export class Engine {
         e instanceof FetchError && e.kind === "rateLimited" && e.resetAt
           ? Math.min(Math.max(Date.parse(e.resetAt) - this.now().getTime(), 60_000), 3_600_000)
           : Math.min(30_000 * 2 ** (this.failures - 1), MAX_BACKOFF_MS);
+      if (e instanceof FetchError && e.kind === "rateLimited") {
+        this.rateLimitedUntil = this.now().getTime() + delay;
+      }
       // Keep showing the last good data alongside the problem.
       this.publish({ refreshing: false, refreshingIds: [], status: { kind: "error", problem } });
     }

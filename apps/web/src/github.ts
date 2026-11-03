@@ -478,8 +478,14 @@ export function createGithub({
       throw new FetchError("api", `Unexpected response from GitHub: ${e}`);
     }
     const errors = parsed.errors ?? [];
-    if (errors.some((e) => e.type === "RATE_LIMITED")) {
-      throw new FetchError("rateLimited", "GitHub rate limit reached");
+    // GitHub says `RATE_LIMIT` once the budget is gone, with a 200 and the reset in the headers.
+    if (errors.some((e) => e.type === "RATE_LIMITED" || e.type === "RATE_LIMIT")) {
+      const lifts = Number(response.headers.get("x-ratelimit-reset"));
+      throw new FetchError(
+        "rateLimited",
+        "GitHub rate limit reached",
+        lifts ? new Date(lifts * 1000).toISOString() : null,
+      );
     }
     const scopeMissing = errors.some(
       (e) => e.type === "INSUFFICIENT_SCOPES" || e.message.includes("read:org"),

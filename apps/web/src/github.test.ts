@@ -99,6 +99,20 @@ describe("requests", () => {
     await assert.rejects(gh.fetchDetails(["a"]), failure("rateLimited"));
   });
 
+  it("treats a used-up budget as a rate limit, even with a 200, and says when it lifts", async () => {
+    const gh = github(() =>
+      Response.json(
+        { errors: [{ type: "RATE_LIMIT", message: "API rate limit already exceeded for user ID 1." }] },
+        { headers: { "x-ratelimit-remaining": "0", "x-ratelimit-reset": "1793714456" } },
+      ),
+    );
+    await assert.rejects(
+      gh.fetchDetails(["a"]),
+      (e: FetchError) =>
+        e.kind === "rateLimited" && e.resetAt === new Date(1793714456 * 1000).toISOString(),
+    );
+  });
+
   it("looks up a review's last comment, if it has one", async () => {
     const asked: unknown[] = [];
     const answer = (nodes: unknown[]) =>

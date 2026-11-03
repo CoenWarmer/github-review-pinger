@@ -1792,12 +1792,13 @@ async fn request<D: DeserializeOwned>(
     let parsed: Envelope<D> = serde_json::from_value(reply)
         .map_err(|e| FetchError::Api(format!("Unexpected response from GitHub: {e}")))?;
 
-    if parsed
-        .errors
-        .iter()
-        .any(|e| e.kind.as_deref() == Some("RATE_LIMITED"))
-    {
-        return Err(FetchError::RateLimited { reset_at: None });
+    if parsed.errors.iter().any(|e| {
+        // GitHub says `RATE_LIMIT` once the budget is gone, with a 200 and the reset in the headers.
+        matches!(e.kind.as_deref(), Some("RATE_LIMITED" | "RATE_LIMIT"))
+    }) {
+        return Err(FetchError::RateLimited {
+            reset_at: header_reset(&headers),
+        });
     }
 
     let messages = || {
@@ -1826,6 +1827,15 @@ async fn request<D: DeserializeOwned>(
     }
 }
 
+/// When the rate limit lifts, as the response's headers say.
+fn header_reset(headers: &header::HeaderMap) -> Option<DateTime<Utc>> {
+    headers
+        .get("x-ratelimit-reset")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.parse::<i64>().ok())
+        .and_then(|t| DateTime::from_timestamp(t, 0))
+}
+
 /// Returns `Some` when the response is a primary or secondary rate-limit rejection.
 fn rate_limit_reset(
     status: StatusCode,
@@ -1845,7 +1855,7 @@ fn rate_limit_reset(
         return Some(Some(Utc::now() + chrono::Duration::seconds(seconds)));
     }
     if header_num("x-ratelimit-remaining") == Some(0) {
-        return Some(header_num("x-ratelimit-reset").and_then(|t| DateTime::from_timestamp(t, 0)));
+        return Some(header_reset(headers));
     }
     if status == StatusCode::TOO_MANY_REQUESTS {
         return Some(None);

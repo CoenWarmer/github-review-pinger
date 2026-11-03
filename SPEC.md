@@ -95,8 +95,9 @@ complete fetch lands. Later refreshes fetch everything at once.
   they can; Settings says how to add the scope. A team GitHub had nothing on
   is also asked about again after an hour. Recent commits (author and
   date, last 20) are fetched with each PR to see who pushed.
-- Poll every 2 minutes; also refresh whenever the popover opens (unless a
-  refresh is already running). Wait out rate limits until the reset time; back off exponentially (up to 10 min) on network and API
+- Poll every 2 minutes; also refresh whenever the popover opens, unless a
+  refresh is already running, one began within the last minute, or the rate limit
+  has been reached. The refresh button always refreshes. Wait out rate limits until the reset time; back off exponentially (up to 10 min) on network and API
   errors. On failure, keep showing the last good data with a banner.
 
 ## Derived state
