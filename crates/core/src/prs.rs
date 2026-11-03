@@ -149,6 +149,8 @@ pub struct PrView {
     /// asked because they own the files. A request ends once they review, so
     /// this counts the owners still to respond.
     pub code_owners: usize,
+    /// The teams requested on this PR, now or earlier, as lowercase `org/slug`.
+    pub requested_teams: Vec<String>,
     /// Reviews and comments from other humans, oldest first, for notifications.
     #[serde(skip)]
     pub responses: Vec<Response>,
@@ -317,6 +319,7 @@ fn view(pr: &PullRequest, people: &People, rules: &Rules, now: DateTime<Utc>) ->
             .flat_map(|requests| requests.iter())
             .filter(|request| request.as_code_owner)
             .count(),
+        requested_teams: requested_teams(pr).into_iter().collect(),
         responses,
     }
 }
@@ -951,6 +954,25 @@ mod tests {
         }));
         assert_eq!(pr.code_owners, 2);
         assert_eq!(derive_one(json!({})).code_owners, 0);
+    }
+
+    #[test]
+    fn lists_the_teams_requested_now_or_earlier() {
+        let team = |slug: &str| json!({ "__typename": "Team", "slug": slug, "combinedSlug": format!("O/{slug}") });
+        let pr = derive_one(json!({
+            "reviewRequests": { "nodes": [
+                { "requestedReviewer": team("web") },
+                { "requestedReviewer": user("ana") },
+            ] },
+            "timelineItems": { "nodes": [
+                { "__typename": "ReviewRequestedEvent", "createdAt": "2026-01-01T00:00:00Z",
+                  "requestedReviewer": team("core") },
+                { "__typename": "ReviewRequestedEvent", "createdAt": "2026-01-02T00:00:00Z",
+                  "requestedReviewer": team("web") },
+            ] },
+        }));
+        assert_eq!(pr.requested_teams, ["o/core", "o/web"]);
+        assert!(derive_one(json!({})).requested_teams.is_empty());
     }
 
     #[test]

@@ -239,6 +239,9 @@ export interface PullRequest {
   /** Pending review requests made because of CODEOWNERS. Missing in lists
    * saved before it existed. */
   codeOwners?: number;
+  /** The teams requested on this PR, now or earlier, as lowercase `org/slug`.
+   * Missing in lists saved before it existed. */
+  requestedTeams?: string[];
 }
 
 export interface ReviewRequest {

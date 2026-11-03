@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState, type ReactNode } from "react";
 import {
   ArrowDownWideNarrow,
   ChartColumn,
+  ChartGantt,
   ChevronDown,
   ChevronRight,
   RefreshCw,
@@ -35,6 +36,7 @@ import { PlacementDnd, useDragging } from "./components/Placement";
 import { RepoPicker } from "./components/RepoPicker";
 import { StatsSettings } from "./components/StatsSettings";
 import { Setup, problemMessage } from "./components/Setup";
+import { Timeline } from "./components/Timeline";
 import { elapsed } from "./format";
 import { clearSavedLists } from "./cache";
 import {
@@ -76,11 +78,12 @@ const REVIEW_SECTIONS: { group: ReviewGroup; title: string }[] = [
   { group: "draft", title: "Drafts" },
 ];
 
-type Tab = "mine" | "reviews" | "stats" | "settings";
+type Tab = "mine" | "reviews" | "timeline" | "stats" | "settings";
 
 const TABS: { id: Tab; label: string; icon?: ReactNode }[] = [
   { id: "mine", label: "My PRs" },
   { id: "reviews", label: "Review Requests" },
+  { id: "timeline", label: "Timeline", icon: <ChartGantt /> },
   { id: "stats", label: "Statistics", icon: <ChartColumn /> },
   { id: "settings", label: "Settings", icon: <Settings /> },
 ];
@@ -324,6 +327,11 @@ function AppContent() {
     [snapshot?.refreshingIds],
   );
   useApplyTheme(snapshot?.theme);
+  // The timeline needs more room than the lists.
+  const wide = tab === "timeline";
+  useEffect(() => {
+    platform.setWideWindow?.(wide);
+  }, [platform, wide]);
   // Once a fetch has landed (so sync has had its say), hand over the sorts
   // this browser remembered before they were synced.
   const loaded = snapshot?.status.kind === "ok";
@@ -500,6 +508,9 @@ function AppContent() {
           )}
           {/* Pinned over the list, so a notice appearing doesn't push the rows down. */}
           <div className="relative min-h-0 flex-1">
+            {tab === "timeline" ? (
+              <Timeline pullRequests={prs} now={now} />
+            ) : (
             <PlacementDnd describe={describePr}>
             <ScrollArea className="h-full">
               {search ? (
@@ -623,6 +634,7 @@ function AppContent() {
               )}
             </ScrollArea>
             </PlacementDnd>
+            )}
             <div className="absolute inset-x-0 bottom-0 z-10 bg-background">
               {snapshot.status.kind === "error" && (
                 <Banner>

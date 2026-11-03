@@ -172,9 +172,9 @@ both are zero there is no title at all.
 
 ## Popover
 
-Three tabs: **My PRs** and **Review Requests**, each with a count badge (the
-numbers in the tray), and **Settings**, shown as a cog icon at the end of the tab bar. The tab choice is not remembered
-between openings.
+**My PRs** and **Review Requests**, each with a count badge (the numbers in the
+tray), then **Timeline**, **Statistics** and **Settings**, shown as icons at the
+end of the tab bar. The tab choice is not remembered between openings.
 
 ### My PRs
 
@@ -290,6 +290,25 @@ Every section header has a sort icon, on both tabs. It offers Default (the
 order above), Oldest first and Newest first (by open clock), Recently active,
 and Repository. The choice is per section and remembered across restarts in
 the webview's local storage; the icon is highlighted when it isn't Default.
+
+### Timeline
+
+A Gantt chart of your own open PRs, the ones in My PRs apart from Merged and
+custom views.
+While this tab is showing, the desktop popover widens to 800 px (animated over
+about 200 ms, or at once when the system asks for reduced motion), staying
+centered under the tray icon as far as the screen allows, and it narrows again
+on leaving the tab. The web app's page keeps whatever size it has.
+
+- **Rows**: one per team requested on a PR, now or earlier, alphabetically, with
+  "No team requested" last. Each has a line per PR, longest open first, so a PR
+  requested of two teams shows in both. A request older than the last 50
+  timeline items isn't known.
+- **Bars**: from the open clock to now, dashed for drafts. Clicking one opens the
+  PR, like a row.
+- **Axis**: fits the oldest PR, but never below 16 px per day. When that's wider
+  than the window it scrolls sideways, starting at now, with the team names and
+  dates staying in view.
 
 While the first load is in progress the popover shows slowly morphing
 concentric rings (11 rings, some fainter than others, whose radii wobble with
