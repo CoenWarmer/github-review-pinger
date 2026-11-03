@@ -7,7 +7,7 @@ const NOW = Date.parse("2026-10-10T12:00:00Z");
 const DAY = 24 * 60 * 60_000;
 const daysAgo = (days: number) => new Date(NOW - days * DAY).toISOString();
 
-const mine = (id: string, days: number, teams?: string[], group = "waiting"): PullRequest =>
+const pr = (id: string, days: number, teams?: object[], group = "waiting"): PullRequest =>
   ({
     id,
     number: 1,
@@ -17,67 +17,97 @@ const mine = (id: string, days: number, teams?: string[], group = "waiting"): Pu
     group,
     openSince: daysAgo(days),
     reviewers: [],
-    requestedTeams: teams,
+    codeOwnerTeams: teams,
   }) as unknown as PullRequest;
+
+const owner = (team: string, requested: number | null, pending = true, responded: number | null = null) => ({
+  team,
+  requestedAt: requested === null ? null : daysAgo(requested),
+  pending,
+  respondedAt: responded === null ? null : daysAgo(responded),
+});
 
 describe("buildTimeline", () => {
   it("is empty with no pull requests", () => {
     const chart = buildTimeline([], NOW);
-    assert.deepEqual(chart.rows, []);
-    assert.ok(Number.isFinite(chart.nowPosition));
+    assert.deepEqual(chart.prs, []);
+    assert.ok(Number.isFinite(chart.trackPx));
   });
 
-  it("lists a PR under every team requested on it, with no team last", () => {
+  it("puts the newest PR first, with its own teams", () => {
     const chart = buildTimeline(
-      [mine("a", 3, ["o/web", "o/core"]), mine("b", 2, []), mine("c", 1, ["o/web"])],
+      [pr("new", 1, [owner("o/web", 1)]), pr("old", 5, [owner("o/core", 5), owner("o/web", 4)]), pr("none", 2, [])],
       NOW,
     );
     assert.deepEqual(
-      chart.rows.map((row) => [row.team, row.bars.map((bar) => bar.id)]),
+      chart.prs.map((row) => [row.id, row.teams.map((team) => team.team)]),
       [
-        ["o/core", ["a"]],
-        ["o/web", ["a", "c"]],
-        [null, ["b"]],
+        ["new", ["o/web"]],
+        ["none", []],
+        ["old", ["o/core", "o/web"]],
       ],
     );
+    assert.ok(chart.prs[2].start < chart.prs[0].start);
+    assert.ok(chart.prs[0].start < 1);
   });
 
-  it("puts the longest open first", () => {
-    const chart = buildTimeline([mine("new", 1, ["o/t"]), mine("old", 5, ["o/t"])], NOW);
-    const [row] = chart.rows;
-    assert.deepEqual(row.bars.map((bar) => bar.id), ["old", "new"]);
-    assert.ok(row.bars[0].start < row.bars[1].start);
-    assert.ok(row.bars[1].start < chart.nowPosition);
+  it("ends the axis at now, so a pending team's bar reaches the edge", () => {
+    const chart = buildTimeline([pr("a", 200, [owner("o/waiting", 4)])], NOW);
+    assert.equal(chart.prs[0].teams[0].end, 1);
+  });
+
+  it("runs a pending team's bar to now, and one that responded to its response", () => {
+    const chart = buildTimeline(
+      [pr("a", 10, [owner("o/waiting", 4), owner("o/done", 8, false, 6)])],
+      NOW,
+    );
+    const [waiting, done] = chart.prs[0].teams;
+    assert.equal(waiting.end, 1);
+    assert.ok(done.start < done.end);
+    assert.ok(done.end < waiting.start);
+  });
+
+  it("keeps a team with no known response to a mark where it was requested", () => {
+    const chart = buildTimeline([pr("a", 10, [owner("o/gone", 5, false)])], NOW);
+    const [gone] = chart.prs[0].teams;
+    assert.equal(gone.start, gone.end);
+    assert.ok(gone.start > chart.prs[0].start);
+  });
+
+  it("starts a team no earlier than the PR, or at it when the request isn't known", () => {
+    const chart = buildTimeline([pr("a", 5, [owner("o/early", 9), owner("o/unknown", null)])], NOW);
+    const [row] = chart.prs;
+    assert.equal(row.teams[0].start, row.start);
+    assert.equal(row.teams[1].start, row.start);
   });
 
   it("marks drafts", () => {
-    const chart = buildTimeline([mine("d", 1, [], "draft")], NOW);
-    assert.equal(chart.rows[0].bars[0].draft, true);
+    assert.equal(buildTimeline([pr("d", 1, [], "draft")], NOW).prs[0].draft, true);
   });
 
-  it("falls back to pending team chips for lists saved before requestedTeams", () => {
+  it("falls back to pending team chips for lists saved before codeOwnerTeams", () => {
     const saved = {
-      ...mine("a", 1),
-      reviewers: [{ team: "o/web" }, { team: null }],
+      ...pr("a", 1),
+      reviewers: [{ team: "o/web", requestedAt: daysAgo(1) }, { team: null, requestedAt: null }],
     } as unknown as PullRequest;
-    assert.deepEqual(buildTimeline([saved], NOW).rows.map((row) => row.team), ["o/web"]);
+    assert.deepEqual(buildTimeline([saved], NOW).prs[0].teams.map((team) => team.team), ["o/web"]);
   });
 
   it("scrolls rather than squashes around one very old PR", () => {
-    const chart = buildTimeline([mine("old", 400, []), mine("new", 1, [])], NOW);
+    const chart = buildTimeline([pr("old", 400, []), pr("new", 1, [])], NOW);
     assert.ok(chart.trackPx >= 400 * 16);
   });
 
   it("keeps a minimum width, and labels within the axis, before now", () => {
-    const chart = buildTimeline([mine("a", 10, [])], NOW);
-    assert.equal(chart.trackPx, 640);
+    const chart = buildTimeline([pr("a", 10, [])], NOW);
+    assert.equal(chart.trackPx, 480);
     assert.ok(chart.ticks.length > 0);
     for (const { at, position } of chart.ticks) {
       assert.ok(at < NOW);
-      assert.ok(position > 0 && position < chart.nowPosition);
-      // Room for a label centered on it, at both ends.
+      assert.ok(position > 0 && position < 1);
+      // Room for a label centered on it, and for "now" beside it.
       assert.ok(position * chart.trackPx >= 32);
-      assert.ok((chart.nowPosition - position) * chart.trackPx >= 32);
+      assert.ok((1 - position) * chart.trackPx >= 48);
     }
   });
 });

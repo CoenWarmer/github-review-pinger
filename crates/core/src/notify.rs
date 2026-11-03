@@ -382,7 +382,7 @@ mod tests {
             queued: false,
             reviewers: Vec::new(),
             code_owners: 0,
-            requested_teams: Vec::new(),
+            code_owner_teams: Vec::new(),
             responses,
         }
     }

@@ -111,6 +111,23 @@ pub struct Reviewer {
     pub activity: Option<Activity>,
 }
 
+/// A team that owns what a PR changes. GitHub only flags code owners on pending
+/// requests, so one whose request has ended is taken to be an owner too: those
+/// are requested automatically, and a request ends when a member reviews.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CodeOwnerTeam {
+    /// Lowercase `org/slug`.
+    pub team: String,
+    /// When it was last asked, if that's within the timeline items read.
+    pub requested_at: Option<DateTime<Utc>>,
+    /// Its request is still open.
+    pub pending: bool,
+    /// A member's latest response, once its request has ended. Unknown without
+    /// the team's members.
+    pub responded_at: Option<DateTime<Utc>>,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PrView {
@@ -149,8 +166,8 @@ pub struct PrView {
     /// asked because they own the files. A request ends once they review, so
     /// this counts the owners still to respond.
     pub code_owners: usize,
-    /// The teams requested on this PR, now or earlier, as lowercase `org/slug`.
-    pub requested_teams: Vec<String>,
+    /// The teams that own what this PR changes, as far as its requests say.
+    pub code_owner_teams: Vec<CodeOwnerTeam>,
     /// Reviews and comments from other humans, oldest first, for notifications.
     #[serde(skip)]
     pub responses: Vec<Response>,
@@ -319,7 +336,7 @@ fn view(pr: &PullRequest, people: &People, rules: &Rules, now: DateTime<Utc>) ->
             .flat_map(|requests| requests.iter())
             .filter(|request| request.as_code_owner)
             .count(),
-        requested_teams: requested_teams(pr).into_iter().collect(),
+        code_owner_teams: code_owner_teams(pr, people),
         responses,
     }
 }
@@ -598,6 +615,57 @@ fn requested_teams(pr: &PullRequest) -> BTreeSet<String> {
                     .to_lowercase(),
             ),
             _ => None,
+        })
+        .collect()
+}
+
+fn code_owner_teams(pr: &PullRequest, people: &People) -> Vec<CodeOwnerTeam> {
+    let org = pr
+        .repository
+        .name_with_owner
+        .split('/')
+        .next()
+        .unwrap_or("");
+    let pending: HashMap<String, bool> = pr
+        .review_requests
+        .iter()
+        .flat_map(|requests| requests.iter())
+        .filter_map(|request| match request.requested_reviewer.as_ref()? {
+            RequestedReviewer::Team {
+                slug,
+                combined_slug,
+            } => Some((
+                combined_slug
+                    .clone()
+                    .unwrap_or_else(|| format!("{org}/{slug}"))
+                    .to_lowercase(),
+                request.as_code_owner,
+            )),
+            _ => None,
+        })
+        .collect();
+    let asked = request_times(pr);
+    requested_teams(pr)
+        .into_iter()
+        // Someone asked this team by hand, which GitHub does say while it's open.
+        .filter(|team| pending.get(team) != Some(&false))
+        .map(|team| {
+            let slug = team.rsplit('/').next().unwrap_or(&team);
+            let is_pending = pending.contains_key(&team);
+            let responded_at = people
+                .directory
+                .team_members(&team)
+                .filter(|_| !is_pending)
+                .and_then(|members| {
+                    latest_response_by(pr, people, |login| members.contains(&login.to_lowercase()))
+                })
+                .map(|activity| activity.at);
+            CodeOwnerTeam {
+                requested_at: asked.get(&format!("@{slug}")).copied(),
+                pending: is_pending,
+                responded_at,
+                team,
+            }
         })
         .collect()
 }
@@ -957,22 +1025,50 @@ mod tests {
     }
 
     #[test]
-    fn lists_the_teams_requested_now_or_earlier() {
+    fn code_owner_teams_are_the_requests_not_made_by_hand() {
         let team = |slug: &str| json!({ "__typename": "Team", "slug": slug, "combinedSlug": format!("O/{slug}") });
-        let pr = derive_one(json!({
+        let pr = with(json!({
             "reviewRequests": { "nodes": [
-                { "requestedReviewer": team("web") },
-                { "requestedReviewer": user("ana") },
+                { "asCodeOwner": true, "requestedReviewer": team("waiting") },
+                { "asCodeOwner": false, "requestedReviewer": team("byhand") },
+                { "asCodeOwner": true, "requestedReviewer": user("ana") },
+            ] },
+            "reviews": { "nodes": [
+                submitted(user("member"), "APPROVED", "2026-10-03T09:00:00Z"),
             ] },
             "timelineItems": { "nodes": [
-                { "__typename": "ReviewRequestedEvent", "createdAt": "2026-01-01T00:00:00Z",
-                  "requestedReviewer": team("core") },
-                { "__typename": "ReviewRequestedEvent", "createdAt": "2026-01-02T00:00:00Z",
-                  "requestedReviewer": team("web") },
+                { "__typename": "ReviewRequestedEvent", "createdAt": "2026-10-01T09:00:00Z",
+                  "requestedReviewer": team("done") },
+                { "__typename": "ReviewRequestedEvent", "createdAt": "2026-10-02T09:00:00Z",
+                  "requestedReviewer": team("waiting") },
+                { "__typename": "ReviewRequestedEvent", "createdAt": "2026-10-02T09:00:00Z",
+                  "requestedReviewer": team("unknown") },
             ] },
         }));
-        assert_eq!(pr.requested_teams, ["o/core", "o/web"]);
-        assert!(derive_one(json!({})).requested_teams.is_empty());
+        let known = directory(&[("o/done", &["member"]), ("o/waiting", &["member"])]);
+        let view = derive_known(vec![pr], &[], &HashMap::new(), &known).remove(0);
+        let team = |team: &str, requested: &str, pending, responded: Option<&str>| CodeOwnerTeam {
+            team: team.to_string(),
+            requested_at: Some(at(requested)),
+            pending,
+            responded_at: responded.map(at),
+        };
+        assert_eq!(
+            view.code_owner_teams,
+            [
+                team(
+                    "o/done",
+                    "2026-10-01T09:00:00Z",
+                    false,
+                    Some("2026-10-03T09:00:00Z")
+                ),
+                // Its members aren't known, so neither is when it responded.
+                team("o/unknown", "2026-10-02T09:00:00Z", false, None),
+                // Still being waited on, whatever a member did earlier.
+                team("o/waiting", "2026-10-02T09:00:00Z", true, None),
+            ],
+        );
+        assert!(derive_one(json!({})).code_owner_teams.is_empty());
     }
 
     #[test]

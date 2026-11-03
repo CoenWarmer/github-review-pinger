@@ -209,6 +209,18 @@ export interface Activity {
   url: string | null;
 }
 
+/** A team that owns what a PR changes. */
+export interface CodeOwnerTeam {
+  /** Lowercase `org/slug`. */
+  team: string;
+  /** When it was last asked, if known. */
+  requestedAt: string | null;
+  /** Its request is still open. */
+  pending: boolean;
+  /** A member's latest response, once its request has ended, if known. */
+  respondedAt: string | null;
+}
+
 export interface PullRequest {
   id: string;
   number: number;
@@ -239,9 +251,9 @@ export interface PullRequest {
   /** Pending review requests made because of CODEOWNERS. Missing in lists
    * saved before it existed. */
   codeOwners?: number;
-  /** The teams requested on this PR, now or earlier, as lowercase `org/slug`.
-   * Missing in lists saved before it existed. */
-  requestedTeams?: string[];
+  /** The teams that own what it changes, as far as its requests say. Missing
+   * in lists saved before it existed. */
+  codeOwnerTeams?: CodeOwnerTeam[];
 }
 
 export interface ReviewRequest {

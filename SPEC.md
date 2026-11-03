@@ -300,12 +300,17 @@ about 200 ms, or at once when the system asks for reduced motion), staying
 centered under the tray icon as far as the screen allows, and it narrows again
 on leaving the tab. The web app's page keeps whatever size it has.
 
-- **Rows**: one per team requested on a PR, now or earlier, alphabetically, with
-  "No team requested" last. Each has a line per PR, longest open first, so a PR
-  requested of two teams shows in both. A request older than the last 50
-  timeline items isn't known.
-- **Bars**: from the open clock to now, dashed for drafts. Clicking one opens the
-  PR, like a row.
+- **Rows**: one per PR, newest first, with its code-owning teams
+  underneath, alphabetically. GitHub only flags code owners on pending requests,
+  so the teams are those requested now or earlier, leaving out a pending request
+  flagged as made by hand; one asked by hand whose request has ended still shows.
+  A request older than the last 50 timeline items isn't known.
+- **PR bars**: from the open clock to now, dashed for drafts. Clicking a PR's bar
+  or title opens it, like a row.
+- **Team bars**: from when the team was last requested (never before the open
+  clock) to now while it's still pending, or to a member's latest response. With
+  the members unknown (no `read:org`), a team whose request has ended is a short
+  mark where it was requested.
 - **Axis**: fits the oldest PR, but never below 16 px per day. When that's wider
   than the window it scrolls sideways, starting at now, with the team names and
   dates staying in view.
