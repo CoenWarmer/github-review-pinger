@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { PullRequest } from "@review-pinger/app";
-import { buildTimeline, FIT_ALL, formatDuration, zoomOut, zoomRange } from "../../../packages/app/src/timeline.ts";
+import { buildTimeline, FIT_ALL, formatDuration, withState, zoomOut, zoomRange } from "../../../packages/app/src/timeline.ts";
 
 const NOW = Date.parse("2026-10-10T12:00:00Z");
 const DAY = 24 * 60 * 60_000;
@@ -291,6 +291,34 @@ describe("buildTimeline", () => {
       const start = zoomRange(axis, 0, 0.001);
       assert.equal(start.from, axis.from);
       assert.equal(start.to - start.from, 3600_000);
+    });
+  });
+
+  describe("withState", () => {
+    const span = (from: number, to: number | null) => ({
+      from: daysAgo(from),
+      to: to === null ? null : daysAgo(to),
+    });
+    const list = [
+      { ...pr("open", 3), draftSpans: [] },
+      { ...pr("was-draft", 9), draftSpans: [span(9, 4)] },
+      { ...pr("draft", 9), draftSpans: [span(9, 6), span(3, null)] },
+    ] as PullRequest[];
+    const ids = (prs: PullRequest[]) => prs.map((row) => row.id);
+
+    it("keeps everything for all", () => {
+      assert.deepEqual(ids(withState(list, "all")), ["open", "was-draft", "draft"]);
+    });
+
+    it("goes by what a PR is now, not what it was", () => {
+      assert.deepEqual(ids(withState(list, "open")), ["open", "was-draft"]);
+      assert.deepEqual(ids(withState(list, "draft")), ["draft"]);
+    });
+
+    it("goes by the section in lists saved before draft history", () => {
+      const saved = [pr("a", 1, [], "draft"), pr("b", 1, [])];
+      assert.deepEqual(ids(withState(saved, "draft")), ["a"]);
+      assert.deepEqual(ids(withState(saved, "open")), ["b"]);
     });
   });
 

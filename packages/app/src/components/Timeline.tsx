@@ -1,6 +1,13 @@
-import { useLayoutEffect, useMemo, useRef, useState, type PointerEvent, type ReactNode } from "react";
+import { useLayoutEffect, useMemo, useRef, useState, type PointerEvent } from "react";
 import { Check, Circle, Maximize2, ZoomOut } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { cn } from "@/lib/utils";
 import { elapsed } from "../format";
 import { useReportOpen } from "../hooks";
@@ -10,10 +17,12 @@ import {
   FIT_ALL,
   formatDuration,
   zoomOut,
+  withState,
   zoomRange,
   type Timeline as Chart,
   type TimelinePr,
   type TimelineRange,
+  type TimelineState,
   type TimelineTeam,
 } from "../timeline";
 import type { PullRequest, ReviewRequest } from "../types";
@@ -30,6 +39,12 @@ const TEAM_APPROVED = "bg-success/60";
 const DRAFT = "border border-dashed border-muted-foreground bg-muted";
 /** How far a drag has to go to be a zoom, rather than a click with a shaky hand. */
 const DRAG_PX = 4;
+
+const STATES: { id: TimelineState; label: string }[] = [
+  { id: "all", label: "All PRs" },
+  { id: "open", label: "Open PRs" },
+  { id: "draft", label: "Draft PRs" },
+];
 
 function percent(fraction: number): string {
   return `${fraction * 100}%`;
@@ -180,7 +195,7 @@ function Names({ pr, now }: { pr: TimelinePr; now: number }) {
   );
 }
 
-function Legend({ children }: { children: ReactNode }) {
+function Legend() {
   const swatch = "inline-block h-2 w-4 rounded-[2px]";
   return (
     <p className="m-0 flex min-h-[33px] flex-wrap items-center gap-x-3 border-b px-3 py-1 text-[11px] text-muted-foreground">
@@ -202,7 +217,6 @@ function Legend({ children }: { children: ReactNode }) {
       <span className="flex items-center gap-1">
         <span className={cn(swatch, RESPONDED)} /> Team responded
       </span>
-      {children}
     </p>
   );
 }
@@ -431,9 +445,10 @@ export function Timeline({
   now: number;
 }) {
   const [range, setRange] = useState<TimelineRange | null>(null);
+  const [state, setState] = useState<TimelineState>("open");
   const chart = useMemo(
-    () => buildTimeline(pullRequests, now, range),
-    [pullRequests, now, range],
+    () => buildTimeline(withState(pullRequests, state), now, range),
+    [pullRequests, state, now, range],
   );
   // These are on screen, so a refresh should fetch them first, as with an open section.
   useReportOpen(
@@ -441,44 +456,60 @@ export function Timeline({
     true,
     chart.prs.map((pr) => pr.id),
   );
-  if (chart.prs.length === 0) {
-    return <p className="m-0 px-3 py-6 text-center text-muted-foreground">{emptyText}</p>;
-  }
+  const empty = (text: string) => (
+    <p className="m-0 px-3 py-6 text-center text-muted-foreground">{text}</p>
+  );
+  if (pullRequests.length === 0) return empty(emptyText);
   return (
     <div className="flex h-full flex-col">
-      <Legend>
-        <span className="ml-auto flex items-center gap-1 tabular-nums">
-          <span className="mr-1">{axisLabel(chart)}</span>
-          <Button
-            type="button"
-            variant="outline"
-            size="icon-xs"
-            aria-label="Zoom out"
-            title="Zoom out"
-            disabled={!chart.canZoomOut}
-            onClick={() => setRange(zoomOut(chart))}
-          >
-            <ZoomOut />
+      <div className="flex min-h-[33px] items-center gap-1 border-b px-3 py-1 text-[11px] text-muted-foreground tabular-nums">
+        <Select value={state} onValueChange={(value) => setState(value as TimelineState)}>
+          <SelectTrigger size="sm" className="px-2 text-[11px] data-[size=sm]:h-6" aria-label="Which pull requests to show">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {STATES.map(({ id, label }) => (
+              <SelectItem key={id} value={id} className="text-xs">
+                {label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        <span className="mr-1 ml-auto">{axisLabel(chart)}</span>
+        <Button
+          type="button"
+          variant="outline"
+          size="icon-xs"
+          aria-label="Zoom out"
+          title="Zoom out"
+          disabled={!chart.canZoomOut}
+          onClick={() => setRange(zoomOut(chart))}
+        >
+          <ZoomOut />
+        </Button>
+        <Button
+          type="button"
+          variant="outline"
+          size="icon-xs"
+          aria-label="Fit all pull requests"
+          title="Fit all pull requests"
+          disabled={!chart.canZoomOut}
+          onClick={() => setRange(FIT_ALL)}
+        >
+          <Maximize2 />
+        </Button>
+        {range && (
+          <Button type="button" variant="outline" size="xs" onClick={() => setRange(null)}>
+            7 days
           </Button>
-          <Button
-            type="button"
-            variant="outline"
-            size="icon-xs"
-            aria-label="Fit all pull requests"
-            title="Fit all pull requests"
-            disabled={!chart.canZoomOut}
-            onClick={() => setRange(FIT_ALL)}
-          >
-            <Maximize2 />
-          </Button>
-          {range && (
-            <Button type="button" variant="outline" size="xs" onClick={() => setRange(null)}>
-              7 days
-            </Button>
-          )}
-        </span>
-      </Legend>
-      <Scroller chart={chart} now={now} range={range} onZoom={setRange} />
+        )}
+      </div>
+      <Legend />
+      {chart.prs.length === 0 ? (
+        empty(state === "all" ? emptyText : `No ${state} pull requests.`)
+      ) : (
+        <Scroller chart={chart} now={now} range={range} onZoom={setRange} />
+      )}
     </div>
   );
 }

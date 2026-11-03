@@ -304,6 +304,10 @@ the screen it stops at the edge, with both sides still moving together. It narro
 The web app's page keeps whatever size it has. The filter and repo picker narrow
 the chart, without the list's search of GitHub.
 
+- **Controls**: a row above the legend holds a pulldown of All, Open or Draft PRs, by
+  what each is now (one that used to be a draft is Open, and approved PRs are Open
+  too), and the zoom controls. It starts on Open, and goes back to that on switching
+  tab or view, like the zoom. Fit all fits what the pulldown leaves.
 - **Rows**: one per PR, most recently created first, with its code-owning teams
   underneath, alphabetically. GitHub only flags code owners on pending requests,
   so the teams are those requested now or earlier, leaving out a pending request

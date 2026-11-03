@@ -20,6 +20,21 @@ export interface TimelineRange {
   live?: boolean;
 }
 
+/** Which PRs the chart shows, by what they are now. */
+export type TimelineState = "all" | "open" | "draft";
+
+/** The PRs that are currently `state`. */
+export function withState<T extends PullRequest | ReviewRequest>(
+  prs: T[],
+  state: TimelineState,
+): T[] {
+  if (state === "all") return prs;
+  const isDraft = (pr: T) =>
+    // Older saved lists only say which section it's in.
+    pr.draftSpans ? pr.draftSpans.some((span) => span.to === null) : pr.group === "draft";
+  return prs.filter((pr) => isDraft(pr) === (state === "draft"));
+}
+
 /** As far out as it goes: everything, until the longest bar fits. */
 export const FIT_ALL: TimelineRange = { from: 0, to: 0, live: true };
 
