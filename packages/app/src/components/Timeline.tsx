@@ -105,8 +105,8 @@ function PrBar({ pr, now }: { pr: TimelinePr; now: number }) {
                   : pr.merged
                     ? `Merged ${elapsed(new Date(pr.endsAt).toISOString(), now)} ago`
                     : pr.approved
-                    ? "Open, Approved"
-                    : "Open"
+                      ? "Open, Approved"
+                      : "Open"
               }${whole}`}
               onClick={() => openPr(platform, pr)}
               // Measured from the right, so the least width grows away from the edge.
@@ -253,9 +253,6 @@ function Legend() {
         <span className={cn(swatch, DRAFT)} /> Draft
       </span>
       <span className="flex items-center gap-1">
-        <span className={cn(swatch, MERGED)} /> Merged
-      </span>
-      <span className="flex items-center gap-1">
         <span className={cn(swatch, "bg-info")} /> Open
       </span>
       <span className="flex items-center gap-1">
@@ -269,6 +266,9 @@ function Legend() {
       </span>
       <span className="flex items-center gap-1">
         <span className={cn(swatch, "bg-success")} /> Approved
+      </span>
+      <span className="flex items-center gap-1">
+        <span className={cn(swatch, MERGED)} /> Merged
       </span>
     </p>
   );
@@ -582,7 +582,11 @@ export function Timeline({
   const empty = (text: string) => (
     <p className="m-0 px-3 py-6 text-center text-muted-foreground">{text}</p>
   );
-  if (pullRequests.length === 0 && !merged?.pullRequests.length && !merged?.canLoadMore) {
+  if (
+    pullRequests.length === 0 &&
+    !merged?.pullRequests.length &&
+    !merged?.canLoadMore
+  ) {
     return empty(emptyText);
   }
   return (
@@ -600,11 +604,13 @@ export function Timeline({
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
-            {STATES.filter(({ id }) => id !== "merged" || merged).map(({ id, label }) => (
-              <SelectItem key={id} value={id} className="text-xs">
-                {label}
-              </SelectItem>
-            ))}
+            {STATES.filter(({ id }) => id !== "merged" || merged).map(
+              ({ id, label }) => (
+                <SelectItem key={id} value={id} className="text-xs">
+                  {label}
+                </SelectItem>
+              ),
+            )}
           </SelectContent>
         </Select>
         {showsMerged && merged.canLoadMore && (
