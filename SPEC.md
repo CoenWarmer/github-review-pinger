@@ -199,6 +199,10 @@ bottom:
    days, newest first, with a "Load more" button that fetches 5 further
    (older) ones at a time.
 
+Whether a section is expanded is remembered per section, on both tabs, in the
+webview's local storage, so it lasts through switching tabs or views, filtering and
+restarting. It isn't synced with other devices.
+
 Each row has a **Details** toggle, which folds out below it: lines added and
 deleted and files changed, how many files each code-owning team owns as a
 horizontal bar chart (from the CODEOWNERS file of the branch the PR merges into, counted over up to 500
