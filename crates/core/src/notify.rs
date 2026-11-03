@@ -436,6 +436,7 @@ mod tests {
             snoozed_until: None,
             reviewers: Vec::new(),
             code_owner_teams: Vec::new(),
+            approved: false,
         }
     }
 

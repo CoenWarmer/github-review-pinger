@@ -219,6 +219,11 @@ export interface CodeOwnerTeam {
   pending: boolean;
   /** A member's latest response, once its request has ended, if known. */
   respondedAt: string | null;
+  /** When a member first approved, of the approvals still in effect, once its
+   * request has ended, if known. */
+  approvedAt: string | null;
+  /** Who that was. */
+  approvedBy: string | null;
 }
 
 export interface PullRequest {
@@ -278,6 +283,8 @@ export interface ReviewRequest {
   /** The teams that own what it changes, as far as its requests say. Missing
    * in lists saved before it existed. */
   codeOwnerTeams?: CodeOwnerTeam[];
+  /** Has the approvals it needs. Missing in lists saved before it existed. */
+  approved?: boolean;
 }
 
 export type Problem =

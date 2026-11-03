@@ -309,12 +309,15 @@ the chart, without the list's search of GitHub.
   so the teams are those requested now or earlier, leaving out a pending request
   flagged as made by hand; one asked by hand whose request has ended still shows.
   A request older than the last 50 timeline items isn't known.
-- **PR bars**: from the open clock to now, dashed for drafts. Clicking a PR's bar
-  or title opens it, like a row.
+- **PR bars**: from the open clock to now, dashed for drafts, and green with a
+  check by the title when approved (per the rule above; drafts aren't shown as
+  approved). Clicking a PR's bar or title opens it, like a row.
 - **Team bars**: from when the team was last requested (never before the open
-  clock) to now while it's still pending, or to a member's latest response. With
-  the members unknown (no `read:org`), a team whose request has ended is a short
-  mark where it was requested.
+  clock) to now while it's still pending, or to a member's latest response. A team
+  has approved when its request has ended and a member's approval is still in
+  effect: its bar is green, with a check by its name, and ends at the first such
+  approval. A team that hasn't approved has an empty circle there instead. With the members unknown (no `read:org`), approval can't be told, and a
+  team whose request has ended is a short mark where it was requested.
 - **Axis**: fits the oldest PR, but never below 16 px per day. When that's wider
   than the window it scrolls sideways, starting at now, with the team names and
   dates staying in view.

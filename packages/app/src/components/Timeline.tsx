@@ -1,4 +1,5 @@
 import { useLayoutEffect, useMemo, useRef } from "react";
+import { Check, Circle } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { elapsed } from "../format";
 import { useReportOpen } from "../hooks";
@@ -8,10 +9,11 @@ import type { PullRequest, ReviewRequest } from "../types";
 
 /** Width of the column of titles and team names. */
 const NAME_COLUMN = 280;
-const ROW = "h-[22px]";
+const ROW = "h-[28px]";
 
 const WAITING = "bg-info/40";
 const RESPONDED = "bg-muted-foreground/40";
+const TEAM_APPROVED = "bg-success/60";
 const DRAFT = "border border-dashed border-muted-foreground bg-muted";
 
 function percent(fraction: number): string {
@@ -24,6 +26,9 @@ function teamName(team: string): string {
 
 function describeTeam(team: TimelineTeam, now: number): string {
   const name = teamName(team.team);
+  if (team.approvedAt) {
+    return `${name}: approved ${elapsed(team.approvedAt, now)} ago by ${team.approvedBy}`;
+  }
   if (team.pending) {
     return team.requestedAt
       ? `${name}: waiting ${elapsed(team.requestedAt, now)}`
@@ -41,13 +46,13 @@ function PrBar({ pr, now }: { pr: TimelinePr; now: number }) {
       <button
         type="button"
         aria-label={`Open #${pr.number} ${pr.title}`}
-        title={`${pr.repo}#${pr.number} ${pr.title} · ${pr.draft ? "draft" : "open"} ${elapsed(pr.openSince, now)}`}
+        title={`${pr.repo}#${pr.number} ${pr.title} · ${pr.draft ? "draft" : "open"} ${elapsed(pr.openSince, now)}${pr.approved ? " · approved" : ""}`}
         onClick={() => platform.visit(pr.id, pr.url)}
         // Measured from the right, so the least width grows away from the edge.
         style={{ right: 0, width: percent(1 - pr.start) }}
         className={cn(
-          "absolute inset-y-[3px] min-w-1.5 cursor-pointer rounded-[3px] border-0 p-0 hover:brightness-110",
-          pr.draft ? DRAFT : "bg-info",
+          "absolute inset-y-[6px] min-w-1.5 cursor-pointer rounded-[3px] border-0 p-0 hover:brightness-110",
+          pr.draft ? DRAFT : pr.approved ? "bg-success" : "bg-info",
         )}
       />
     </div>
@@ -61,8 +66,8 @@ function TeamBar({ team, now }: { team: TimelineTeam; now: number }) {
         title={describeTeam(team, now)}
         style={{ right: percent(1 - team.end), width: percent(team.end - team.start) }}
         className={cn(
-          "absolute inset-y-[6px] min-w-1 rounded-[2px]",
-          team.pending ? WAITING : RESPONDED,
+          "absolute inset-y-[9px] min-w-1 rounded-[2px]",
+          team.approvedAt ? TEAM_APPROVED : team.pending ? WAITING : RESPONDED,
         )}
       />
     </div>
@@ -85,6 +90,30 @@ function Lines({ chart }: { chart: Chart }) {
   );
 }
 
+/** So approval doesn't rest on the bar's color alone. */
+function Approved({ label }: { label: string }) {
+  return (
+    <Check
+      role="img"
+      aria-label={label}
+      className="mr-1 inline size-3 align-[-2px] text-success"
+      strokeWidth={3}
+    />
+  );
+}
+
+/** Takes the check's place on a team that hasn't approved, so the names line up. */
+function NotApproved() {
+  return (
+    <Circle
+      role="img"
+      aria-label="Not approved yet"
+      className="mr-1 inline size-3 align-[-2px] text-muted-foreground"
+      strokeWidth={2.5}
+    />
+  );
+}
+
 /** A PR's title and its teams' names, in line with their bars. */
 function Names({ pr, now }: { pr: TimelinePr; now: number }) {
   const platform = usePlatform();
@@ -98,18 +127,20 @@ function Names({ pr, now }: { pr: TimelinePr; now: number }) {
         title={`${pr.repo}#${pr.number} ${pr.title}`}
         onClick={() => platform.visit(pr.id, pr.url)}
         className={cn(
-          "block w-full cursor-pointer truncate border-0 bg-transparent px-3 text-left text-xs leading-[22px] font-medium hover:underline",
+          "block w-full cursor-pointer truncate border-0 bg-transparent px-3 text-left text-xs leading-[28px] font-medium hover:underline",
           ROW,
         )}
       >
+        {pr.approved && <Approved label="Approved" />}
         <span className="font-normal text-muted-foreground tabular-nums">#{pr.number}</span> {pr.title}
       </button>
       {pr.teams.map((team) => (
         <div
           key={team.team}
           title={`${team.team} · ${describeTeam(team, now)}`}
-          className={cn("truncate pr-3 pl-6 text-[11px] leading-[22px] text-muted-foreground", ROW)}
+          className={cn("truncate pr-3 pl-6 text-[11px] leading-[28px] text-muted-foreground", ROW)}
         >
+          {team.approvedAt ? <Approved label="Approved" /> : <NotApproved />}
           {teamName(team.team)}
         </div>
       ))}
@@ -120,15 +151,21 @@ function Names({ pr, now }: { pr: TimelinePr; now: number }) {
 function Legend() {
   const swatch = "inline-block h-2 w-4 rounded-[2px]";
   return (
-    <p className="m-0 flex gap-3 border-b px-3 py-1 text-[11px] text-muted-foreground">
+    <p className="m-0 flex flex-wrap gap-x-3 border-b px-3 py-1 text-[11px] text-muted-foreground">
       <span className="flex items-center gap-1">
         <span className={cn(swatch, "bg-info")} /> Open
+      </span>
+      <span className="flex items-center gap-1">
+        <span className={cn(swatch, "bg-success")} /> Approved
       </span>
       <span className="flex items-center gap-1">
         <span className={cn(swatch, DRAFT)} /> Draft
       </span>
       <span className="flex items-center gap-1">
         <span className={cn(swatch, WAITING)} /> Waiting on team
+      </span>
+      <span className="flex items-center gap-1">
+        <span className={cn(swatch, TEAM_APPROVED)} /> Team approved
       </span>
       <span className="flex items-center gap-1">
         <span className={cn(swatch, RESPONDED)} /> Team responded

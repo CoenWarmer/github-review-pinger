@@ -60,6 +60,8 @@ pub struct ReviewView {
     pub reviewers: Vec<Reviewer>,
     /// The teams that own what this PR changes, as far as its requests say.
     pub code_owner_teams: Vec<prs::CodeOwnerTeam>,
+    /// Has the approvals it needs, the viewer's included.
+    pub approved: bool,
 }
 
 impl ReviewView {
@@ -111,6 +113,7 @@ fn view(pr: &PullRequest, viewer: &str, rules: &Rules, now: DateTime<Utc>) -> Op
         directory: rules.directory,
     };
     let mut reviewers = prs::reviewers(pr, &people);
+    let approved = prs::is_approved(pr, &reviewers);
     reviewers.retain(|r| !r.login.eq_ignore_ascii_case(viewer));
 
     let waiting_since = requested.then(|| waiting_since(pr, viewer, open_since));
@@ -153,6 +156,7 @@ fn view(pr: &PullRequest, viewer: &str, rules: &Rules, now: DateTime<Utc>) -> Op
         snoozed_until,
         reviewers,
         code_owner_teams: prs::code_owner_teams(pr, &people),
+        approved,
     })
 }
 
@@ -461,6 +465,27 @@ mod tests {
         };
         let natural = derive(&[pr(json!({}))], ME, &rules, at(NOW)).remove(0);
         assert!(!natural.placed);
+    }
+
+    #[test]
+    fn says_whether_it_is_approved_counting_the_viewer() {
+        let approved = |decision: &str| {
+            derive_one(json!({ "reviewDecision": decision }))
+                .unwrap()
+                .approved
+        };
+        assert!(approved("APPROVED"));
+        assert!(!approved("REVIEW_REQUIRED"));
+
+        let by_me = json!({ "state": "APPROVED", "submittedAt": "2026-10-03T09:00:00Z",
+            "author": user(ME) });
+        let view = derive_one(json!({
+            "reviewDecision": null,
+            "latestOpinionatedReviews": { "nodes": [by_me] },
+        }))
+        .unwrap();
+        assert!(view.approved);
+        assert!(view.reviewers.is_empty());
     }
 
     #[test]

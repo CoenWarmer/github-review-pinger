@@ -126,6 +126,11 @@ pub struct CodeOwnerTeam {
     /// A member's latest response, once its request has ended. Unknown without
     /// the team's members.
     pub responded_at: Option<DateTime<Utc>>,
+    /// When a member first approved, of the approvals still in effect, once its
+    /// request has ended. Unknown without the team's members.
+    pub approved_at: Option<DateTime<Utc>>,
+    /// Who that was.
+    pub approved_by: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -652,18 +657,30 @@ pub(crate) fn code_owner_teams(pr: &PullRequest, people: &People) -> Vec<CodeOwn
         .map(|team| {
             let slug = team.rsplit('/').next().unwrap_or(&team);
             let is_pending = pending.contains_key(&team);
-            let responded_at = people
-                .directory
-                .team_members(&team)
-                .filter(|_| !is_pending)
+            let members = people.directory.team_members(&team).filter(|_| !is_pending);
+            let responded_at = members
                 .and_then(|members| {
                     latest_response_by(pr, people, |login| members.contains(&login.to_lowercase()))
                 })
                 .map(|activity| activity.at);
+            let approval = members.and_then(|members| {
+                pr.latest_opinionated_reviews
+                    .iter()
+                    .flat_map(|reviews| reviews.iter())
+                    .filter(|review| review.state == ReviewState::Approved)
+                    .filter_map(|review| Some((review.author.as_ref()?, review.submitted_at?)))
+                    .filter(|(author, _)| {
+                        people.is_other_human(author)
+                            && members.contains(&author.login.to_lowercase())
+                    })
+                    .min_by_key(|(_, at)| *at)
+            });
             CodeOwnerTeam {
                 requested_at: asked.get(&format!("@{slug}")).copied(),
                 pending: is_pending,
                 responded_at,
+                approved_at: approval.map(|(_, at)| at),
+                approved_by: approval.map(|(author, _)| author.login.clone()),
                 team,
             }
         })
@@ -776,7 +793,7 @@ pub(crate) fn checks(pr: &PullRequest) -> Checks {
     }
 }
 
-fn is_approved(pr: &PullRequest, reviewers: &[Reviewer]) -> bool {
+pub(crate) fn is_approved(pr: &PullRequest, reviewers: &[Reviewer]) -> bool {
     match pr.review_decision {
         Some(ReviewDecision::Approved) => true,
         // No required reviews in this repo: one approval will do.
@@ -1052,6 +1069,8 @@ mod tests {
             requested_at: Some(at(requested)),
             pending,
             responded_at: responded.map(at),
+            approved_at: None,
+            approved_by: None,
         };
         assert_eq!(
             view.code_owner_teams,
@@ -1069,6 +1088,50 @@ mod tests {
             ],
         );
         assert!(derive_one(json!({})).code_owner_teams.is_empty());
+    }
+
+    #[test]
+    fn a_team_approved_when_a_member_has_and_it_is_not_asked_again() {
+        let team = |slug: &str| json!({ "__typename": "Team", "slug": slug, "combinedSlug": format!("o/{slug}") });
+        let asked = |slug: &str| {
+            json!({ "__typename": "ReviewRequestedEvent",
+            "createdAt": "2026-10-01T09:00:00Z", "requestedReviewer": team(slug) })
+        };
+        let pr = with(json!({
+            "reviewRequests": { "nodes": [
+                { "asCodeOwner": true, "requestedReviewer": team("again") },
+            ] },
+            "latestOpinionatedReviews": { "nodes": [
+                submitted(user("late"), "APPROVED", "2026-10-04T09:00:00Z"),
+                submitted(user("early"), "APPROVED", "2026-10-03T09:00:00Z"),
+                submitted(user("critic"), "CHANGES_REQUESTED", "2026-10-02T09:00:00Z"),
+            ] },
+            "timelineItems": { "nodes": [
+                asked("approved"), asked("again"), asked("critical"), asked("unknown"),
+            ] },
+        }));
+        let known = directory(&[
+            ("o/approved", &["early", "late"]),
+            ("o/again", &["early"]),
+            ("o/critical", &["critic"]),
+        ]);
+        let view = derive_known(vec![pr], &[], &HashMap::new(), &known).remove(0);
+        let approval = |slug: &str| {
+            let owner = view
+                .code_owner_teams
+                .iter()
+                .find(|owner| owner.team == format!("o/{slug}"))
+                .unwrap();
+            (owner.approved_at, owner.approved_by.as_deref())
+        };
+        // The first of the approvals still in effect.
+        assert_eq!(
+            approval("approved"),
+            (Some(at("2026-10-03T09:00:00Z")), Some("early")),
+        );
+        assert_eq!(approval("again"), (None, None));
+        assert_eq!(approval("critical"), (None, None));
+        assert_eq!(approval("unknown"), (None, None));
     }
 
     #[test]

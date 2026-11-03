@@ -20,11 +20,19 @@ const pr = (id: string, days: number, teams?: object[], group = "waiting"): Pull
     codeOwnerTeams: teams,
   }) as unknown as PullRequest;
 
-const owner = (team: string, requested: number | null, pending = true, responded: number | null = null) => ({
+const owner = (
+  team: string,
+  requested: number | null,
+  pending = true,
+  responded: number | null = null,
+  approved: number | null = null,
+) => ({
   team,
   requestedAt: requested === null ? null : daysAgo(requested),
   pending,
   respondedAt: responded === null ? null : daysAgo(responded),
+  approvedAt: approved === null ? null : daysAgo(approved),
+  approvedBy: approved === null ? null : "ana",
 });
 
 describe("buildTimeline", () => {
@@ -65,6 +73,25 @@ describe("buildTimeline", () => {
     assert.equal(waiting.end, 1);
     assert.ok(done.start < done.end);
     assert.ok(done.end < waiting.start);
+  });
+
+  it("ends an approving team's bar at its approval, not a later comment", () => {
+    const chart = buildTimeline(
+      [pr("a", 10, [owner("o/ok", 8, false, 1, 5), owner("o/talked", 8, false, 5)])],
+      NOW,
+    );
+    const [ok, talked] = chart.prs[0].teams;
+    assert.equal(ok.end, talked.end);
+    assert.ok(ok.approvedAt);
+    assert.equal(talked.approvedAt, null);
+  });
+
+  it("says which PRs are approved, but never a draft", () => {
+    const approved = (group: string) =>
+      buildTimeline([{ ...pr("a", 1, [], group), approved: true } as PullRequest], NOW).prs[0].approved;
+    assert.equal(approved("approved"), true);
+    assert.equal(approved("draft"), false);
+    assert.equal(buildTimeline([pr("a", 1, [])], NOW).prs[0].approved, false);
   });
 
   it("keeps a team with no known response to a mark where it was requested", () => {

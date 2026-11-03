@@ -23,6 +23,7 @@ export interface TimelinePr {
   repo: string;
   openSince: string;
   draft: boolean;
+  approved: boolean;
   /** Where its bar starts along the axis, from 0 to 1. */
   start: number;
   teams: TimelineTeam[];
@@ -42,7 +43,16 @@ function teamsOf(pr: PullRequest | ReviewRequest): CodeOwnerTeam[] {
     pr.codeOwnerTeams ??
     pr.reviewers.flatMap((reviewer) =>
       reviewer.team
-        ? [{ team: reviewer.team, requestedAt: reviewer.requestedAt, pending: true, respondedAt: null }]
+        ? [
+            {
+              team: reviewer.team,
+              requestedAt: reviewer.requestedAt,
+              pending: true,
+              respondedAt: null,
+              approvedAt: null,
+              approvedBy: null,
+            },
+          ]
         : [],
     )
   );
@@ -79,14 +89,15 @@ export function buildTimeline(prs: (PullRequest | ReviewRequest)[], now: number)
         repo: pr.repo,
         openSince: pr.openSince,
         draft: pr.group === "draft",
+        approved: pr.group !== "draft" && !!pr.approved,
         start: position(open),
         teams: teamsOf(pr).map((team) => {
           // A request made while it was a draft waited no longer than the PR did.
           const from = Math.max(team.requestedAt ? Date.parse(team.requestedAt) : open, open);
           const to = team.pending
             ? now
-            : team.respondedAt
-              ? Math.min(Date.parse(team.respondedAt), now)
+            : team.approvedAt || team.respondedAt
+              ? Math.min(Date.parse((team.approvedAt ?? team.respondedAt)!), now)
               : from;
           return { ...team, start: position(from), end: position(Math.max(from, to)) };
         }),
