@@ -1,3 +1,5 @@
+pub mod usage;
+
 pub use review_pinger_core::github::types;
 use review_pinger_core::github::{
     DETAILS_QUERY, MAX_CHECK_PAGES, MERGE_STATE_QUERY, MERGED_QUERY, MERGED_SEARCH,
@@ -1664,30 +1666,92 @@ async fn request<D: DeserializeOwned>(
     query: &str,
     variables: Value,
 ) -> Result<Response<D>, FetchError> {
-    let body = json!({ "query": query, "variables": variables });
+    let body = json!({ "query": usage::with_cost(query), "variables": variables });
+    let op = usage::label(query);
 
     let mut attempt = 0;
-    let response = loop {
+    let (response, attempt_started) = loop {
         attempt += 1;
-        let response = http
+        let started = Instant::now();
+        let sent = http
             .post(ENDPOINT)
             .bearer_auth(token)
             .json(&body)
             .send()
-            .await
-            .map_err(|e| FetchError::Network(e.to_string()))?;
+            .await;
+        let about = usage::Attempt {
+            op: &op,
+            variables: &body["variables"],
+            attempt,
+            ms: started.elapsed().as_millis(),
+        };
+        let response = match sent {
+            Ok(response) => response,
+            Err(e) => {
+                let mut entry = about.entry(0, 0, None);
+                entry.error = Some(e.to_string());
+                usage::record(&entry);
+                return Err(FetchError::Network(e.to_string()));
+            }
+        };
 
         // GitHub occasionally times out heavy queries with a 502.
         if response.status().is_server_error() && attempt < MAX_ATTEMPTS {
             log::warn!("GitHub returned {}, retrying", response.status());
+            usage::record(&about.entry(response.status().as_u16(), 0, Some(response.headers())));
             tokio::time::sleep(Duration::from_secs(2 * u64::from(attempt))).await;
             continue;
         }
-        break response;
+        break (response, started);
     };
 
     let status = response.status();
     let headers = response.headers().clone();
+    let bytes = response.bytes().await;
+    let about = usage::Attempt {
+        op: &op,
+        variables: &body["variables"],
+        attempt,
+        ms: attempt_started.elapsed().as_millis(),
+    };
+    let mut reply = bytes
+        .as_ref()
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<Value>(bytes).ok());
+    let cost = reply.as_mut().and_then(usage::take_cost);
+    {
+        let errors = reply
+            .as_ref()
+            .and_then(|reply| reply.get("errors"))
+            .and_then(Value::as_array);
+        let field = |name: &str| -> Vec<String> {
+            errors
+                .into_iter()
+                .flatten()
+                .filter_map(|error| error.get(name)?.as_str().map(str::to_string))
+                .collect()
+        };
+        let message = reply
+            .as_ref()
+            .and_then(|reply| reply.get("message"))
+            .and_then(Value::as_str)
+            .map(str::to_string)
+            .into_iter()
+            .chain(field("message"))
+            .collect::<Vec<_>>()
+            .join("; ");
+        let mut entry = about.entry(
+            status.as_u16(),
+            bytes.as_ref().map_or(0, |bytes| bytes.len()),
+            Some(&headers),
+        );
+        entry.rejected = usage::rejection(&headers, status.as_u16(), &message);
+        entry.cost = cost;
+        let types = field("type");
+        entry.error_types = (!types.is_empty()).then_some(types);
+        entry.error = (!message.is_empty()).then(|| message.chars().take(300).collect());
+        usage::record(&entry);
+    }
 
     if status == StatusCode::UNAUTHORIZED {
         return Err(FetchError::Unauthorized);
@@ -1704,9 +1768,14 @@ async fn request<D: DeserializeOwned>(
         .and_then(|v| v.to_str().ok())
         .is_some_and(|v| v.contains("partial-results"));
 
-    let parsed: Envelope<D> = response
-        .json()
-        .await
+    let bytes = bytes.map_err(|e| FetchError::Network(e.to_string()))?;
+    // Parsed already, to read the cost; the rest is what the caller asked for.
+    let reply = match reply {
+        Some(reply) => reply,
+        None => serde_json::from_slice(&bytes)
+            .map_err(|e| FetchError::Api(format!("Unexpected response from GitHub: {e}")))?,
+    };
+    let parsed: Envelope<D> = serde_json::from_value(reply)
         .map_err(|e| FetchError::Api(format!("Unexpected response from GitHub: {e}")))?;
 
     if parsed

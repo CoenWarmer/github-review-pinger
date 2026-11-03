@@ -810,6 +810,9 @@ impl Poller {
 }
 
 pub fn start(app: &AppHandle) -> Arc<Poller> {
+    if let Ok(dir) = app.path().app_log_dir() {
+        github::usage::init(dir.join("api-usage.jsonl"));
+    }
     let memory_path = app
         .path()
         .app_data_dir()
@@ -889,7 +892,7 @@ pub fn on_popover_open(app: &AppHandle, poller: Arc<Poller>) {
     }
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
-        refresh_visited(&app, &poller, visited).await;
+        github::usage::during("visited", refresh_visited(&app, &poller, visited)).await;
         poller.refresh_on_open();
     });
 }
@@ -937,8 +940,9 @@ async fn refresh_visited(app: &AppHandle, poller: &Poller, ids: Vec<String>) {
 
 async fn run(app: AppHandle, poller: Arc<Poller>) {
     let mut consecutive_failures = 0;
+    let mut trigger = "launch";
     loop {
-        let delay = match poll_once(&app, &poller).await {
+        let delay = match github::usage::during(trigger, poll_once(&app, &poller)).await {
             Ok(()) => {
                 consecutive_failures = 0;
                 POLL_INTERVAL
@@ -955,10 +959,10 @@ async fn run(app: AppHandle, poller: Arc<Poller>) {
             Err(_) => POLL_INTERVAL,
         };
 
-        tokio::select! {
-            _ = tokio::time::sleep(delay) => {}
-            _ = poller.wake.notified() => {}
-        }
+        trigger = tokio::select! {
+            _ = tokio::time::sleep(delay) => "timer",
+            _ = poller.wake.notified() => "wake",
+        };
     }
 }
 
