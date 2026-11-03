@@ -92,6 +92,7 @@ export interface RawMergedPullRequest {
   number: number;
   title: string;
   url: string;
+  createdAt?: string;
   mergedAt: string;
   repository: { nameWithOwner: string };
 }

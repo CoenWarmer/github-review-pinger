@@ -21,6 +21,7 @@ pub struct MergedPrView {
     pub url: String,
     pub repo: String,
     pub merged_at: DateTime<Utc>,
+    pub created_at: Option<DateTime<Utc>>,
 }
 
 fn view(pr: &MergedPullRequest) -> MergedPrView {
@@ -31,6 +32,7 @@ fn view(pr: &MergedPullRequest) -> MergedPrView {
         url: pr.url.clone(),
         repo: pr.repository.name_with_owner.clone(),
         merged_at: pr.merged_at,
+        created_at: pr.created_at,
     }
 }
 
@@ -75,7 +77,14 @@ mod tests {
                 name_with_owner: "o/r".to_string(),
             },
             merged_at: at(merged_at),
+            created_at: Some(at("2026-10-20T12:00:00Z")),
         }
+    }
+
+    #[test]
+    fn says_when_it_was_created() {
+        let views = derive(&[pr("a", "2026-10-28T10:00:00Z")], &[], at(NOW));
+        assert_eq!(views[0].created_at, Some(at("2026-10-20T12:00:00Z")));
     }
 
     #[test]

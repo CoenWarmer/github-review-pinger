@@ -1,4 +1,4 @@
-import type { CodeOwnerTeam, PullRequest, ReviewRequest } from "./types";
+import type { CodeOwnerTeam, MergedPr, PullRequest, ReviewRequest } from "./types";
 
 const HOUR_MS = 60 * 60_000;
 const DAY_MS = 24 * HOUR_MS;
@@ -21,7 +21,7 @@ export interface TimelineRange {
 }
 
 /** Which PRs the chart shows, by what they are now. */
-export type TimelineState = "all" | "open" | "draft";
+export type TimelineState = "all" | "open" | "draft" | "merged";
 
 /** The PRs that are currently `state`. */
 export function withState<T extends PullRequest | ReviewRequest>(
@@ -63,6 +63,10 @@ export interface TimelinePr extends Placed {
   repo: string;
   /** Whether it's a draft now. */
   draft: boolean;
+  /** It has merged, so its bar ends there rather than at now. */
+  merged: boolean;
+  /** When its bar ends. */
+  endsAt: number;
   approved: boolean;
   /** Its bar, oldest first, from when it was created to now. */
   segments: TimelineSegment[];
@@ -166,13 +170,15 @@ function pieces(
  * a `range` the axis shows the last week.
  */
 export function buildTimeline(
-  prs: (PullRequest | ReviewRequest)[],
+  prs: (PullRequest | ReviewRequest | MergedPr)[],
   now: number,
   range: TimelineRange | null = null,
 ): Timeline {
-  const createdAt = (pr: PullRequest | ReviewRequest) =>
+  const createdAt = (pr: PullRequest | ReviewRequest | MergedPr) => {
     // A list saved before it existed doesn't say.
-    pr.createdAt ? Date.parse(pr.createdAt) : Date.parse(pr.openSince);
+    const fallback = "mergedAt" in pr ? pr.mergedAt : pr.openSince;
+    return Date.parse(pr.createdAt ?? fallback);
+  };
   const oldest = Math.min(now, ...prs.map(createdAt));
   const week = now - DEFAULT_DAYS * DAY_MS;
   // A little room before the oldest bar.
@@ -190,6 +196,25 @@ export function buildTimeline(
 
   const rows = prs
     .map((pr): TimelinePr => {
+      if ("mergedAt" in pr) {
+        const endsAt = Math.min(Date.parse(pr.mergedAt), now);
+        const start = Math.min(createdAt(pr), endsAt);
+        return {
+          id: pr.id,
+          url: pr.url,
+          number: pr.number,
+          title: pr.title,
+          repo: pr.repo,
+          draft: false,
+          merged: true,
+          endsAt,
+          approved: false,
+          ...place(start, endsAt),
+          // Its draft history isn't fetched: nothing else about it needs that query.
+          segments: [{ draft: false, ...place(start, endsAt) }],
+          teams: [],
+        };
+      }
       const open = Date.parse(pr.openSince);
       const created = Math.min(createdAt(pr), open);
       const segments = pieces(pr, created, now).map(({ from: start, to: end, draft }) => ({
@@ -204,6 +229,8 @@ export function buildTimeline(
         title: pr.title,
         repo: pr.repo,
         draft,
+        merged: false,
+        endsAt: now,
         approved: !draft && !!pr.approved,
         ...place(created, now),
         segments,
@@ -219,8 +246,8 @@ export function buildTimeline(
         }),
       };
     })
-    // All end at now, so the shortest bar is the newest PR.
-    .sort((a, b) => a.durationMs - b.durationMs);
+    // The latest to end first, which for open PRs, all ending now, is the shortest: the newest.
+    .sort((a, b) => b.endsAt - a.endsAt || a.durationMs - b.durationMs);
 
   const pxPerHour = TRACK_PX / ((to - from) / HOUR_MS);
   const stepHours = TICK_HOURS.find((step) => step * pxPerHour >= MIN_TICK_PX) ?? 8760;

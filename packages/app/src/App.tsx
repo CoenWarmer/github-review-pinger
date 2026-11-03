@@ -568,6 +568,22 @@ function AppContent() {
                 // Each tab starts at now, rather than wherever the other was scrolled to.
                 key={tab}
                 pullRequests={tab === "reviews" ? reviews.filter(matchesReview) : prs.filter(matchesMine)}
+                merged={
+                  tab === "mine"
+                    ? {
+                        pullRequests: merged.filter((pr) =>
+                          matchesQuery(query, [pr.title, pr.repo, pr.number]),
+                        ),
+                        canLoadMore: snapshot.mergedCanLoadMore,
+                        enabled: snapshot.myPrsSections.some(
+                          (pref) =>
+                            pref.kind === "builtin" &&
+                            pref.section === "merged" &&
+                            pref.enabled,
+                        ),
+                      }
+                    : undefined
+                }
                 emptyText={
                   filtering
                     ? "No pull requests match."

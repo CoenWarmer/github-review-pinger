@@ -18,7 +18,7 @@ import {
 import { cn } from "@/lib/utils";
 import { elapsed } from "../format";
 import { useReportOpen } from "../hooks";
-import { usePlatform } from "../platform";
+import { usePlatform, type Platform } from "../platform";
 import {
   buildTimeline,
   FIT_ALL,
@@ -33,7 +33,7 @@ import {
   type TimelineState,
   type TimelineTeam,
 } from "../timeline";
-import type { PullRequest, ReviewRequest } from "../types";
+import type { MergedPr, PullRequest, ReviewRequest } from "../types";
 
 /** Width of the column of titles and team names. */
 const NAME_COLUMN = 280;
@@ -45,6 +45,7 @@ const WAITING = "bg-info/40";
 const RESPONDED = "bg-muted-foreground/40";
 const TEAM_APPROVED = "bg-success/60";
 const DRAFT = "border border-dashed border-muted-foreground bg-muted";
+const MERGED = "bg-violet-500";
 /** How far a drag has to go to be a zoom, rather than a click with a shaky hand. */
 const DRAG_PX = 4;
 
@@ -52,7 +53,14 @@ const STATES: { id: TimelineState; label: string }[] = [
   { id: "all", label: "All PRs" },
   { id: "open", label: "Open PRs" },
   { id: "draft", label: "Draft PRs" },
+  { id: "merged", label: "Merged PRs" },
 ];
+
+/** Opens a PR from the chart. One that has merged has nothing left to refresh. */
+function openPr(platform: Platform, pr: TimelinePr) {
+  if (pr.merged) platform.openUrl(pr.url);
+  else platform.visit(pr.id, pr.url);
+}
 
 function percent(fraction: number): string {
   return `${fraction * 100}%`;
@@ -78,7 +86,7 @@ function describeTeam(team: TimelineTeam, now: number): string {
   return "No longer requested";
 }
 
-function PrBar({ pr }: { pr: TimelinePr }) {
+function PrBar({ pr, now }: { pr: TimelinePr; now: number }) {
   const platform = usePlatform();
   const whole =
     pr.segments.length > 1 ? ` · ${formatDuration(pr.durationMs)} in all` : "";
@@ -94,11 +102,13 @@ function PrBar({ pr }: { pr: TimelinePr }) {
               data-tip={`${pr.repo}#${pr.number} ${pr.title}\n${formatDuration(segment.durationMs)} · ${
                 segment.draft
                   ? "Draft"
-                  : pr.approved
+                  : pr.merged
+                    ? `Merged ${elapsed(new Date(pr.endsAt).toISOString(), now)} ago`
+                    : pr.approved
                     ? "Open, Approved"
                     : "Open"
               }${whole}`}
-              onClick={() => platform.visit(pr.id, pr.url)}
+              onClick={() => openPr(platform, pr)}
               // Measured from the right, so the least width grows away from the edge.
               style={{
                 right: percent(1 - segment.end),
@@ -106,7 +116,13 @@ function PrBar({ pr }: { pr: TimelinePr }) {
               }}
               className={cn(
                 "absolute inset-y-[6px] min-w-1.5 cursor-pointer rounded-[3px] border-0 p-0 hover:brightness-110",
-                segment.draft ? DRAFT : pr.approved ? "bg-success" : "bg-info",
+                segment.draft
+                  ? DRAFT
+                  : pr.merged
+                    ? MERGED
+                    : pr.approved
+                      ? "bg-success"
+                      : "bg-info",
               )}
             />
           ),
@@ -198,7 +214,7 @@ function Names({ pr, now }: { pr: TimelinePr; now: number }) {
       <button
         type="button"
         title={`${pr.repo}#${pr.number} ${pr.title}`}
-        onClick={() => platform.visit(pr.id, pr.url)}
+        onClick={() => openPr(platform, pr)}
         className={cn(
           "block w-full cursor-pointer truncate border-0 bg-transparent px-3 text-left text-xs leading-[28px] font-medium hover:underline",
           ROW,
@@ -235,6 +251,9 @@ function Legend() {
     <p className="m-0 flex min-h-[33px] flex-wrap justify-end items-center gap-x-3 border-b px-3 py-1 text-[11px] text-muted-foreground">
       <span className="flex items-center gap-1">
         <span className={cn(swatch, DRAFT)} /> Draft
+      </span>
+      <span className="flex items-center gap-1">
+        <span className={cn(swatch, MERGED)} /> Merged
       </span>
       <span className="flex items-center gap-1">
         <span className={cn(swatch, "bg-info")} /> Open
@@ -491,7 +510,7 @@ function Scroller({
             <div className="flex-1 pr-2 py-1" style={eachTrack}>
               <div data-track className={cn("relative", TRACK)}>
                 <Lines chart={chart} />
-                <PrBar pr={pr} />
+                <PrBar pr={pr} now={now} />
                 {pr.teams.map((team) => (
                   <TeamBar key={team.team} team={team} now={now} />
                 ))}
@@ -515,29 +534,57 @@ function Scroller({
 /** Open PRs as bars, each with the teams that own what it changes underneath. */
 export function Timeline({
   pullRequests,
+  merged,
   emptyText,
   now,
 }: {
   pullRequests: (PullRequest | ReviewRequest)[];
+  /** What the Merged section has, for the tab that has one. */
+  merged?: {
+    pullRequests: MergedPr[];
+    canLoadMore: boolean;
+    /** The Merged section is on, without which they aren't fetched. */
+    enabled: boolean;
+  };
   emptyText: string;
   now: number;
 }) {
+  const platform = usePlatform();
   const [range, setRange] = useState<TimelineRange | null>(null);
   const [state, setState] = useState<TimelineState>("open");
+  const [loadingMore, setLoadingMore] = useState(false);
+  const showsMerged = state === "merged" && !!merged;
+  const mergedRows = merged?.pullRequests;
   const chart = useMemo(
-    () => buildTimeline(withState(pullRequests, state), now, range),
-    [pullRequests, state, now, range],
+    () =>
+      buildTimeline(
+        showsMerged ? (mergedRows ?? []) : withState(pullRequests, state),
+        now,
+        range,
+      ),
+    [pullRequests, mergedRows, showsMerged, state, now, range],
   );
   // These are on screen, so a refresh should fetch them first, as with an open section.
+  // Merged ones don't change, so there's nothing to refresh.
   useReportOpen(
     "timeline",
-    true,
+    !showsMerged,
     chart.prs.map((pr) => pr.id),
   );
+  async function loadMore() {
+    setLoadingMore(true);
+    try {
+      await platform.loadMoreMerged();
+    } finally {
+      setLoadingMore(false);
+    }
+  }
   const empty = (text: string) => (
     <p className="m-0 px-3 py-6 text-center text-muted-foreground">{text}</p>
   );
-  if (pullRequests.length === 0) return empty(emptyText);
+  if (pullRequests.length === 0 && !merged?.pullRequests.length && !merged?.canLoadMore) {
+    return empty(emptyText);
+  }
   return (
     <div className="flex h-full flex-col">
       <div className="flex min-h-[33px] items-center gap-1 border-b px-3 py-2 text-[11px] text-muted-foreground tabular-nums">
@@ -553,13 +600,24 @@ export function Timeline({
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
-            {STATES.map(({ id, label }) => (
+            {STATES.filter(({ id }) => id !== "merged" || merged).map(({ id, label }) => (
               <SelectItem key={id} value={id} className="text-xs">
                 {label}
               </SelectItem>
             ))}
           </SelectContent>
         </Select>
+        {showsMerged && merged.canLoadMore && (
+          <Button
+            type="button"
+            variant="outline"
+            size="xs"
+            disabled={loadingMore}
+            onClick={loadMore}
+          >
+            {loadingMore ? "Loading…" : "Load more"}
+          </Button>
+        )}
         <span className="mr-1 ml-auto">{axisLabel(chart)}</span>
         <Button
           type="button"
@@ -596,7 +654,13 @@ export function Timeline({
       </div>
       <Legend />
       {chart.prs.length === 0 ? (
-        empty(state === "all" ? emptyText : `No ${state} pull requests.`)
+        empty(
+          showsMerged && !merged.enabled
+            ? "Turn on the Merged section in Settings to see merged pull requests here."
+            : state === "all"
+              ? emptyText
+              : `No ${state} pull requests.`,
+        )
       ) : (
         <Scroller chart={chart} now={now} range={range} onZoom={setRange} />
       )}

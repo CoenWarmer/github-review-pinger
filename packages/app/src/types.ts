@@ -23,6 +23,8 @@ export interface MergedPr {
   url: string;
   repo: string;
   mergedAt: string;
+  /** Missing in lists saved before it existed. */
+  createdAt?: string | null;
 }
 
 /** A newer release, found by checking GitHub. */

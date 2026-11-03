@@ -310,7 +310,11 @@ the chart, without the list's search of GitHub.
 
 - **Controls**: a row above the legend holds a pulldown of All, Open or Draft PRs, by
   what each is now (one that used to be a draft is Open, and approved PRs are Open
-  too), and the zoom controls. It starts on Open, and goes back to that on switching
+  too), Merged PRs on My PRs, and the zoom controls. Merged PRs are what the Merged
+  section has: those of the last two days, with Load more for older ones, and none
+  unless that section is on, as it's what fetches them, which the chart says. Their
+  bars run from when they were created to when they merged, without draft history
+  or teams, which aren't fetched for them. All PRs doesn't include them. It starts on Open, and goes back to that on switching
   tab or view, like the zoom. Fit all fits what the pulldown leaves.
 - **Rows**: one per PR, most recently created first, with its code-owning teams
   underneath, alphabetically. GitHub only flags code owners on pending requests,
