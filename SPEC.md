@@ -64,6 +64,12 @@ timeout:
    (approved, green, mergeable, no auto-merge), since GitHub computes it on
    demand and it doubles a PR's cost.
 
+Between full fetches, every 10 minutes, the PRs of the other tab aren't fetched again
+when the searches say they haven't changed (`updatedAt`, which comes with the ids).
+Your own always are, as checks finishing doesn't update a PR, and so is everything in
+the tab being looked at. A reviewer or check change on another tab's PR that doesn't
+update it can show up to 10 minutes late.
+
 A refresh takes ~5–8 s for ~70 PRs (previously ~38 s), more with the review
 searches. 5xx responses are
 retried twice per request.

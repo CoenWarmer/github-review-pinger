@@ -255,6 +255,28 @@ export interface Plan {
   own: string[];
   /** The Review requests tab is the one being looked at, so its PRs come before the rest. */
   reviewsTab: boolean;
+  /** PRs from the last fetch that can be kept instead of fetched again, if the
+   * searches say they haven't changed. Left out when they're all due. */
+  reusable?: Map<string, RawPullRequest>;
+}
+
+/** Which of `ids` to fetch, and which can be kept from `reusable`: those GitHub says
+ * haven't been updated since. Your own are always fetched, since checks finishing
+ * doesn't update a PR and they decide what you're told to do next. */
+export function unchanged(
+  ids: string[],
+  reusable: Map<string, RawPullRequest> | undefined,
+  updated: Map<string, string>,
+  own: Set<string>,
+): { fetch: string[]; keep: RawPullRequest[] } {
+  const fetch: string[] = [];
+  const keep: RawPullRequest[] = [];
+  for (const id of ids) {
+    const pr = reusable?.get(id);
+    if (pr?.updatedAt && !own.has(id) && pr.updatedAt === updated.get(id)) keep.push(pr);
+    else fetch.push(id);
+  }
+  return { fetch, keep };
 }
 
 /** Which searches found each PR, so one fetched partway through can be filed. */
@@ -534,16 +556,25 @@ export function createGithub({
       viewer: { login: string };
       search: {
         pageInfo: { hasNextPage: boolean; endCursor: string | null };
-        nodes: ({ id?: string } | null)[];
+        nodes: ({ id?: string; updatedAt?: string } | null)[];
       };
     }
-    const result = { viewer: "", ids: [] as string[], ssoPartial: false };
+    const result = {
+      viewer: "",
+      ids: [] as string[],
+      updated: new Map<string, string>(),
+      ssoPartial: false,
+    };
     let cursor: string | null = null;
     for (let page = 0; page < MAX_SEARCH_PAGES; page++) {
       const reply: Reply<Data> = await request<Data>(queries.search, { q: search, cursor });
       result.viewer = reply.data.viewer.login;
       result.ssoPartial ||= reply.ssoPartial;
-      for (const node of reply.data.search.nodes) if (node?.id) result.ids.push(node.id);
+      for (const node of reply.data.search.nodes) {
+        if (!node?.id) continue;
+        result.ids.push(node.id);
+        if (node.updatedAt) result.updated.set(node.id, node.updatedAt);
+      }
       const info = reply.data.search.pageInfo;
       if (!info.hasNextPage || !info.endCursor) break;
       cursor = info.endCursor;
@@ -572,7 +603,12 @@ export function createGithub({
         console.info(`refresh timing +${Math.round(performance.now() - started)}ms: ${what}`);
       console.info(`refresh timing: starting; phase 1 has ${plan.first.length} PRs (${plan.own.length} own), reviews tab: ${plan.reviewsTab}`);
       const reviewed = `is:pr is:open reviewed-by:@me -author:@me archived:false updated:>=${reviewedSince}`;
-      const emptySearch = { viewer: "", ids: [] as string[], ssoPartial: false };
+      const emptySearch = {
+        viewer: "",
+        ids: [] as string[],
+        updated: new Map<string, string>(),
+        ssoPartial: false,
+      };
       const searches = Promise.all([
         includeAuthored ? searchIds(AUTHORED) : Promise.resolve(emptySearch),
         searchIds(REVIEW_REQUESTED),
@@ -682,14 +718,27 @@ export function createGithub({
           name,
         );
       };
+      // Only the tab not being looked at: what's on screen is always fetched.
+      const updated = new Map(
+        [authored, requested, reviewedByMe, ...viewResults].flatMap((r) => [...r.updated]),
+      );
+      const { fetch: otherIds, keep: kept } = unchanged(
+        wanted.filter((id) => !inTab(id)),
+        plan.reusable,
+        updated,
+        authoredIds,
+      );
+      lap(`phase 3 keeps ${kept.length} unchanged PRs`);
       const [tab, other] = await Promise.all([
         phase("phase 2", wanted.filter(inTab)),
-        phase("phase 3", wanted.filter((id) => !inTab(id))),
+        phase("phase 3", otherIds),
       ]);
       lap("all phases done");
       // Only your own PRs got the expensive merge state; it's on the objects
       // before anything clones from `byId`, so a PR that's also in a view carries it.
-      const byId = new Map([...first, ...tab, ...other].map((pr) => [pr.id, pr]));
+      const byId = new Map(
+        [...first, ...tab, ...other, ...kept.map((pr) => ({ ...pr }))].map((pr) => [pr.id, pr]),
+      );
       const pullRequests = authored.ids.flatMap((id) => byId.get(id) ?? []);
 
       const reviewPullRequests = [...byId.values()].filter(

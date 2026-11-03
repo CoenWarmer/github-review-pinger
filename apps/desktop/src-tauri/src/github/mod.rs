@@ -79,6 +79,35 @@ pub struct Plan {
     /// The Review requests tab is the one being looked at, so its PRs come
     /// before the rest.
     pub reviews_tab: bool,
+    /// PRs from the last fetch that can be kept instead of fetched again, if the
+    /// searches say they haven't changed. Empty when they're all due.
+    pub reusable: HashMap<String, PullRequest>,
+}
+
+/// Which of `ids` to fetch, and which can be kept from `reusable`: those GitHub says
+/// haven't been updated since. Your own are always fetched, since checks finishing
+/// doesn't update a PR and they decide what you're told to do next.
+fn unchanged<'a>(
+    ids: Vec<String>,
+    reusable: &'a HashMap<String, PullRequest>,
+    updated: &HashMap<String, DateTime<Utc>>,
+    own: &HashSet<String>,
+) -> (Vec<String>, Vec<&'a PullRequest>) {
+    let mut fetch = Vec::new();
+    let mut keep = Vec::new();
+    for id in ids {
+        match reusable.get(&id) {
+            Some(pr)
+                if !own.contains(&id)
+                    && pr.updated_at.is_some()
+                    && pr.updated_at == updated.get(&id).copied() =>
+            {
+                keep.push(pr);
+            }
+            _ => fetch.push(id),
+        }
+    }
+    (fetch, keep)
 }
 
 /// PRs that just arrived, handed over for display while the rest is fetched.
@@ -174,6 +203,8 @@ pub async fn fetch_open_pull_requests(
     let reviewed_ids: HashSet<String> = reviewed.ids.iter().cloned().collect();
     // Ids per view, kept apart from the union below so each view's PRs can
     // be picked back out of the one details fetch.
+    let view_updated: Vec<HashMap<String, DateTime<Utc>>> =
+        view_results.iter().map(|r| r.updated.clone()).collect();
     let view_ids: Vec<(String, Vec<String>)> = views
         .iter()
         .zip(view_results)
@@ -245,6 +276,17 @@ pub async fn fetch_open_pull_requests(
             .await
         }
     };
+    // Only the tab not being looked at: what's on screen is always fetched.
+    let updated: HashMap<String, DateTime<Utc>> = authored
+        .updated
+        .iter()
+        .chain(&requested.updated)
+        .chain(&reviewed.updated)
+        .chain(view_updated.iter().flatten())
+        .map(|(id, at)| (id.clone(), *at))
+        .collect();
+    let (other_ids, kept) = unchanged(other_ids, &plan.reusable, &updated, &authored_ids);
+    lap(format!("phase 3 keeps {} unchanged PRs", kept.len()));
     let (tab, other) =
         future::try_join(phase("phase 2", tab_ids), phase("phase 3", other_ids)).await?;
     lap("all phases done".into());
@@ -252,6 +294,7 @@ pub async fn fetch_open_pull_requests(
         .into_iter()
         .chain(tab)
         .chain(other)
+        .chain(kept.into_iter().cloned())
         .map(|pr| (pr.id.clone(), pr))
         .collect();
     let pull_requests: Vec<PullRequest> = authored_ids
@@ -1513,6 +1556,8 @@ fn could_be_ready(pr: &PullRequest) -> bool {
 struct SearchResult {
     viewer: String,
     ids: Vec<String>,
+    /// When each PR last changed, as far as GitHub says.
+    updated: HashMap<String, DateTime<Utc>>,
     sso_partial: bool,
 }
 
@@ -1524,6 +1569,7 @@ async fn search_ids(
     let mut result = SearchResult {
         viewer: String::new(),
         ids: Vec::new(),
+        updated: HashMap::new(),
         sso_partial: false,
     };
     let mut cursor: Option<String> = None;
@@ -1538,9 +1584,12 @@ async fn search_ids(
         .await?;
         result.viewer = page.data.viewer.login;
         result.sso_partial |= page.sso_partial;
-        result
-            .ids
-            .extend(page.data.search.nodes.into_iter().flatten().map(|n| n.id));
+        for node in page.data.search.nodes.into_iter().flatten() {
+            if let Some(at) = node.updated_at {
+                result.updated.insert(node.id.clone(), at);
+            }
+            result.ids.push(node.id);
+        }
 
         let info = page.data.search.page_info;
         match info.end_cursor {
@@ -1644,6 +1693,8 @@ struct Search {
 #[derive(Deserialize)]
 struct SearchNode {
     id: String,
+    #[serde(default, rename = "updatedAt")]
+    updated_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Deserialize)]
@@ -1866,6 +1917,62 @@ fn rate_limit_reset(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
+
+    fn known(id: &str, updated: Option<&str>) -> (String, PullRequest) {
+        let pr: PullRequest = serde_json::from_value(json!({
+            "id": id, "number": 1, "title": "T", "url": "https://x", "isDraft": false,
+            "updatedAt": updated, "createdAt": "2026-10-01T09:00:00Z",
+            "reviewDecision": null, "mergeable": "MERGEABLE", "autoMergeRequest": null,
+            "repository": { "nameWithOwner": "o/r" },
+            "commits": { "nodes": [] }, "reviewRequests": { "nodes": [] },
+            "latestReviews": { "nodes": [] }, "latestOpinionatedReviews": { "nodes": [] },
+            "reviews": { "nodes": [] }, "timelineItems": { "nodes": [] },
+        }))
+        .unwrap();
+        (id.to_string(), pr)
+    }
+
+    #[test]
+    fn keeps_only_what_github_says_has_not_changed() {
+        let (old, new) = ("2026-10-01T09:00:00Z", "2026-10-02T09:00:00Z");
+        let at = |s: &str| s.parse::<DateTime<Utc>>().unwrap();
+        let reusable: HashMap<String, PullRequest> = [
+            known("same", Some(old)),
+            known("changed", Some(old)),
+            known("mine", Some(old)),
+            known("unsaid", Some(old)),
+            known("undated", None),
+        ]
+        .into();
+        let updated: HashMap<String, DateTime<Utc>> = [
+            ("same".to_string(), at(old)),
+            ("changed".to_string(), at(new)),
+            ("mine".to_string(), at(old)),
+            ("undated".to_string(), at(old)),
+            ("unknown".to_string(), at(old)),
+        ]
+        .into();
+        let own: HashSet<String> = ["mine".to_string()].into();
+        let ids = ["same", "changed", "mine", "unsaid", "undated", "unknown"]
+            .map(str::to_string)
+            .to_vec();
+        let (fetch, keep) = unchanged(ids, &reusable, &updated, &own);
+        assert_eq!(fetch, ["changed", "mine", "unsaid", "undated", "unknown"]);
+        assert_eq!(
+            keep.iter().map(|pr| pr.id.as_str()).collect::<Vec<_>>(),
+            ["same"]
+        );
+    }
+
+    #[test]
+    fn keeps_nothing_with_nothing_to_keep() {
+        let ids = vec!["a".to_string()];
+        let nothing = HashMap::new();
+        let (fetch, keep) = unchanged(ids, &nothing, &HashMap::new(), &HashSet::new());
+        assert_eq!(fetch, ["a"]);
+        assert!(keep.is_empty());
+    }
     use crate::{auth, prs};
 
     #[test]

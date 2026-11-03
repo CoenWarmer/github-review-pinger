@@ -41,6 +41,9 @@ const POLL_INTERVAL_MS = 120_000;
 /** Coming back to the page sooner than this after a refresh began doesn't start another:
  * a full refresh is most of what the rate limit goes on, and that one is recent enough. */
 const SHOWN_REFRESH_AFTER_MS = 60_000;
+/** PRs off screen that GitHub says haven't changed are kept this long between
+ * fetches. Checks finishing doesn't count as a change, so they do need fetching. */
+const OFF_SCREEN_MAX_AGE_MS = 600_000;
 const MAX_BACKOFF_MS = 600_000;
 const SYNC_DELAY_MS = 1_000;
 /// Gists are listed 100 at a time.
@@ -185,6 +188,8 @@ export class Engine {
   /** When GitHub's rate limit lifts, once it has been reached. */
   private rateLimitedUntil = 0;
   private lastPollStartedAt = 0;
+  /** When every PR was last fetched, whether changed or not. */
+  private lastFullFetchAt: number | null = null;
   private visible = true;
   private started = false;
   private stopped = false;
@@ -417,7 +422,10 @@ export class Engine {
         shown = applyProgress(shown, { ...progress, fresh });
         this.showProgress(shown, now, firstLoad, fresh);
       };
-      const plan = this.plan();
+      const full =
+        this.lastFullFetchAt === null ||
+        this.now().getTime() - this.lastFullFetchAt >= OFF_SCREEN_MAX_AGE_MS;
+      const plan = { ...this.plan(), reusable: full ? undefined : this.reusable() };
       const [fetched, mergedPage] = await Promise.all([
         github.fetchOpenPullRequests(
           this.pinger.reviewedSince(now),
@@ -430,6 +438,7 @@ export class Engine {
         this.sync(),
       ]);
       this.rateLimitedUntil = 0;
+      if (full) this.lastFullFetchAt = this.now().getTime();
       this.ownIds = new Set(fetched.pullRequests.map((pr) => pr.id));
       this.lastFetched = fetched;
       this.rememberRequired(fetched);
@@ -517,6 +526,18 @@ export class Engine {
     );
     const first = [...this.viewState.openIds].filter((id) => known.has(id));
     return { first, own: first.filter((id) => this.ownIds.has(id)), reviewsTab: this.viewState.reviewsTab };
+  }
+
+  /** What the last fetch has of PRs that aren't yours, which a poll can keep. */
+  private reusable(): Map<string, RawPullRequest> {
+    const last = this.lastFetched;
+    if (!last) return new Map();
+    return new Map(
+      [...last.reviewPullRequests, ...Object.values(last.viewPullRequests).flat()].map((pr) => [
+        pr.id,
+        pr,
+      ]),
+    );
   }
 
   /**

@@ -1,5 +1,6 @@
 # Cheap: only ids, so all open PRs fit in one or two fast pages. Details are
-# fetched separately in parallel batches (details.graphql).
+# fetched separately in parallel batches (details.graphql), and updatedAt says
+# which of those still hold, as it costs nothing here.
 query OpenPullRequestIds($q: String!, $cursor: String) {
   viewer {
     login
@@ -12,6 +13,7 @@ query OpenPullRequestIds($q: String!, $cursor: String) {
     nodes {
       ... on PullRequest {
         id
+        updatedAt
       }
     }
   }

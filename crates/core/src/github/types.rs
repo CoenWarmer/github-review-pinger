@@ -103,6 +103,9 @@ pub struct PullRequest {
     #[serde(default)]
     pub author: Option<Actor>,
     pub is_draft: bool,
+    /// What the searches compare, to tell whether this can be kept a while.
+    #[serde(default)]
+    pub updated_at: Option<DateTime<Utc>>,
     /// Merged or closed; only matters when a single PR is refreshed after
     /// the list was fetched.
     #[serde(default)]

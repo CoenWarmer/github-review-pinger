@@ -37,6 +37,9 @@ const MAX_BACKOFF: Duration = Duration::from_secs(600);
 /// Opening the popover sooner than this after a refresh began doesn't start another:
 /// a full refresh is most of what the rate limit goes on, and that one is recent enough.
 const OPEN_REFRESH_AFTER: Duration = Duration::from_secs(60);
+/// PRs off screen that GitHub says haven't changed are kept this long between
+/// fetches. Checks finishing doesn't count as a change, so they do need fetching.
+const OFF_SCREEN_MAX_AGE: Duration = Duration::from_secs(600);
 /// Fetched automatically with every poll, while the Merged section is on.
 const MERGED_PAGE_SIZE: u32 = 30;
 /// Fetched per "Load more" click.
@@ -178,6 +181,8 @@ pub struct Poller {
     /// When GitHub's rate limit lifts, once it has been reached.
     rate_limited_until: Mutex<Option<DateTime<Utc>>>,
     last_refresh_started: Mutex<Option<std::time::Instant>>,
+    /// When every PR was last fetched, whether changed or not.
+    last_full_fetch: Mutex<Option<std::time::Instant>>,
     http: reqwest::Client,
 }
 
@@ -910,6 +915,7 @@ pub fn start(app: &AppHandle) -> Arc<Poller> {
         merged: Mutex::new(MergedState::default()),
         rate_limited_until: Mutex::new(None),
         last_refresh_started: Mutex::new(None),
+        last_full_fetch: Mutex::new(None),
         http: github::http_client(),
     });
     tauri::async_runtime::spawn(run(app.clone(), poller.clone()));
@@ -1347,9 +1353,23 @@ async fn fetch(
     };
     // The PRs in open sections are refetched without waiting for the
     // searches. Only ones the last fetch knows can be, and none on a first load.
+    let full = poller
+        .last_full_fetch
+        .lock()
+        .unwrap()
+        .is_none_or(|at| at.elapsed() >= OFF_SCREEN_MAX_AGE);
     let plan = {
         let state = poller.view_state.lock().unwrap().clone();
         let latest = poller.latest.lock().unwrap();
+        let reusable: HashMap<String, github::types::PullRequest> = match latest.as_ref() {
+            Some(fetched) if !full => fetched
+                .review_pull_requests
+                .iter()
+                .chain(fetched.view_pull_requests.values().flatten())
+                .map(|pr| (pr.id.clone(), pr.clone()))
+                .collect(),
+            _ => HashMap::new(),
+        };
         let (own, known): (HashSet<String>, HashSet<String>) = match latest.as_ref() {
             Some(fetched) => (
                 fetched
@@ -1380,6 +1400,7 @@ async fn fetch(
                 .collect(),
             first,
             reviews_tab: state.reviews_tab,
+            reusable,
         }
     };
     log::info!(
@@ -1406,6 +1427,9 @@ async fn fetch(
         FetchError::Network(message) => Problem::Network { message },
         FetchError::Api(message) => Problem::Api { message },
     })?;
+    if full {
+        *poller.last_full_fetch.lock().unwrap() = Some(std::time::Instant::now());
+    }
 
     Ok(Fetched {
         viewer: fetched.viewer,

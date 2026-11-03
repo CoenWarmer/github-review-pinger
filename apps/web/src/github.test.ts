@@ -6,6 +6,7 @@ import {
   teamScope,
   couldBeReady,
   FetchError,
+  unchanged,
   needsRequiredChecks,
   requiredChecksQuery,
   type Queries,
@@ -37,6 +38,29 @@ function github(handler: Handler, sleeps: number[] = []) {
 }
 
 const failure = (kind: string) => (e: unknown) => e instanceof FetchError && e.kind === kind;
+
+describe("unchanged", () => {
+  const known = (id: string, updatedAt?: string) => [id, { id, updatedAt }] as [string, RawPullRequest];
+  const OLD = "2026-10-01T09:00:00Z";
+  const NEW = "2026-10-02T09:00:00Z";
+
+  it("keeps only what GitHub says hasn't changed, and never your own", () => {
+    const reusable = new Map([known("same", OLD), known("changed", OLD), known("mine", OLD), known("unsaid", OLD), known("undated")]);
+    const updated = new Map([["same", OLD], ["changed", NEW], ["mine", OLD], ["undated", OLD], ["unknown", OLD]]);
+    const { fetch, keep } = unchanged(
+      ["same", "changed", "mine", "unsaid", "undated", "unknown"],
+      reusable,
+      updated,
+      new Set(["mine"]),
+    );
+    assert.deepEqual(fetch, ["changed", "mine", "unsaid", "undated", "unknown"]);
+    assert.deepEqual(keep.map((pr) => pr.id), ["same"]);
+  });
+
+  it("fetches everything with nothing to keep", () => {
+    assert.deepEqual(unchanged(["a"], undefined, new Map([["a", OLD]]), new Set()), { fetch: ["a"], keep: [] });
+  });
+});
 
 describe("requests", () => {
   it("maps a rejected token", async () => {
