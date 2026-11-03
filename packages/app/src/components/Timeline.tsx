@@ -1,4 +1,4 @@
-import { useLayoutEffect, useMemo, useRef, useState, type PointerEvent } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent } from "react";
 import { Check, Circle, Maximize2, ZoomOut } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -16,6 +16,7 @@ import {
   buildTimeline,
   FIT_ALL,
   formatDuration,
+  panRange,
   zoomOut,
   withState,
   zoomRange,
@@ -309,6 +310,34 @@ function Scroller({
     const el = scroller.current;
     if (el) el.scrollLeft = el.scrollWidth;
   }, [range]);
+
+  // Sideways on a trackpad, or shift and a wheel, moves through time. Added by hand,
+  // as React's own wheel listener is passive, and so can't stop the browser acting on it.
+  const latest = useRef({ chart, onZoom });
+  latest.current = { chart, onZoom };
+  useEffect(() => {
+    const el = scroller.current;
+    if (!el) return;
+    const onWheel = (e: WheelEvent) => {
+      const dx = e.deltaX || (e.shiftKey ? e.deltaY : 0);
+      const sideways = Math.abs(dx) > Math.abs(e.shiftKey ? 0 : e.deltaY);
+      // A window too narrow for the chart scrolls it by itself.
+      if (!sideways || el.scrollWidth > el.clientWidth) return;
+      e.preventDefault();
+      const width = el
+        .querySelector("[data-track]")
+        ?.getBoundingClientRect().width;
+      if (!width) return;
+      const { chart: shown, onZoom: show } = latest.current;
+      const next = panRange(shown, ((e.deltaMode === 1 ? 16 : 1) * dx) / width);
+      // At either end nothing moves, and it shouldn't look zoomed either.
+      if (next.from === shown.from && next.to === shown.to) return;
+      setTip(null);
+      show(next);
+    };
+    el.addEventListener("wheel", onWheel, { passive: false });
+    return () => el.removeEventListener("wheel", onWheel);
+  }, []);
 
   function onPointerDown(e: PointerEvent<HTMLDivElement>) {
     justDragged.current = false;

@@ -125,7 +125,11 @@ function timeTicks(start: number, end: number, stepHours: number): number[] {
   if (stepHours < 24) {
     tick.setHours(tick.getHours() - (tick.getHours() % stepHours), 0, 0, 0);
   } else {
+    // Counted from a fixed day, Monday in fact, so they stay put as the chart pans.
     tick.setHours(0, 0, 0, 0);
+    const stepDays = stepHours / 24;
+    const day = Date.UTC(tick.getFullYear(), tick.getMonth(), tick.getDate()) / DAY_MS + 3;
+    tick.setDate(tick.getDate() - (day % stepDays));
   }
   const ticks: number[] = [];
   while (tick.getTime() < end) {
@@ -257,6 +261,17 @@ export function zoomRange(axis: TimelineRange, a: number, b: number): TimelineRa
   const start = Math.max((from + to - MIN_ZOOM_MS) / 2, axis.from);
   const stop = Math.min(start + MIN_ZOOM_MS, axis.to);
   return end(stop - MIN_ZOOM_MS, stop);
+}
+
+/**
+ * The same length of time as `chart` shows, moved later by `by` of its length (or
+ * earlier when negative), staying between as far back as it goes and now.
+ */
+export function panRange(chart: Timeline, by: number): TimelineRange {
+  const span = chart.to - chart.from;
+  const to = Math.min(Math.max(chart.to + by * span, chart.earliest + span), chart.now);
+  const from = to - span;
+  return to >= chart.now ? { from, to, live: true } : { from, to };
 }
 
 /** Twice as much as `chart` shows, around its middle, up to everything. */

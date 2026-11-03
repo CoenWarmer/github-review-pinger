@@ -326,6 +326,9 @@ the chart, without the list's search of GitHub.
   and so does switching tab or view. All the rows stay, empty where a PR has nothing
   in that stretch. A click without a drag still opens the PR. On touch, a sideways
   drag zooms and a vertical one scrolls.
+- **Panning**: scrolling sideways on a trackpad, or shift and a mouse wheel, moves the
+  chart through time, keeping the same length of time in view, from as far back as
+  Fit all reaches up to now. Reaching now, it follows it again.
 - **PR bars**: from when it was created to now, split into stretches: dashed while
   it was a draft, worked out from when it was marked ready or back to draft within
   the last 50 timeline items, otherwise solid. Solid stretches are green, with a

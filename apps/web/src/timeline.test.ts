@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { PullRequest } from "@review-pinger/app";
-import { buildTimeline, FIT_ALL, formatDuration, withState, zoomOut, zoomRange } from "../../../packages/app/src/timeline.ts";
+import { buildTimeline, FIT_ALL, formatDuration, panRange, withState, zoomOut, zoomRange } from "../../../packages/app/src/timeline.ts";
 
 const NOW = Date.parse("2026-10-10T12:00:00Z");
 const DAY = 24 * 60 * 60_000;
@@ -291,6 +291,58 @@ describe("buildTimeline", () => {
       const start = zoomRange(axis, 0, 0.001);
       assert.equal(start.from, axis.from);
       assert.equal(start.to - start.from, 3600_000);
+    });
+  });
+
+  describe("panRange", () => {
+    const prs = [pr("old", 40, []), pr("new", 1, [])];
+
+    it("moves through time, keeping the same length", () => {
+      const moved = panRange(buildTimeline(prs, NOW), -0.5);
+      assert.deepEqual(moved, { from: NOW - 10.5 * DAY, to: NOW - 3.5 * DAY });
+      const back = panRange(buildTimeline(prs, NOW, moved), 0.25);
+      assert.deepEqual(back, { from: NOW - 8.75 * DAY, to: NOW - 1.75 * DAY });
+    });
+
+    it("stops at now, and follows it again", () => {
+      const away = { from: NOW - 8 * DAY, to: NOW - DAY };
+      const moved = panRange(buildTimeline(prs, NOW, away), 5);
+      assert.deepEqual(moved, { from: NOW - 7 * DAY, to: NOW, live: true });
+      assert.equal(buildTimeline(prs, NOW + 3600_000, moved).to, NOW + 3600_000);
+    });
+
+    it("stops as far back as the longest bar", () => {
+      const chart = buildTimeline(prs, NOW);
+      const moved = panRange(chart, -100);
+      assert.equal(moved.from, chart.earliest);
+      assert.equal(moved.to - moved.from, 7 * DAY);
+    });
+
+    it("doesn't move when everything is in view", () => {
+      const chart = buildTimeline(prs, NOW, FIT_ALL);
+      for (const by of [-1, 1]) {
+        const moved = panRange(chart, by);
+        assert.equal(moved.from, chart.from);
+        assert.equal(moved.to, chart.to);
+      }
+    });
+
+    it("keeps labels on the same times while moving", () => {
+      const list = [pr("old", 400, [])];
+      for (const days of [14, 28, 60, 200]) {
+        const times = (end: number) =>
+          buildTimeline(list, NOW, { from: NOW - (end + days) * DAY, to: NOW - end * DAY }).ticks.map(
+            (tick) => tick.at,
+          );
+        const later = new Set(times(30));
+        // Moved by a quarter: a label in the middle of what both show is in both.
+        const moved = times(30 + days / 4);
+        const shared = moved.filter(
+          (at) => at > NOW - (30 + days * 0.8) * DAY && at < NOW - (30 + days * 0.4) * DAY,
+        );
+        assert.ok(shared.length > 0);
+        for (const at of shared) assert.ok(later.has(at));
+      }
     });
   });
 
