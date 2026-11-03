@@ -42,6 +42,19 @@ export function createWebPlatform(engine: Engine): Platform {
       engine.markVisited(id);
       openExternal(url);
     },
+    visitReview: (id, reviewId, url) => {
+      engine.markVisited(id);
+      // Opened now, while the click still allows it, and sent on once it's known.
+      const opened = window.open("about:blank", "_blank");
+      void engine.reviewCommentUrl(reviewId).then((comment) => {
+        if (opened) {
+          opened.opener = null;
+          opened.location.href = comment ?? url;
+        } else {
+          openExternal(comment ?? url);
+        }
+      });
+    },
     openUrl: openExternal,
     snooze: (id, days) => engine.snooze(id, days),
     unsnooze: (id) => engine.snooze(id, undefined),

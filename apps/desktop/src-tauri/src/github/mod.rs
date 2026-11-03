@@ -1,8 +1,11 @@
+pub mod usage;
+
 pub use review_pinger_core::github::types;
 use review_pinger_core::github::{
     DETAILS_QUERY, MAX_CHECK_PAGES, MERGE_STATE_QUERY, MERGED_QUERY, MERGED_SEARCH,
-    MERGED_SEARCH_QUERY, PR_DETAILS_QUERY, PR_SEARCH_QUERY, RequiredChecksReply, SEARCH_QUERY,
-    STATS_MERGED_QUERY, needs_required_checks, required_checks_query,
+    MERGED_SEARCH_QUERY, PR_DETAILS_QUERY, PR_SEARCH_QUERY, REVIEW_COMMENT_QUERY,
+    RequiredChecksReply, SEARCH_QUERY, STATS_MERGED_QUERY, needs_required_checks,
+    required_checks_query,
 };
 
 use std::collections::{HashMap, HashSet};
@@ -76,6 +79,35 @@ pub struct Plan {
     /// The Review requests tab is the one being looked at, so its PRs come
     /// before the rest.
     pub reviews_tab: bool,
+    /// PRs from the last fetch that can be kept instead of fetched again, if the
+    /// searches say they haven't changed. Empty when they're all due.
+    pub reusable: HashMap<String, PullRequest>,
+}
+
+/// Which of `ids` to fetch, and which can be kept from `reusable`: those GitHub says
+/// haven't been updated since. Your own are always fetched, since checks finishing
+/// doesn't update a PR and they decide what you're told to do next.
+fn unchanged<'a>(
+    ids: Vec<String>,
+    reusable: &'a HashMap<String, PullRequest>,
+    updated: &HashMap<String, DateTime<Utc>>,
+    own: &HashSet<String>,
+) -> (Vec<String>, Vec<&'a PullRequest>) {
+    let mut fetch = Vec::new();
+    let mut keep = Vec::new();
+    for id in ids {
+        match reusable.get(&id) {
+            Some(pr)
+                if !own.contains(&id)
+                    && pr.updated_at.is_some()
+                    && pr.updated_at == updated.get(&id).copied() =>
+            {
+                keep.push(pr);
+            }
+            _ => fetch.push(id),
+        }
+    }
+    (fetch, keep)
 }
 
 /// PRs that just arrived, handed over for display while the rest is fetched.
@@ -171,6 +203,8 @@ pub async fn fetch_open_pull_requests(
     let reviewed_ids: HashSet<String> = reviewed.ids.iter().cloned().collect();
     // Ids per view, kept apart from the union below so each view's PRs can
     // be picked back out of the one details fetch.
+    let view_updated: Vec<HashMap<String, DateTime<Utc>>> =
+        view_results.iter().map(|r| r.updated.clone()).collect();
     let view_ids: Vec<(String, Vec<String>)> = views
         .iter()
         .zip(view_results)
@@ -242,6 +276,17 @@ pub async fn fetch_open_pull_requests(
             .await
         }
     };
+    // Only the tab not being looked at: what's on screen is always fetched.
+    let updated: HashMap<String, DateTime<Utc>> = authored
+        .updated
+        .iter()
+        .chain(&requested.updated)
+        .chain(&reviewed.updated)
+        .chain(view_updated.iter().flatten())
+        .map(|(id, at)| (id.clone(), *at))
+        .collect();
+    let (other_ids, kept) = unchanged(other_ids, &plan.reusable, &updated, &authored_ids);
+    lap(format!("phase 3 keeps {} unchanged PRs", kept.len()));
     let (tab, other) =
         future::try_join(phase("phase 2", tab_ids), phase("phase 3", other_ids)).await?;
     lap("all phases done".into());
@@ -249,6 +294,7 @@ pub async fn fetch_open_pull_requests(
         .into_iter()
         .chain(tab)
         .chain(other)
+        .chain(kept.into_iter().cloned())
         .map(|pr| (pr.id.clone(), pr))
         .collect();
     let pull_requests: Vec<PullRequest> = authored_ids
@@ -411,6 +457,19 @@ pub async fn fetch_pr_details(
     )
     .await?;
     Ok(reply.data["node"].clone())
+}
+
+/// Where a review's last comment is, when it has one.
+pub async fn fetch_review_comment_url(
+    http: &reqwest::Client,
+    token: &str,
+    id: &str,
+) -> Result<Option<String>, FetchError> {
+    let reply: Response<Value> =
+        request(http, token, REVIEW_COMMENT_QUERY, json!({ "id": id })).await?;
+    Ok(reply.data["node"]["comments"]["nodes"][0]["url"]
+        .as_str()
+        .map(str::to_string))
 }
 
 #[derive(Deserialize)]
@@ -1497,6 +1556,8 @@ fn could_be_ready(pr: &PullRequest) -> bool {
 struct SearchResult {
     viewer: String,
     ids: Vec<String>,
+    /// When each PR last changed, as far as GitHub says.
+    updated: HashMap<String, DateTime<Utc>>,
     sso_partial: bool,
 }
 
@@ -1508,6 +1569,7 @@ async fn search_ids(
     let mut result = SearchResult {
         viewer: String::new(),
         ids: Vec::new(),
+        updated: HashMap::new(),
         sso_partial: false,
     };
     let mut cursor: Option<String> = None;
@@ -1522,9 +1584,12 @@ async fn search_ids(
         .await?;
         result.viewer = page.data.viewer.login;
         result.sso_partial |= page.sso_partial;
-        result
-            .ids
-            .extend(page.data.search.nodes.into_iter().flatten().map(|n| n.id));
+        for node in page.data.search.nodes.into_iter().flatten() {
+            if let Some(at) = node.updated_at {
+                result.updated.insert(node.id.clone(), at);
+            }
+            result.ids.push(node.id);
+        }
 
         let info = page.data.search.page_info;
         match info.end_cursor {
@@ -1628,6 +1693,8 @@ struct Search {
 #[derive(Deserialize)]
 struct SearchNode {
     id: String,
+    #[serde(default, rename = "updatedAt")]
+    updated_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Deserialize)]
@@ -1664,30 +1731,92 @@ async fn request<D: DeserializeOwned>(
     query: &str,
     variables: Value,
 ) -> Result<Response<D>, FetchError> {
-    let body = json!({ "query": query, "variables": variables });
+    let body = json!({ "query": usage::with_cost(query), "variables": variables });
+    let op = usage::label(query);
 
     let mut attempt = 0;
-    let response = loop {
+    let (response, attempt_started) = loop {
         attempt += 1;
-        let response = http
+        let started = Instant::now();
+        let sent = http
             .post(ENDPOINT)
             .bearer_auth(token)
             .json(&body)
             .send()
-            .await
-            .map_err(|e| FetchError::Network(e.to_string()))?;
+            .await;
+        let about = usage::Attempt {
+            op: &op,
+            variables: &body["variables"],
+            attempt,
+            ms: started.elapsed().as_millis(),
+        };
+        let response = match sent {
+            Ok(response) => response,
+            Err(e) => {
+                let mut entry = about.entry(0, 0, None);
+                entry.error = Some(e.to_string());
+                usage::record(&entry);
+                return Err(FetchError::Network(e.to_string()));
+            }
+        };
 
         // GitHub occasionally times out heavy queries with a 502.
         if response.status().is_server_error() && attempt < MAX_ATTEMPTS {
             log::warn!("GitHub returned {}, retrying", response.status());
+            usage::record(&about.entry(response.status().as_u16(), 0, Some(response.headers())));
             tokio::time::sleep(Duration::from_secs(2 * u64::from(attempt))).await;
             continue;
         }
-        break response;
+        break (response, started);
     };
 
     let status = response.status();
     let headers = response.headers().clone();
+    let bytes = response.bytes().await;
+    let about = usage::Attempt {
+        op: &op,
+        variables: &body["variables"],
+        attempt,
+        ms: attempt_started.elapsed().as_millis(),
+    };
+    let mut reply = bytes
+        .as_ref()
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<Value>(bytes).ok());
+    let cost = reply.as_mut().and_then(usage::take_cost);
+    {
+        let errors = reply
+            .as_ref()
+            .and_then(|reply| reply.get("errors"))
+            .and_then(Value::as_array);
+        let field = |name: &str| -> Vec<String> {
+            errors
+                .into_iter()
+                .flatten()
+                .filter_map(|error| error.get(name)?.as_str().map(str::to_string))
+                .collect()
+        };
+        let message = reply
+            .as_ref()
+            .and_then(|reply| reply.get("message"))
+            .and_then(Value::as_str)
+            .map(str::to_string)
+            .into_iter()
+            .chain(field("message"))
+            .collect::<Vec<_>>()
+            .join("; ");
+        let mut entry = about.entry(
+            status.as_u16(),
+            bytes.as_ref().map_or(0, |bytes| bytes.len()),
+            Some(&headers),
+        );
+        entry.rejected = usage::rejection(&headers, status.as_u16(), &message);
+        entry.cost = cost;
+        let types = field("type");
+        entry.error_types = (!types.is_empty()).then_some(types);
+        entry.error = (!message.is_empty()).then(|| message.chars().take(300).collect());
+        usage::record(&entry);
+    }
 
     if status == StatusCode::UNAUTHORIZED {
         return Err(FetchError::Unauthorized);
@@ -1704,17 +1833,23 @@ async fn request<D: DeserializeOwned>(
         .and_then(|v| v.to_str().ok())
         .is_some_and(|v| v.contains("partial-results"));
 
-    let parsed: Envelope<D> = response
-        .json()
-        .await
+    let bytes = bytes.map_err(|e| FetchError::Network(e.to_string()))?;
+    // Parsed already, to read the cost; the rest is what the caller asked for.
+    let reply = match reply {
+        Some(reply) => reply,
+        None => serde_json::from_slice(&bytes)
+            .map_err(|e| FetchError::Api(format!("Unexpected response from GitHub: {e}")))?,
+    };
+    let parsed: Envelope<D> = serde_json::from_value(reply)
         .map_err(|e| FetchError::Api(format!("Unexpected response from GitHub: {e}")))?;
 
-    if parsed
-        .errors
-        .iter()
-        .any(|e| e.kind.as_deref() == Some("RATE_LIMITED"))
-    {
-        return Err(FetchError::RateLimited { reset_at: None });
+    if parsed.errors.iter().any(|e| {
+        // GitHub says `RATE_LIMIT` once the budget is gone, with a 200 and the reset in the headers.
+        matches!(e.kind.as_deref(), Some("RATE_LIMITED" | "RATE_LIMIT"))
+    }) {
+        return Err(FetchError::RateLimited {
+            reset_at: header_reset(&headers),
+        });
     }
 
     let messages = || {
@@ -1743,6 +1878,15 @@ async fn request<D: DeserializeOwned>(
     }
 }
 
+/// When the rate limit lifts, as the response's headers say.
+fn header_reset(headers: &header::HeaderMap) -> Option<DateTime<Utc>> {
+    headers
+        .get("x-ratelimit-reset")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.parse::<i64>().ok())
+        .and_then(|t| DateTime::from_timestamp(t, 0))
+}
+
 /// Returns `Some` when the response is a primary or secondary rate-limit rejection.
 fn rate_limit_reset(
     status: StatusCode,
@@ -1762,7 +1906,7 @@ fn rate_limit_reset(
         return Some(Some(Utc::now() + chrono::Duration::seconds(seconds)));
     }
     if header_num("x-ratelimit-remaining") == Some(0) {
-        return Some(header_num("x-ratelimit-reset").and_then(|t| DateTime::from_timestamp(t, 0)));
+        return Some(header_reset(headers));
     }
     if status == StatusCode::TOO_MANY_REQUESTS {
         return Some(None);
@@ -1773,6 +1917,62 @@ fn rate_limit_reset(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
+
+    fn known(id: &str, updated: Option<&str>) -> (String, PullRequest) {
+        let pr: PullRequest = serde_json::from_value(json!({
+            "id": id, "number": 1, "title": "T", "url": "https://x", "isDraft": false,
+            "updatedAt": updated, "createdAt": "2026-10-01T09:00:00Z",
+            "reviewDecision": null, "mergeable": "MERGEABLE", "autoMergeRequest": null,
+            "repository": { "nameWithOwner": "o/r" },
+            "commits": { "nodes": [] }, "reviewRequests": { "nodes": [] },
+            "latestReviews": { "nodes": [] }, "latestOpinionatedReviews": { "nodes": [] },
+            "reviews": { "nodes": [] }, "timelineItems": { "nodes": [] },
+        }))
+        .unwrap();
+        (id.to_string(), pr)
+    }
+
+    #[test]
+    fn keeps_only_what_github_says_has_not_changed() {
+        let (old, new) = ("2026-10-01T09:00:00Z", "2026-10-02T09:00:00Z");
+        let at = |s: &str| s.parse::<DateTime<Utc>>().unwrap();
+        let reusable: HashMap<String, PullRequest> = [
+            known("same", Some(old)),
+            known("changed", Some(old)),
+            known("mine", Some(old)),
+            known("unsaid", Some(old)),
+            known("undated", None),
+        ]
+        .into();
+        let updated: HashMap<String, DateTime<Utc>> = [
+            ("same".to_string(), at(old)),
+            ("changed".to_string(), at(new)),
+            ("mine".to_string(), at(old)),
+            ("undated".to_string(), at(old)),
+            ("unknown".to_string(), at(old)),
+        ]
+        .into();
+        let own: HashSet<String> = ["mine".to_string()].into();
+        let ids = ["same", "changed", "mine", "unsaid", "undated", "unknown"]
+            .map(str::to_string)
+            .to_vec();
+        let (fetch, keep) = unchanged(ids, &reusable, &updated, &own);
+        assert_eq!(fetch, ["changed", "mine", "unsaid", "undated", "unknown"]);
+        assert_eq!(
+            keep.iter().map(|pr| pr.id.as_str()).collect::<Vec<_>>(),
+            ["same"]
+        );
+    }
+
+    #[test]
+    fn keeps_nothing_with_nothing_to_keep() {
+        let ids = vec!["a".to_string()];
+        let nothing = HashMap::new();
+        let (fetch, keep) = unchanged(ids, &nothing, &HashMap::new(), &HashSet::new());
+        assert_eq!(fetch, ["a"]);
+        assert!(keep.is_empty());
+    }
     use crate::{auth, prs};
 
     #[test]

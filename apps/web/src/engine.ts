@@ -38,6 +38,12 @@ const STATE_KEY = "reviewPinger.state";
 const REQUIRED_KEY = "reviewPinger.requiredChecks.v1";
 
 const POLL_INTERVAL_MS = 120_000;
+/** Coming back to the page sooner than this after a refresh began doesn't start another:
+ * a full refresh is most of what the rate limit goes on, and that one is recent enough. */
+const SHOWN_REFRESH_AFTER_MS = 60_000;
+/** PRs off screen that GitHub says haven't changed are kept this long between
+ * fetches. Checks finishing doesn't count as a change, so they do need fetching. */
+const OFF_SCREEN_MAX_AGE_MS = 600_000;
 const MAX_BACKOFF_MS = 600_000;
 const SYNC_DELAY_MS = 1_000;
 /// Gists are listed 100 at a time.
@@ -179,6 +185,11 @@ export class Engine {
   private syncTimer: ReturnType<typeof setTimeout> | null = null;
   private timer: ReturnType<typeof setTimeout> | null = null;
   private failures = 0;
+  /** When GitHub's rate limit lifts, once it has been reached. */
+  private rateLimitedUntil = 0;
+  private lastPollStartedAt = 0;
+  /** When every PR was last fetched, whether changed or not. */
+  private lastFullFetchAt: number | null = null;
   private visible = true;
   private started = false;
   private stopped = false;
@@ -313,10 +324,13 @@ export class Engine {
   /** Refreshes the PRs you opened first, then the whole list. */
   private async shown() {
     if (!this.github || !this.pinger) return;
+    const now = this.now().getTime();
+    // It would only fail; what was visited is still there for when it lifts.
+    if (now < this.rateLimitedUntil) return;
     const ids = [...this.visited];
     this.visited.clear();
     if (ids.length > 0) await this.refreshVisited(ids);
-    await this.poll();
+    if (now - this.lastPollStartedAt >= SHOWN_REFRESH_AFTER_MS) await this.poll();
   }
 
   private async refreshVisited(ids: string[]) {
@@ -369,6 +383,7 @@ export class Engine {
   }
 
   private async pollOnce() {
+    this.lastPollStartedAt = this.now().getTime();
     const github = this.github;
     if (!github) {
       this.publish({ status: { kind: "error", problem: { code: "noToken" } } });
@@ -407,7 +422,10 @@ export class Engine {
         shown = applyProgress(shown, { ...progress, fresh });
         this.showProgress(shown, now, firstLoad, fresh);
       };
-      const plan = this.plan();
+      const full =
+        this.lastFullFetchAt === null ||
+        this.now().getTime() - this.lastFullFetchAt >= OFF_SCREEN_MAX_AGE_MS;
+      const plan = { ...this.plan(), reusable: full ? undefined : this.reusable() };
       const [fetched, mergedPage] = await Promise.all([
         github.fetchOpenPullRequests(
           this.pinger.reviewedSince(now),
@@ -419,6 +437,8 @@ export class Engine {
         needs.merged ? github.fetchMergedPage(null, MERGED_PAGE_SIZE) : Promise.resolve(null),
         this.sync(),
       ]);
+      this.rateLimitedUntil = 0;
+      if (full) this.lastFullFetchAt = this.now().getTime();
       this.ownIds = new Set(fetched.pullRequests.map((pr) => pr.id));
       this.lastFetched = fetched;
       this.rememberRequired(fetched);
@@ -463,6 +483,9 @@ export class Engine {
         e instanceof FetchError && e.kind === "rateLimited" && e.resetAt
           ? Math.min(Math.max(Date.parse(e.resetAt) - this.now().getTime(), 60_000), 3_600_000)
           : Math.min(30_000 * 2 ** (this.failures - 1), MAX_BACKOFF_MS);
+      if (e instanceof FetchError && e.kind === "rateLimited") {
+        this.rateLimitedUntil = this.now().getTime() + delay;
+      }
       // Keep showing the last good data alongside the problem.
       this.publish({ refreshing: false, refreshingIds: [], status: { kind: "error", problem } });
     }
@@ -503,6 +526,18 @@ export class Engine {
     );
     const first = [...this.viewState.openIds].filter((id) => known.has(id));
     return { first, own: first.filter((id) => this.ownIds.has(id)), reviewsTab: this.viewState.reviewsTab };
+  }
+
+  /** What the last fetch has of PRs that aren't yours, which a poll can keep. */
+  private reusable(): Map<string, RawPullRequest> {
+    const last = this.lastFetched;
+    if (!last) return new Map();
+    return new Map(
+      [...last.reviewPullRequests, ...Object.values(last.viewPullRequests).flat()].map((pr) => [
+        pr.id,
+        pr,
+      ]),
+    );
   }
 
   /**
@@ -687,6 +722,16 @@ export class Engine {
       return await this.github.fetchPrDetails(id, after);
     } catch (e) {
       throw e instanceof Error ? e.message : String(e);
+    }
+  }
+
+  /** Where a review's last comment is. Not knowing is fine: the review is opened instead. */
+  async reviewCommentUrl(id: string): Promise<string | null> {
+    try {
+      return (await this.github?.fetchReviewCommentUrl(id)) ?? null;
+    } catch (e) {
+      console.warn("Could not look up a review's last comment", e);
+      return null;
     }
   }
 

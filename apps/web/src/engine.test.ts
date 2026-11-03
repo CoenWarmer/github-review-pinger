@@ -133,6 +133,9 @@ class FakeGithub implements Github {
   async fetchReviewStats() {
     return { reviewsByMe: 0, reviewsByMeInTeamOrg: null, teamMemberCount: 0, teamMemberReviews: null };
   }
+  async fetchReviewCommentUrl() {
+    return null;
+  }
   async fetchPrDetails() {
     return null;
   }
@@ -385,19 +388,68 @@ describe("the web engine", () => {
     assert.equal(github.directoryCalls, 1);
   });
 
-  it("refreshes the PRs you opened when the page is shown again", async () => {
-    const { engine, github } = makeEngine();
-    await engine.start();
-    engine.markVisited("mine");
-    github.details = [pr("mine", { title: "Renamed" })];
-    github.fetched.pullRequests = [pr("mine", { title: "Renamed" })];
-    engine.setVisible(true);
-    await new Promise((resolve) => setTimeout(resolve, 20));
+  describe("when the page is shown again", () => {
+    const shown = async (engine: Engine) => {
+      engine.setVisible(true);
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    };
+    const clock = () => {
+      const at = { ms: Date.parse(NOW) };
+      return { at, now: () => new Date(at.ms) };
+    };
 
-    assert.deepEqual(github.detailCalls, [["mine"]]);
-    assert.equal(engine.getSnapshot().pullRequests[0].title, "Renamed");
-    // Then the whole list, however fresh it is.
-    assert.equal(github.polls, 2);
+    it("refreshes the PRs you opened, and not the whole list just after a refresh", async () => {
+      const { engine, github } = makeEngine();
+      await engine.start();
+      engine.markVisited("mine");
+      github.details = [pr("mine", { title: "Renamed" })];
+      await shown(engine);
+
+      assert.deepEqual(github.detailCalls, [["mine"]]);
+      assert.equal(engine.getSnapshot().pullRequests[0].title, "Renamed");
+      assert.equal(github.polls, 1);
+    });
+
+    it("refreshes the whole list once the last refresh is a minute old", async () => {
+      const { at, now } = clock();
+      const { engine, github } = makeEngine({ now });
+      await engine.start();
+      at.ms += 59_000;
+      await shown(engine);
+      assert.equal(github.polls, 1);
+      at.ms += 1_000;
+      await shown(engine);
+      assert.equal(github.polls, 2);
+    });
+
+    it("always refreshes when asked to", async () => {
+      const { engine, github } = makeEngine();
+      await engine.start();
+      await engine.refresh();
+      assert.equal(github.polls, 2);
+    });
+
+    it("leaves GitHub alone until a rate limit lifts, keeping what was visited", async () => {
+      const { at, now } = clock();
+      const { engine, github } = makeEngine({ now });
+      await engine.start();
+      const lifts = new Date(at.ms + 600_000).toISOString();
+      github.failure = new FetchError("rateLimited", "GitHub rate limit reached", lifts);
+      await engine.refresh();
+      assert.equal(github.polls, 2);
+      github.failure = null;
+
+      engine.markVisited("mine");
+      at.ms += 120_000;
+      await shown(engine);
+      assert.equal(github.polls, 2);
+      assert.deepEqual(github.detailCalls, []);
+
+      at.ms += 480_000;
+      await shown(engine);
+      assert.equal(github.polls, 3);
+      assert.deepEqual(github.detailCalls, [["mine"]]);
+    });
   });
 
   it("saves a token and fetches with it, and forgets it again", async () => {

@@ -1,0 +1,12 @@
+# A review's last comment, when its reviewer's chip is clicked.
+query LatestReviewComment($id: ID!) {
+  node(id: $id) {
+    ... on PullRequestReview {
+      comments(last: 1) {
+        nodes {
+          url
+        }
+      }
+    }
+  }
+}

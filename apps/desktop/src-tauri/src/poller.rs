@@ -34,6 +34,12 @@ use crate::views::View;
 
 const POLL_INTERVAL: Duration = Duration::from_secs(120);
 const MAX_BACKOFF: Duration = Duration::from_secs(600);
+/// Opening the popover sooner than this after a refresh began doesn't start another:
+/// a full refresh is most of what the rate limit goes on, and that one is recent enough.
+const OPEN_REFRESH_AFTER: Duration = Duration::from_secs(60);
+/// PRs off screen that GitHub says haven't changed are kept this long between
+/// fetches. Checks finishing doesn't count as a change, so they do need fetching.
+const OFF_SCREEN_MAX_AGE: Duration = Duration::from_secs(600);
 /// Fetched automatically with every poll, while the Merged section is on.
 const MERGED_PAGE_SIZE: u32 = 30;
 /// Fetched per "Load more" click.
@@ -172,7 +178,18 @@ pub struct Poller {
     sync_lock: tokio::sync::Mutex<()>,
     /// The Merged section's automatic page and "Load more" extension.
     merged: Mutex<MergedState>,
+    /// When GitHub's rate limit lifts, once it has been reached.
+    rate_limited_until: Mutex<Option<DateTime<Utc>>>,
+    last_refresh_started: Mutex<Option<std::time::Instant>>,
+    /// When every PR was last fetched, whether changed or not.
+    last_full_fetch: Mutex<Option<std::time::Instant>>,
     http: reqwest::Client,
+}
+
+/// Whether opening the popover should start a full refresh: not when one is
+/// running, the rate limit is in the way, or the last one began a moment ago.
+fn open_refreshes(refreshing: bool, rate_limited: bool, since_last: Option<Duration>) -> bool {
+    !refreshing && !rate_limited && since_last.is_none_or(|since| since >= OPEN_REFRESH_AFTER)
 }
 
 impl Poller {
@@ -184,9 +201,23 @@ impl Poller {
         self.wake.notify_one();
     }
 
-    /// Refreshes when the popover opens, unless a refresh is already running.
+    /// Whether GitHub's rate limit has been reached and hasn't lifted yet.
+    fn rate_limited(&self) -> bool {
+        self.rate_limited_until
+            .lock()
+            .unwrap()
+            .is_some_and(|until| until > Utc::now())
+    }
+
+    /// Refreshes when the popover opens, unless that wouldn't help (see [`open_refreshes`]).
     pub fn refresh_on_open(&self) {
-        if !self.snapshot.lock().unwrap().refreshing {
+        let since_last = self
+            .last_refresh_started
+            .lock()
+            .unwrap()
+            .map(|started| started.elapsed());
+        let refreshing = self.snapshot.lock().unwrap().refreshing;
+        if open_refreshes(refreshing, self.rate_limited(), since_last) {
             self.wake.notify_one();
         }
     }
@@ -299,6 +330,14 @@ impl Poller {
     ) -> Result<serde_json::Value, String> {
         let token = self.search_token().await?;
         github::fetch_pr_details(&self.http, &token, id, after)
+            .await
+            .map_err(fetch_error_message)
+    }
+
+    /// Where a review's last comment is, if it has one.
+    pub async fn review_comment_url(&self, id: &str) -> Result<Option<String>, String> {
+        let token = self.search_token().await?;
+        github::fetch_review_comment_url(&self.http, &token, id)
             .await
             .map_err(fetch_error_message)
     }
@@ -810,6 +849,9 @@ impl Poller {
 }
 
 pub fn start(app: &AppHandle) -> Arc<Poller> {
+    if let Ok(dir) = app.path().app_log_dir() {
+        github::usage::init(dir.join("api-usage.jsonl"));
+    }
     let memory_path = app
         .path()
         .app_data_dir()
@@ -871,6 +913,9 @@ pub fn start(app: &AppHandle) -> Arc<Poller> {
         sync_wake: Notify::new(),
         sync_lock: tokio::sync::Mutex::new(()),
         merged: Mutex::new(MergedState::default()),
+        rate_limited_until: Mutex::new(None),
+        last_refresh_started: Mutex::new(None),
+        last_full_fetch: Mutex::new(None),
         http: github::http_client(),
     });
     tauri::async_runtime::spawn(run(app.clone(), poller.clone()));
@@ -882,6 +927,10 @@ pub fn start(app: &AppHandle) -> Arc<Poller> {
 /// time are refreshed alone first, so what they changed shows up quickly,
 /// and then the whole list is refreshed.
 pub fn on_popover_open(app: &AppHandle, poller: Arc<Poller>) {
+    // They'd only fail; what was visited is still there for when it lifts.
+    if poller.rate_limited() {
+        return;
+    }
     let visited: Vec<String> = poller.visited.lock().unwrap().drain().collect();
     if visited.is_empty() {
         poller.refresh_on_open();
@@ -889,7 +938,7 @@ pub fn on_popover_open(app: &AppHandle, poller: Arc<Poller>) {
     }
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
-        refresh_visited(&app, &poller, visited).await;
+        github::usage::during("visited", refresh_visited(&app, &poller, visited)).await;
         poller.refresh_on_open();
     });
 }
@@ -937,16 +986,25 @@ async fn refresh_visited(app: &AppHandle, poller: &Poller, ids: Vec<String>) {
 
 async fn run(app: AppHandle, poller: Arc<Poller>) {
     let mut consecutive_failures = 0;
+    let mut trigger = "launch";
     loop {
-        let delay = match poll_once(&app, &poller).await {
+        *poller.last_refresh_started.lock().unwrap() = Some(std::time::Instant::now());
+        let delay = match github::usage::during(trigger, poll_once(&app, &poller)).await {
             Ok(()) => {
                 consecutive_failures = 0;
+                *poller.rate_limited_until.lock().unwrap() = None;
                 POLL_INTERVAL
             }
-            Err(Problem::RateLimited { reset_at }) => reset_at
-                .and_then(|at| (at - Utc::now()).to_std().ok())
-                .unwrap_or(POLL_INTERVAL)
-                .max(Duration::from_secs(60)),
+            Err(Problem::RateLimited { reset_at }) => {
+                let delay = reset_at
+                    .and_then(|at| (at - Utc::now()).to_std().ok())
+                    .unwrap_or(POLL_INTERVAL)
+                    .max(Duration::from_secs(60));
+                *poller.rate_limited_until.lock().unwrap() = chrono::Duration::from_std(delay)
+                    .ok()
+                    .map(|d| Utc::now() + d);
+                delay
+            }
             Err(Problem::Network { .. } | Problem::Api { .. }) => {
                 consecutive_failures += 1;
                 backoff(consecutive_failures)
@@ -955,10 +1013,10 @@ async fn run(app: AppHandle, poller: Arc<Poller>) {
             Err(_) => POLL_INTERVAL,
         };
 
-        tokio::select! {
-            _ = tokio::time::sleep(delay) => {}
-            _ = poller.wake.notified() => {}
-        }
+        trigger = tokio::select! {
+            _ = tokio::time::sleep(delay) => "timer",
+            _ = poller.wake.notified() => "wake",
+        };
     }
 }
 
@@ -1295,9 +1353,23 @@ async fn fetch(
     };
     // The PRs in open sections are refetched without waiting for the
     // searches. Only ones the last fetch knows can be, and none on a first load.
+    let full = poller
+        .last_full_fetch
+        .lock()
+        .unwrap()
+        .is_none_or(|at| at.elapsed() >= OFF_SCREEN_MAX_AGE);
     let plan = {
         let state = poller.view_state.lock().unwrap().clone();
         let latest = poller.latest.lock().unwrap();
+        let reusable: HashMap<String, github::types::PullRequest> = match latest.as_ref() {
+            Some(fetched) if !full => fetched
+                .review_pull_requests
+                .iter()
+                .chain(fetched.view_pull_requests.values().flatten())
+                .map(|pr| (pr.id.clone(), pr.clone()))
+                .collect(),
+            _ => HashMap::new(),
+        };
         let (own, known): (HashSet<String>, HashSet<String>) = match latest.as_ref() {
             Some(fetched) => (
                 fetched
@@ -1328,6 +1400,7 @@ async fn fetch(
                 .collect(),
             first,
             reviews_tab: state.reviews_tab,
+            reusable,
         }
     };
     log::info!(
@@ -1354,6 +1427,9 @@ async fn fetch(
         FetchError::Network(message) => Problem::Network { message },
         FetchError::Api(message) => Problem::Api { message },
     })?;
+    if full {
+        *poller.last_full_fetch.lock().unwrap() = Some(std::time::Instant::now());
+    }
 
     Ok(Fetched {
         viewer: fetched.viewer,
@@ -1431,6 +1507,17 @@ fn lowercase(repos: Vec<String>) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn opening_refreshes_only_when_it_would_help() {
+        let long_ago = Some(Duration::from_secs(600));
+        assert!(open_refreshes(false, false, None));
+        assert!(open_refreshes(false, false, long_ago));
+        assert!(open_refreshes(false, false, Some(OPEN_REFRESH_AFTER)));
+        assert!(!open_refreshes(false, false, Some(Duration::from_secs(59))));
+        assert!(!open_refreshes(true, false, long_ago));
+        assert!(!open_refreshes(false, true, long_ago));
+    }
 
     #[test]
     fn the_tray_shows_both_numbers() {

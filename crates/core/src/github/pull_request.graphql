@@ -8,6 +8,7 @@ fragment PullRequestFields on PullRequest {
     login
   }
   isDraft
+  updatedAt
   closed
   createdAt
   reviewDecision
@@ -113,12 +114,9 @@ fragment PullRequestFields on PullRequest {
       state
       submittedAt
       url
-      # Where the review's last comment lives, to link to it.
-      comments(last: 1) {
-        nodes {
-          url
-        }
-      }
+      # Not its last comment: at 50 reviews that's 50 more connections per PR, most
+      # of what this query costs. The id looks it up when a chip is clicked.
+      id
       author {
         __typename
         login

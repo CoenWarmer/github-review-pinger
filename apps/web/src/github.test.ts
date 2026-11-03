@@ -6,13 +6,14 @@ import {
   teamScope,
   couldBeReady,
   FetchError,
+  unchanged,
   needsRequiredChecks,
   requiredChecksQuery,
   type Queries,
   type RawPullRequest,
 } from "./github.ts";
 
-const queries: Queries = { search: "SEARCH", details: "DETAILS", mergeState: "MERGE", mergedSearch: "MERGED", prSearch: "PRSEARCH", prDetails: "PRDETAILS", statsMerged: "STATS" };
+const queries: Queries = { search: "SEARCH", details: "DETAILS", mergeState: "MERGE", mergedSearch: "MERGED", prSearch: "PRSEARCH", prDetails: "PRDETAILS", reviewComment: "REVIEWCOMMENT", statsMerged: "STATS" };
 
 type Handler = (body: {
   query: string;
@@ -37,6 +38,29 @@ function github(handler: Handler, sleeps: number[] = []) {
 }
 
 const failure = (kind: string) => (e: unknown) => e instanceof FetchError && e.kind === kind;
+
+describe("unchanged", () => {
+  const known = (id: string, updatedAt?: string) => [id, { id, updatedAt }] as [string, RawPullRequest];
+  const OLD = "2026-10-01T09:00:00Z";
+  const NEW = "2026-10-02T09:00:00Z";
+
+  it("keeps only what GitHub says hasn't changed, and never your own", () => {
+    const reusable = new Map([known("same", OLD), known("changed", OLD), known("mine", OLD), known("unsaid", OLD), known("undated")]);
+    const updated = new Map([["same", OLD], ["changed", NEW], ["mine", OLD], ["undated", OLD], ["unknown", OLD]]);
+    const { fetch, keep } = unchanged(
+      ["same", "changed", "mine", "unsaid", "undated", "unknown"],
+      reusable,
+      updated,
+      new Set(["mine"]),
+    );
+    assert.deepEqual(fetch, ["changed", "mine", "unsaid", "undated", "unknown"]);
+    assert.deepEqual(keep.map((pr) => pr.id), ["same"]);
+  });
+
+  it("fetches everything with nothing to keep", () => {
+    assert.deepEqual(unchanged(["a"], undefined, new Map([["a", OLD]]), new Set()), { fetch: ["a"], keep: [] });
+  });
+});
 
 describe("requests", () => {
   it("maps a rejected token", async () => {
@@ -97,6 +121,32 @@ describe("requests", () => {
       Response.json({ errors: [{ type: "RATE_LIMITED", message: "slow down" }] }),
     );
     await assert.rejects(gh.fetchDetails(["a"]), failure("rateLimited"));
+  });
+
+  it("treats a used-up budget as a rate limit, even with a 200, and says when it lifts", async () => {
+    const gh = github(() =>
+      Response.json(
+        { errors: [{ type: "RATE_LIMIT", message: "API rate limit already exceeded for user ID 1." }] },
+        { headers: { "x-ratelimit-remaining": "0", "x-ratelimit-reset": "1793714456" } },
+      ),
+    );
+    await assert.rejects(
+      gh.fetchDetails(["a"]),
+      (e: FetchError) =>
+        e.kind === "rateLimited" && e.resetAt === new Date(1793714456 * 1000).toISOString(),
+    );
+  });
+
+  it("looks up a review's last comment, if it has one", async () => {
+    const asked: unknown[] = [];
+    const answer = (nodes: unknown[]) =>
+      github((body) => {
+        asked.push(body);
+        return Response.json({ data: { node: { comments: { nodes } } } });
+      });
+    assert.equal(await answer([{ url: "https://x/discussion_r1" }]).fetchReviewCommentUrl("R1"), "https://x/discussion_r1");
+    assert.equal(await answer([]).fetchReviewCommentUrl("R2"), null);
+    assert.deepEqual(asked[0], { query: "REVIEWCOMMENT", variables: { id: "R1" } });
   });
 
   it("maps a network failure", async () => {

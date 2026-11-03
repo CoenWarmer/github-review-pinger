@@ -42,6 +42,12 @@ export const tauriPlatform: Platform = {
     invoke("visit", { id });
     openUrl(url);
   },
+  visitReview: (id, reviewId, url) => {
+    invoke("visit", { id });
+    invoke<string | null>("review_comment_url", { id: reviewId })
+      .catch(() => null)
+      .then((comment) => openUrl(comment ?? url));
+  },
   openUrl: (url) => {
     openUrl(url);
   },

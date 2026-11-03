@@ -103,6 +103,9 @@ pub struct PullRequest {
     #[serde(default)]
     pub author: Option<Actor>,
     pub is_draft: bool,
+    /// What the searches compare, to tell whether this can be kept a while.
+    #[serde(default)]
+    pub updated_at: Option<DateTime<Utc>>,
     /// Merged or closed; only matters when a single PR is refreshed after
     /// the list was fetched.
     #[serde(default)]
@@ -348,14 +351,9 @@ pub struct Review {
     /// Only requested for `reviews`.
     #[serde(default)]
     pub url: Option<String>,
-    /// The review's last comment, only requested for `reviews`.
+    /// Only requested for `reviews`.
     #[serde(default)]
-    pub comments: Option<Nodes<ReviewComment>>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct ReviewComment {
-    pub url: String,
+    pub id: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]

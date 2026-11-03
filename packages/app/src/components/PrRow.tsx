@@ -73,11 +73,18 @@ export function ReviewerChip({
   onAsk: (team: string) => void;
 }) {
   const visitPr = useVisitPr();
+  const platform = usePlatform();
   const label = `${reviewer.login} ${REVIEWER_LABELS[reviewer.state]}${
     reviewer.rerequested ? ", re-requested" : ""
   }`;
   // A user's chip opens their last comment, or review.
   const responseUrl = reviewer.team ? null : reviewer.lastResponse?.url;
+  const openResponse = () => {
+    const reviewId = reviewer.lastResponse?.reviewId;
+    if (!responseUrl) return;
+    if (reviewId) platform.visitReview(prId, reviewId, responseUrl);
+    else visitPr({ id: prId, url: responseUrl });
+  };
   const chip = reviewer.team ? (
     <TeamChip
       team={reviewer.team}
@@ -102,13 +109,13 @@ export function ReviewerChip({
         // Inside the row's button, so it mustn't also open the PR.
         onClick: (e: MouseEvent) => {
           e.stopPropagation();
-          visitPr({ id: prId, url: responseUrl });
+          openResponse();
         },
         onKeyDown: (e: KeyboardEvent) => {
           if (e.key === "Enter" || e.key === " ") {
             e.preventDefault();
             e.stopPropagation();
-            visitPr({ id: prId, url: responseUrl });
+            openResponse();
           }
         },
       })}

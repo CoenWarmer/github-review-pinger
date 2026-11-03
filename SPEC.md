@@ -64,6 +64,12 @@ timeout:
    (approved, green, mergeable, no auto-merge), since GitHub computes it on
    demand and it doubles a PR's cost.
 
+Between full fetches, every 10 minutes, the PRs of the other tab aren't fetched again
+when the searches say they haven't changed (`updatedAt`, which comes with the ids).
+Your own always are, as checks finishing doesn't update a PR, and so is everything in
+the tab being looked at. A reviewer or check change on another tab's PR that doesn't
+update it can show up to 10 minutes late.
+
 A refresh takes ~5–8 s for ~70 PRs (previously ~38 s), more with the review
 searches. 5xx responses are
 retried twice per request.
@@ -95,8 +101,9 @@ complete fetch lands. Later refreshes fetch everything at once.
   they can; Settings says how to add the scope. A team GitHub had nothing on
   is also asked about again after an hour. Recent commits (author and
   date, last 20) are fetched with each PR to see who pushed.
-- Poll every 2 minutes; also refresh whenever the popover opens (unless a
-  refresh is already running). Wait out rate limits until the reset time; back off exponentially (up to 10 min) on network and API
+- Poll every 2 minutes; also refresh whenever the popover opens, unless a
+  refresh is already running, one began within the last minute, or the rate limit
+  has been reached. The refresh button always refreshes. Wait out rate limits until the reset time; back off exponentially (up to 10 min) on network and API
   errors. On failure, keep showing the last good data with a banner.
 
 ## Derived state
@@ -375,8 +382,9 @@ changes it); a user chip opens their last response, below.
     longer lists them under latest reviews because they were asked again.
     Shown for approvers only when they responded after approving.
   - **Click**: a user chip with a response opens it on GitHub: the review's
-    last comment (`#discussion_r…`), a PR comment, or the review itself, and
-    marks the PR visited. A chip without a response isn't clickable.
+    last comment (`#discussion_r…`, looked up on click, since fetching it for every
+    PR would be most of what a refresh costs), a PR comment, or the review itself,
+    and marks the PR visited. A chip without a response isn't clickable.
   - **Not responded**: "Hasn't responded yet, requested 4h ago". After a
     response, a newer re-request adds "Re-requested 1h ago".
 - **Team chip**:
