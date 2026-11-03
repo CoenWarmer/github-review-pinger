@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { PullRequest } from "@review-pinger/app";
-import { buildTimeline, zoomRange } from "../../../packages/app/src/timeline.ts";
+import { buildTimeline, formatDuration, zoomRange } from "../../../packages/app/src/timeline.ts";
 
 const NOW = Date.parse("2026-10-10T12:00:00Z");
 const DAY = 24 * 60 * 60_000;
@@ -168,6 +168,40 @@ describe("buildTimeline", () => {
       for (const { position } of hours.ticks) assert.ok(position > 0 && position < 1);
       assert.equal(buildTimeline([pr("a", 10, [])], NOW, range).hourly, false);
     });
+  });
+
+  describe("formatDuration", () => {
+    const HOUR = 3600_000;
+
+    it("gives days and hours", () => {
+      assert.equal(formatDuration(3 * DAY + 4 * HOUR), "3 days 4 hours");
+    });
+
+    it("leaves out days under 24 hours", () => {
+      assert.equal(formatDuration(5 * HOUR), "5 hours");
+      assert.equal(formatDuration(23 * HOUR + 59 * 60_000), "23 hours");
+    });
+
+    it("leaves out hours on a whole day, and uses the singular for one", () => {
+      assert.equal(formatDuration(DAY), "1 day");
+      assert.equal(formatDuration(2 * DAY), "2 days");
+      assert.equal(formatDuration(HOUR), "1 hour");
+      assert.equal(formatDuration(DAY + HOUR), "1 day 1 hour");
+    });
+
+    it("says so under an hour", () => {
+      assert.equal(formatDuration(0), "under an hour");
+      assert.equal(formatDuration(59 * 60_000), "under an hour");
+    });
+  });
+
+  it("gives a bar's whole duration, even where a zoom cuts it off", () => {
+    const whole = buildTimeline([pr("a", 10, [owner("o/t", 8)])], NOW).prs[0];
+    assert.equal(whole.durationMs, 10 * DAY);
+    assert.equal(whole.teams[0].durationMs, 8 * DAY);
+    const zoomed = buildTimeline([pr("a", 10, [owner("o/t", 8)])], NOW, { from: NOW - 6 * DAY, to: NOW - 4 * DAY }).prs[0];
+    assert.equal(zoomed.durationMs, 10 * DAY);
+    assert.equal(zoomed.teams[0].durationMs, 8 * DAY);
   });
 
   describe("zoomRange", () => {

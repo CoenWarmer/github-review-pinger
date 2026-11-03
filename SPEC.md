@@ -309,6 +309,10 @@ the chart, without the list's search of GitHub.
   so the teams are those requested now or earlier, leaving out a pending request
   flagged as made by hand; one asked by hand whose request has ended still shows.
   A request older than the last 50 timeline items isn't known.
+- **Hovering a bar** shows a tooltip at once with how long the whole bar is, in days
+  and hours ("3 days 4 hours", "5 hours", "1 day"; "under an hour" below that), even
+  where a zoom cuts it off, and what it stands for. A team's length is left out when
+  the time of its request isn't known.
 - **Zoom**: dragging across the bars or the axis highlights a stretch of time, and
   releasing zooms the chart to fit it in the window, down to an hour. It can be
   done again to go further in. "Reset zoom" goes back to the whole axis, and so

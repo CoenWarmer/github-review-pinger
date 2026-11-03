@@ -7,6 +7,7 @@ import { useReportOpen } from "../hooks";
 import { usePlatform } from "../platform";
 import {
   buildTimeline,
+  formatDuration,
   zoomRange,
   type Timeline as Chart,
   type TimelinePr,
@@ -36,30 +37,32 @@ function teamName(team: string): string {
   return `@${team.split("/").pop()}`;
 }
 
+/** What a team's bar stands for, with how long it is where that's known. */
 function describeTeam(team: TimelineTeam, now: number): string {
-  const name = teamName(team.team);
+  // Without the request's time the bar's start is a guess, and so would its length be.
+  const duration = team.requestedAt ? formatDuration(team.durationMs) : null;
   if (team.approvedAt) {
-    return `${name}: approved ${elapsed(team.approvedAt, now)} ago by ${team.approvedBy}`;
+    const approved = `Approved by ${team.approvedBy}, ${elapsed(team.approvedAt, now)} ago`;
+    return duration ? `${duration} · ${approved}` : approved;
   }
-  if (team.pending) {
-    return team.requestedAt
-      ? `${name}: waiting ${elapsed(team.requestedAt, now)}`
-      : `${name}: waiting`;
+  if (team.pending) return duration ? `${duration} · Waiting` : "Waiting";
+  if (team.respondedAt) {
+    const responded = `Last response ${elapsed(team.respondedAt, now)} ago`;
+    return duration ? `${duration} · ${responded}` : responded;
   }
-  return team.respondedAt
-    ? `${name}: last response ${elapsed(team.respondedAt, now)} ago`
-    : `${name}: no longer requested`;
+  return "No longer requested";
 }
 
-function PrBar({ pr, now }: { pr: TimelinePr; now: number }) {
+function PrBar({ pr }: { pr: TimelinePr }) {
   const platform = usePlatform();
+  const state = [pr.draft ? "Draft" : "Open", pr.approved && "Approved"].filter(Boolean).join(", ");
   return (
     <div className={cn("relative", ROW)}>
       {pr.visible && (
       <button
         type="button"
         aria-label={`Open #${pr.number} ${pr.title}`}
-        title={`${pr.repo}#${pr.number} ${pr.title} · ${pr.draft ? "draft" : "open"} ${elapsed(pr.openSince, now)}${pr.approved ? " · approved" : ""}`}
+        data-tip={`${pr.repo}#${pr.number} ${pr.title}\n${formatDuration(pr.durationMs)} · ${state}`}
         onClick={() => platform.visit(pr.id, pr.url)}
         // Measured from the right, so the least width grows away from the edge.
         style={{ right: percent(1 - pr.end), width: percent(pr.end - pr.start) }}
@@ -74,11 +77,14 @@ function PrBar({ pr, now }: { pr: TimelinePr; now: number }) {
 }
 
 function TeamBar({ team, now }: { team: TimelineTeam; now: number }) {
+  const description = describeTeam(team, now);
   return (
     <div className={cn("relative", ROW)}>
       {team.visible && (
       <span
-        title={describeTeam(team, now)}
+        role="img"
+        aria-label={`${teamName(team.team)}: ${description}`}
+        data-tip={`${teamName(team.team)}\n${description}`}
         style={{ right: percent(1 - team.end), width: percent(team.end - team.start) }}
         className={cn(
           "absolute inset-y-[9px] min-w-1 rounded-[2px]",
@@ -204,6 +210,38 @@ function shortDate(ms: number): string {
   return new Date(ms).toLocaleDateString(undefined, { month: "short", day: "numeric" });
 }
 
+/**
+ * Follows the pointer, on whichever side of it has the room, from the moment it's
+ * over a bar: a native tooltip takes a while to appear.
+ */
+function BarTip({ tip }: { tip: Tip }) {
+  const [title, detail] = tip.text.split("\n");
+  const gap = 14;
+  return (
+    <div
+      role="tooltip"
+      className="pointer-events-none fixed z-50 w-max max-w-[320px] rounded-md border bg-popover px-2 py-1 text-[11px] text-popover-foreground shadow-md"
+      style={{
+        left: tip.x,
+        top: tip.y,
+        transform: `translate(${tip.x > window.innerWidth / 2 ? `calc(-100% - ${gap}px)` : `${gap}px`}, ${
+          tip.y > window.innerHeight / 2 ? `calc(-100% - ${gap}px)` : `${gap}px`
+        })`,
+      }}
+    >
+      <div className="truncate">{title}</div>
+      <div className="text-muted-foreground">{detail}</div>
+    </div>
+  );
+}
+
+/** A bar's tooltip, at the pointer. */
+interface Tip {
+  text: string;
+  x: number;
+  y: number;
+}
+
 /** A drag under way across the bars, in pixels from the chart's left edge. */
 interface Drag {
   pointerId: number;
@@ -234,6 +272,7 @@ function Scroller({
   const drag = useRef<Drag | null>(null);
   const justDragged = useRef(false);
   const [highlight, setHighlight] = useState<{ left: number; width: number } | null>(null);
+  const [tip, setTip] = useState<Tip | null>(null);
   // Starts at now, the end people look at. The window widening keeps it there.
   useLayoutEffect(() => {
     const el = scroller.current;
@@ -262,6 +301,9 @@ function Scroller({
   }
 
   function onPointerMove(e: PointerEvent<HTMLDivElement>) {
+    const over = (e.target as Element).closest("[data-tip]");
+    const text = e.pointerType === "mouse" && !drag.current?.moved && over?.getAttribute("data-tip");
+    setTip(text ? { text, x: e.clientX, y: e.clientY } : null);
     const current = drag.current;
     if (!current || e.pointerId !== current.pointerId) return;
     const x = Math.min(Math.max(e.clientX, current.minX), current.maxX);
@@ -300,6 +342,7 @@ function Scroller({
         onPointerMove={onPointerMove}
         onPointerUp={(e) => endDrag(e, true)}
         onPointerCancel={(e) => endDrag(e, false)}
+        onPointerLeave={() => setTip(null)}
         onClickCapture={(e) => {
           if (!justDragged.current) return;
           justDragged.current = false;
@@ -339,7 +382,7 @@ function Scroller({
             <div className="flex-1 pr-2" style={eachTrack}>
               <div data-track className={cn("relative", TRACK)}>
               <Lines chart={chart} />
-              <PrBar pr={pr} now={now} />
+              <PrBar pr={pr} />
               {pr.teams.map((team) => (
                 <TeamBar key={team.team} team={team} now={now} />
               ))}
@@ -355,6 +398,7 @@ function Scroller({
           />
         )}
       </div>
+      {tip && <BarTip tip={tip} />}
     </div>
   );
 }

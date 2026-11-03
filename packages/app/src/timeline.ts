@@ -24,6 +24,8 @@ interface Placed {
   end: number;
   /** Any of it falls within the axis. */
   visible: boolean;
+  /** How long the whole bar is, even where the axis cuts it off. */
+  durationMs: number;
 }
 
 export interface TimelineTeam extends CodeOwnerTeam, Placed {}
@@ -50,6 +52,18 @@ export interface Timeline extends TimelineRange {
   hourly: boolean;
   /** Where now falls along the axis; `null` when zoomed in to before it. */
   nowPosition: number | null;
+}
+
+/** Days and hours, leaving out whichever is zero: "3 days 4 hours", "5 hours", "1 day". */
+export function formatDuration(ms: number): string {
+  const totalHours = Math.floor(ms / HOUR_MS);
+  if (totalHours < 1) return "under an hour";
+  const count = (n: number, unit: string) => `${n} ${unit}${n === 1 ? "" : "s"}`;
+  const days = Math.floor(totalHours / 24);
+  const hours = totalHours % 24;
+  return [days > 0 && count(days, "day"), hours > 0 && count(hours, "hour")]
+    .filter(Boolean)
+    .join(" ");
 }
 
 /** Older saved lists don't have `codeOwnerTeams`, so fall back to the pending team chips. */
@@ -107,6 +121,7 @@ export function buildTimeline(
     start: Math.max(position(start), 0),
     end: Math.min(position(end), 1),
     visible: start <= to && end >= from,
+    durationMs: end - start,
   });
 
   const rows = prs
