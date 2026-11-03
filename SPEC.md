@@ -172,9 +172,9 @@ both are zero there is no title at all.
 
 ## Popover
 
-Three tabs: **My PRs** and **Review Requests**, each with a count badge (the
-numbers in the tray), and **Settings**, shown as a cog icon at the end of the tab bar. The tab choice is not remembered
-between openings.
+**My PRs** and **Review Requests**, each with a count badge (the numbers in the
+tray), then **Statistics** and **Settings**, shown as icons at the end of the tab
+bar. The tab choice is not remembered between openings.
 
 ### My PRs
 
@@ -290,6 +290,59 @@ Every section header has a sort icon, on both tabs. It offers Default (the
 order above), Oldest first and Newest first (by open clock), Recently active,
 and Repository. The choice is per section and remembered across restarts in
 the webview's local storage; the icon is highlighted when it isn't Default.
+
+### Timeline view
+
+My PRs and Review Requests each have a toggle beside the filter, with icons for
+a list view (the default) and a timeline view. The choice is shared by both tabs.
+
+The timeline view is a Gantt chart of the tab's open PRs, leaving out My PRs'
+Merged section and custom views. While it's showing, the desktop popover widens
+to 800 px (animated over about 200 ms, or at once when the system asks for
+reduced motion), growing from its center, under the tray icon. Near the edge of
+the screen it stops at the edge, with both sides still moving together. It narrows again on returning to the list or going to another tab.
+The web app's page keeps whatever size it has. The filter and repo picker narrow
+the chart, without the list's search of GitHub.
+
+- **Controls**: a row above the legend holds a pulldown of All, Open or Draft PRs, by
+  what each is now (one that used to be a draft is Open, and approved PRs are Open
+  too), and the zoom controls. It starts on Open, and goes back to that on switching
+  tab or view, like the zoom. Fit all fits what the pulldown leaves.
+- **Rows**: one per PR, most recently created first, with its code-owning teams
+  underneath, alphabetically. GitHub only flags code owners on pending requests,
+  so the teams are those requested now or earlier, leaving out a pending request
+  flagged as made by hand; one asked by hand whose request has ended still shows.
+  A request older than the last 50 timeline items isn't known.
+- **Hovering a bar** shows a tooltip at once with how long that bar or stretch of a
+  PR's bar is, in days and hours ("3 days 4 hours", "5 hours", "1 day"; "under an
+  hour" below that), even where a zoom cuts it off, and what it stands for. A PR with
+  several stretches also says how long its whole bar is. A team's length is left out when
+  the time of its request isn't known.
+- **Zoom**: the chart always fits the window, and starts on the last 7 days. Dragging
+  across the bars or the axis highlights a stretch of time, and releasing zooms to
+  it, down to an hour; a stretch reaching now keeps following it. Zoom out doubles
+  what's shown, and Fit all goes straight to the end: until the longest bar fits, or
+  no further than 7 days if every bar is shorter. "7 days" goes back to the start,
+  and so does switching tab or view. All the rows stay, empty where a PR has nothing
+  in that stretch. A click without a drag still opens the PR. On touch, a sideways
+  drag zooms and a vertical one scrolls.
+- **Panning**: scrolling sideways on a trackpad, or shift and a mouse wheel, moves the
+  chart through time, keeping the same length of time in view, from as far back as
+  Fit all reaches up to now. Reaching now, it follows it again.
+- **PR bars**: from when it was created to now, split into stretches: dashed while
+  it was a draft, worked out from when it was marked ready or back to draft within
+  the last 50 timeline items, otherwise solid. Solid stretches are green, with a
+  check by the title, when approved (per the rule above; a PR that's a draft now
+  isn't shown as approved). Clicking a PR's bar or title opens it, like a row.
+- **Team bars**: from when the team was last requested (never before the open
+  clock) to now while it's still pending, or to a member's latest response. A team
+  has approved when its request has ended and a member's approval is still in
+  effect: its bar is green, with a check by its name, and ends at the first such
+  approval. A team that hasn't approved has an empty circle there instead. With the members unknown (no `read:org`), approval can't be told, and a
+  team whose request has ended is a short mark where it was requested.
+- **Axis**: fits the oldest PR, but never below 16 px per day. When that's wider
+  than the window it scrolls sideways, starting at now, with the team names and
+  dates staying in view.
 
 While the first load is in progress the popover shows slowly morphing
 concentric rings (11 rings, some fainter than others, whose radii wobble with

@@ -382,6 +382,9 @@ mod tests {
             queued: false,
             reviewers: Vec::new(),
             code_owners: 0,
+            code_owner_teams: Vec::new(),
+            created_at: at(TUESDAY),
+            draft_spans: Vec::new(),
             responses,
         }
     }
@@ -434,6 +437,10 @@ mod tests {
             last_activity: at(TUESDAY),
             snoozed_until: None,
             reviewers: Vec::new(),
+            code_owner_teams: Vec::new(),
+            created_at: at(TUESDAY),
+            draft_spans: Vec::new(),
+            approved: false,
         }
     }
 

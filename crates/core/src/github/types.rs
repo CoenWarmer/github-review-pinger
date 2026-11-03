@@ -383,6 +383,9 @@ pub enum TimelineItem {
     ReadyForReviewEvent {
         created_at: DateTime<Utc>,
     },
+    ConvertToDraftEvent {
+        created_at: DateTime<Utc>,
+    },
     ReviewRequestedEvent {
         created_at: DateTime<Utc>,
         #[serde(default)]

@@ -55,6 +55,12 @@ export interface Platform {
     install(): Promise<void>;
   };
 
+  /**
+   * Desktop only: widens the popover for what needs the room, or puts it back.
+   * The web app's page already fills whatever it's given, so it leaves this out.
+   */
+  setWideWindow?(wide: boolean): void;
+
   getSnapshot(): Promise<Snapshot>;
   /** Calls `callback` with every new snapshot. Returns how to stop listening. */
   onSnapshot(callback: (snapshot: Snapshot) => void): () => void;

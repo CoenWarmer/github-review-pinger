@@ -3,8 +3,10 @@ import { useEffect, useMemo, useState, type ReactNode } from "react";
 import {
   ArrowDownWideNarrow,
   ChartColumn,
+  ChartGantt,
   ChevronDown,
   ChevronRight,
+  List,
   RefreshCw,
   Settings,
 } from "lucide-react";
@@ -35,6 +37,7 @@ import { PlacementDnd, useDragging } from "./components/Placement";
 import { RepoPicker } from "./components/RepoPicker";
 import { StatsSettings } from "./components/StatsSettings";
 import { Setup, problemMessage } from "./components/Setup";
+import { Timeline } from "./components/Timeline";
 import { elapsed } from "./format";
 import { clearSavedLists } from "./cache";
 import {
@@ -58,7 +61,7 @@ import {
   useSectionSort,
   type SortKey,
 } from "./sort";
-import type { ReviewGroup, Section, Snapshot } from "./types";
+import type { PullRequest, ReviewGroup, ReviewRequest, Section, Snapshot } from "./types";
 
 /** Sections with little left to act on, so they start collapsed. */
 /** Sections that start collapsed; every section can be toggled either way. */
@@ -78,6 +81,14 @@ const REVIEW_SECTIONS: { group: ReviewGroup; title: string }[] = [
 
 type Tab = "mine" | "reviews" | "stats" | "settings";
 
+/** How the PR tabs show their PRs. */
+type PrView = "list" | "timeline";
+
+const PR_VIEWS: { id: PrView; label: string; icon: ReactNode }[] = [
+  { id: "list", label: "List view", icon: <List /> },
+  { id: "timeline", label: "Timeline view", icon: <ChartGantt /> },
+];
+
 const TABS: { id: Tab; label: string; icon?: ReactNode }[] = [
   { id: "mine", label: "My PRs" },
   { id: "reviews", label: "Review Requests" },
@@ -96,6 +107,37 @@ function Empty({ children }: { children: ReactNode }) {
 
 function Banner({ children }: { children: ReactNode }) {
   return <p className="m-0 border-t bg-warning/15 px-3 py-2">{children}</p>;
+}
+
+function ViewToggle({
+  value,
+  onChange,
+}: {
+  value: PrView;
+  onChange: (view: PrView) => void;
+}) {
+  return (
+    <div role="group" aria-label="View" className="flex shrink-0 rounded-md border p-px">
+      {PR_VIEWS.map(({ id, label, icon }) => (
+        <Button
+          key={id}
+          type="button"
+          variant="ghost"
+          size="icon-xs"
+          aria-label={label}
+          aria-pressed={value === id}
+          title={label}
+          onClick={() => onChange(id)}
+          className={cn(
+            "h-[24px] w-[26px] rounded-[5px]",
+            value === id ? "bg-accent text-info hover:text-info" : "text-muted-foreground",
+          )}
+        >
+          {icon}
+        </Button>
+      ))}
+    </div>
+  );
 }
 
 function SortMenu({
@@ -316,6 +358,8 @@ function AppContent() {
   const snapshot = useSnapshot();
   const now = useNow();
   const [tab, setTab] = useState<Tab>("mine");
+  // Shared by the PR tabs, so moving between them doesn't resize the window.
+  const [prView, setPrView] = useState<PrView>("list");
   const [query, setQuery] = useState("");
   const [repos, setRepos] = useState<string[]>([]);
   const reportOpen = useReportViewState(tab);
@@ -324,6 +368,11 @@ function AppContent() {
     [snapshot?.refreshingIds],
   );
   useApplyTheme(snapshot?.theme);
+  // The timeline needs more room than the lists.
+  const wide = prView === "timeline" && (tab === "mine" || tab === "reviews");
+  useEffect(() => {
+    platform.setWideWindow?.(wide);
+  }, [platform, wide]);
   // Once a fetch has landed (so sync has had its say), hand over the sorts
   // this browser remembered before they were synced.
   const loaded = snapshot?.status.kind === "ok";
@@ -385,18 +434,25 @@ function AppContent() {
   };
   // Only the PR lists can be filtered.
   const filterable = tab === "mine" || tab === "reviews";
-  const searching = filterable && query.trim() !== "";
+  const filtering = filterable && query.trim() !== "";
+  const matchesMine = (pr: PullRequest) =>
+    matchesQuery(query, [pr.title, pr.repo, pr.number, ...pr.reviewers.map((r) => r.login)]);
+  const matchesReview = (pr: ReviewRequest) =>
+    matchesQuery(query, [
+      pr.title,
+      pr.repo,
+      pr.number,
+      pr.author,
+      ...pr.reviewers.map((r) => r.login),
+    ]);
+  // Review requests may still be on their way, for which the list has its own message.
+  const timeline =
+    wide && !(tab === "reviews" && snapshot.partial && reviews.length === 0);
+  // The timeline narrows what it shows; the list also searches GitHub.
+  const searching = filtering && !timeline;
   const searchRows = (): { ids: string[]; rows: ReactNode } => {
     if (tab === "reviews") {
-      const found = reviews.filter((pr) =>
-        matchesQuery(query, [
-          pr.title,
-          pr.repo,
-          pr.number,
-          pr.author,
-          ...pr.reviewers.map((r) => r.login),
-        ]),
-      );
+      const found = reviews.filter(matchesReview);
       return {
         ids: found.map((pr) => pr.id),
         rows: found.map((pr) => <ReviewRow key={pr.id} pr={pr} now={now} />),
@@ -409,14 +465,7 @@ function AppContent() {
     ].filter(
       (pr, i, all) => all.findIndex((other) => other.id === pr.id) === i,
     );
-    const foundOpen = open.filter((pr) =>
-      matchesQuery(query, [
-        pr.title,
-        pr.repo,
-        pr.number,
-        ...pr.reviewers.map((r) => r.login),
-      ]),
-    );
+    const foundOpen = open.filter(matchesMine);
     const foundMerged = merged.filter((pr) =>
       matchesQuery(query, [pr.title, pr.repo, pr.number]),
     );
@@ -496,10 +545,26 @@ function AppContent() {
                   className="w-32 shrink-0"
                 />
               )}
+              <ViewToggle value={prView} onChange={setPrView} />
             </div>
           )}
           {/* Pinned over the list, so a notice appearing doesn't push the rows down. */}
           <div className="relative min-h-0 flex-1">
+            {timeline ? (
+              <Timeline
+                // Each tab starts at now, rather than wherever the other was scrolled to.
+                key={tab}
+                pullRequests={tab === "reviews" ? reviews.filter(matchesReview) : prs.filter(matchesMine)}
+                emptyText={
+                  filtering
+                    ? "No pull requests match."
+                    : tab === "reviews"
+                      ? "No pull requests are waiting on your review."
+                      : "No open pull requests."
+                }
+                now={now}
+              />
+            ) : (
             <PlacementDnd describe={describePr}>
             <ScrollArea className="h-full">
               {search ? (
@@ -623,6 +688,7 @@ function AppContent() {
               )}
             </ScrollArea>
             </PlacementDnd>
+            )}
             <div className="absolute inset-x-0 bottom-0 z-10 bg-background">
               {snapshot.status.kind === "error" && (
                 <Banner>

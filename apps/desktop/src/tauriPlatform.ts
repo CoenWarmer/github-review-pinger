@@ -19,6 +19,11 @@ export const tauriPlatform: Platform = {
     install: () => invoke("install_update"),
   },
 
+  setWideWindow: (wide) => {
+    const animated = !matchMedia("(prefers-reduced-motion: reduce)").matches;
+    invoke("set_popover_wide", { wide, animated });
+  },
+
   getSnapshot: () => invoke<Snapshot>("get_snapshot"),
   onSnapshot: (callback) => {
     const unlisten = listen<Snapshot>("snapshot", (event) => callback(event.payload));

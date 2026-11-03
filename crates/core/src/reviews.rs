@@ -46,6 +46,9 @@ pub struct ReviewView {
     pub group: ReviewGroup,
     /// Dragged into `group` by hand, rather than put there by its state.
     pub placed: bool,
+    pub created_at: DateTime<Utc>,
+    /// When it was a draft, oldest first.
+    pub draft_spans: Vec<prs::DraftSpan>,
     pub open_since: DateTime<Utc>,
     /// When it became the viewer's turn; only for requested PRs.
     pub waiting_since: Option<DateTime<Utc>>,
@@ -58,6 +61,10 @@ pub struct ReviewView {
     pub snoozed_until: Option<DateTime<Utc>>,
     /// Everyone but the viewer and the author.
     pub reviewers: Vec<Reviewer>,
+    /// The teams that own what this PR changes, as far as its requests say.
+    pub code_owner_teams: Vec<prs::CodeOwnerTeam>,
+    /// Has the approvals it needs, the viewer's included.
+    pub approved: bool,
 }
 
 impl ReviewView {
@@ -109,6 +116,7 @@ fn view(pr: &PullRequest, viewer: &str, rules: &Rules, now: DateTime<Utc>) -> Op
         directory: rules.directory,
     };
     let mut reviewers = prs::reviewers(pr, &people);
+    let approved = prs::is_approved(pr, &reviewers);
     reviewers.retain(|r| !r.login.eq_ignore_ascii_case(viewer));
 
     let waiting_since = requested.then(|| waiting_since(pr, viewer, open_since));
@@ -150,6 +158,10 @@ fn view(pr: &PullRequest, viewer: &str, rules: &Rules, now: DateTime<Utc>) -> Op
         last_activity: prs::last_activity(pr, &people, open_since),
         snoozed_until,
         reviewers,
+        code_owner_teams: prs::code_owner_teams(pr, &people),
+        approved,
+        created_at: pr.created_at,
+        draft_spans: prs::draft_spans(pr),
     })
 }
 
@@ -458,6 +470,43 @@ mod tests {
         };
         let natural = derive(&[pr(json!({}))], ME, &rules, at(NOW)).remove(0);
         assert!(!natural.placed);
+    }
+
+    #[test]
+    fn says_whether_it_is_approved_counting_the_viewer() {
+        let approved = |decision: &str| {
+            derive_one(json!({ "reviewDecision": decision }))
+                .unwrap()
+                .approved
+        };
+        assert!(approved("APPROVED"));
+        assert!(!approved("REVIEW_REQUIRED"));
+
+        let by_me = json!({ "state": "APPROVED", "submittedAt": "2026-10-03T09:00:00Z",
+            "author": user(ME) });
+        let view = derive_one(json!({
+            "reviewDecision": null,
+            "latestOpinionatedReviews": { "nodes": [by_me] },
+        }))
+        .unwrap();
+        assert!(view.approved);
+        assert!(view.reviewers.is_empty());
+    }
+
+    #[test]
+    fn lists_the_code_owning_teams() {
+        let view = derive_one(json!({
+            "reviewRequests": { "nodes": [
+                { "asCodeOwner": true, "requestedReviewer": team("core") },
+            ] },
+        }))
+        .unwrap();
+        let owners: Vec<&str> = view
+            .code_owner_teams
+            .iter()
+            .map(|owner| owner.team.as_str())
+            .collect();
+        assert_eq!(owners, ["o/core"]);
     }
 
     #[test]

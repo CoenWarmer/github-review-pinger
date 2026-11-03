@@ -4,6 +4,7 @@ mod card;
 mod gist;
 mod github;
 mod poller;
+mod popover;
 mod settings;
 mod sound;
 mod updater;
@@ -57,7 +58,8 @@ fn show_popover(app: &AppHandle) {
         poller::on_popover_open(app, poller.inner().clone());
     }
     #[cfg(not(target_os = "linux"))]
-    let _ = window.move_window(Position::TrayBottomCenter);
+    // Constrained, as it may still be wide from last time, which can reach past the screen.
+    let _ = window.move_window_constrained(Position::TrayBottomCenter);
     let _ = window.show();
     let _ = window.set_focus();
 }
@@ -76,6 +78,11 @@ fn toggle_popover(app: &AppHandle) {
 #[tauri::command]
 fn get_snapshot(poller: State<Arc<Poller>>) -> Snapshot {
     poller.snapshot()
+}
+
+#[tauri::command]
+fn set_popover_wide(app: AppHandle, wide: bool, animated: bool) {
+    popover::set_wide(&app, wide, animated);
 }
 
 #[tauri::command]
@@ -377,6 +384,7 @@ pub fn run() {
             refresh,
             set_view_state,
             visit,
+            set_popover_wide,
             card_current,
             card_resize,
             card_done,
