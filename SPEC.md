@@ -304,14 +304,15 @@ the screen it stops at the edge, with both sides still moving together. It narro
 The web app's page keeps whatever size it has. The filter and repo picker narrow
 the chart, without the list's search of GitHub.
 
-- **Rows**: one per PR, newest first, with its code-owning teams
+- **Rows**: one per PR, most recently created first, with its code-owning teams
   underneath, alphabetically. GitHub only flags code owners on pending requests,
   so the teams are those requested now or earlier, leaving out a pending request
   flagged as made by hand; one asked by hand whose request has ended still shows.
   A request older than the last 50 timeline items isn't known.
-- **Hovering a bar** shows a tooltip at once with how long the whole bar is, in days
-  and hours ("3 days 4 hours", "5 hours", "1 day"; "under an hour" below that), even
-  where a zoom cuts it off, and what it stands for. A team's length is left out when
+- **Hovering a bar** shows a tooltip at once with how long that bar or stretch of a
+  PR's bar is, in days and hours ("3 days 4 hours", "5 hours", "1 day"; "under an
+  hour" below that), even where a zoom cuts it off, and what it stands for. A PR with
+  several stretches also says how long its whole bar is. A team's length is left out when
   the time of its request isn't known.
 - **Zoom**: dragging across the bars or the axis highlights a stretch of time, and
   releasing zooms the chart to fit it in the window, down to an hour. It can be
@@ -319,9 +320,11 @@ the chart, without the list's search of GitHub.
   does switching tab or view. All the rows stay, empty where a PR has nothing in
   that stretch. A click without a drag still opens the PR. On touch, a sideways
   drag zooms and a vertical one scrolls.
-- **PR bars**: from the open clock to now, dashed for drafts, and green with a
-  check by the title when approved (per the rule above; drafts aren't shown as
-  approved). Clicking a PR's bar or title opens it, like a row.
+- **PR bars**: from when it was created to now, split into stretches: dashed while
+  it was a draft, worked out from when it was marked ready or back to draft within
+  the last 50 timeline items, otherwise solid. Solid stretches are green, with a
+  check by the title, when approved (per the rule above; a PR that's a draft now
+  isn't shown as approved). Clicking a PR's bar or title opens it, like a row.
 - **Team bars**: from when the team was last requested (never before the open
   clock) to now while it's still pending, or to a member's latest response. A team
   has approved when its request has ended and a member's approval is still in

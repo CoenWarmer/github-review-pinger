@@ -108,6 +108,75 @@ describe("buildTimeline", () => {
     assert.equal(row.teams[1].start, row.start);
   });
 
+  describe("draft history", () => {
+    const history = (created: number, spans: [number, number | null][]) =>
+      ({
+        ...pr("a", 1, []),
+        createdAt: daysAgo(created),
+        draftSpans: spans.map(([from, to]) => ({
+          from: daysAgo(from),
+          to: to === null ? null : daysAgo(to),
+        })),
+      }) as PullRequest;
+    const shape = (chart: ReturnType<typeof buildTimeline>) =>
+      chart.prs[0].segments.map((segment) => [
+        segment.draft ? "draft" : "open",
+        segment.durationMs / DAY,
+      ]);
+
+    it("is one open stretch for a PR that was never a draft", () => {
+      assert.deepEqual(shape(buildTimeline([history(5, [])], NOW)), [["open", 5]]);
+    });
+
+    it("starts with a draft stretch for one opened as a draft", () => {
+      const chart = buildTimeline([history(10, [[10, 4]])], NOW);
+      assert.deepEqual(shape(chart), [
+        ["draft", 6],
+        ["open", 4],
+      ]);
+      assert.equal(chart.prs[0].draft, false);
+    });
+
+    it("shows one that went back to draft for a while", () => {
+      assert.deepEqual(shape(buildTimeline([history(10, [[6, 3]])], NOW)), [
+        ["open", 4],
+        ["draft", 3],
+        ["open", 3],
+      ]);
+    });
+
+    it("ends on a draft stretch for one that's a draft now, which isn't approved", () => {
+      const chart = buildTimeline(
+        [{ ...history(10, [[10, 6], [3, null]]), approved: true } as PullRequest],
+        NOW,
+      );
+      assert.deepEqual(shape(chart), [
+        ["draft", 4],
+        ["open", 3],
+        ["draft", 3],
+      ]);
+      assert.equal(chart.prs[0].draft, true);
+      assert.equal(chart.prs[0].approved, false);
+    });
+
+    it("runs the whole bar and axis from when it was created", () => {
+      const chart = buildTimeline([history(10, [[10, 4]])], NOW);
+      assert.equal(chart.prs[0].durationMs, 10 * DAY);
+      assert.ok(chart.from <= NOW - 10 * DAY);
+    });
+
+    it("cuts stretches off at a zoom, and marks those outside it", () => {
+      const chart = buildTimeline([history(10, [[10, 6]])], NOW, {
+        from: NOW - 5 * DAY,
+        to: NOW - 2 * DAY,
+      });
+      const [draft, open] = chart.prs[0].segments;
+      assert.equal(draft.visible, false);
+      assert.equal(open.visible, true);
+      assert.equal(open.durationMs, 6 * DAY);
+    });
+  });
+
   it("marks drafts", () => {
     assert.equal(buildTimeline([pr("d", 1, [], "draft")], NOW).prs[0].draft, true);
   });

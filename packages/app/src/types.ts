@@ -209,6 +209,13 @@ export interface Activity {
   url: string | null;
 }
 
+/** A stretch of a PR's life as a draft. */
+export interface DraftSpan {
+  from: string;
+  /** `null` while it still is one. */
+  to: string | null;
+}
+
 /** A team that owns what a PR changes. */
 export interface CodeOwnerTeam {
   /** Lowercase `org/slug`. */
@@ -259,6 +266,10 @@ export interface PullRequest {
   /** The teams that own what it changes, as far as its requests say. Missing
    * in lists saved before it existed. */
   codeOwnerTeams?: CodeOwnerTeam[];
+  /** When it was created. Missing in lists saved before it existed. */
+  createdAt?: string;
+  /** When it was a draft, oldest first. Missing in lists saved before it existed. */
+  draftSpans?: DraftSpan[];
 }
 
 export interface ReviewRequest {
@@ -283,6 +294,10 @@ export interface ReviewRequest {
   /** The teams that own what it changes, as far as its requests say. Missing
    * in lists saved before it existed. */
   codeOwnerTeams?: CodeOwnerTeam[];
+  /** When it was created. Missing in lists saved before it existed. */
+  createdAt?: string;
+  /** When it was a draft, oldest first. Missing in lists saved before it existed. */
+  draftSpans?: DraftSpan[];
   /** Has the approvals it needs. Missing in lists saved before it existed. */
   approved?: boolean;
 }

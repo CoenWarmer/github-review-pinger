@@ -129,6 +129,7 @@ fragment PullRequestFields on PullRequest {
     last: 50
     itemTypes: [
       READY_FOR_REVIEW_EVENT
+      CONVERT_TO_DRAFT_EVENT
       REVIEW_REQUESTED_EVENT
       ISSUE_COMMENT
     ]
@@ -136,6 +137,9 @@ fragment PullRequestFields on PullRequest {
     nodes {
       __typename
       ... on ReadyForReviewEvent {
+        createdAt
+      }
+      ... on ConvertToDraftEvent {
         createdAt
       }
       ... on ReviewRequestedEvent {

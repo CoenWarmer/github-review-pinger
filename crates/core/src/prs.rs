@@ -133,6 +133,14 @@ pub struct CodeOwnerTeam {
     pub approved_by: Option<String>,
 }
 
+/// A stretch of a PR's life as a draft.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct DraftSpan {
+    pub from: DateTime<Utc>,
+    /// `None` while it still is one.
+    pub to: Option<DateTime<Utc>>,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PrView {
@@ -145,6 +153,9 @@ pub struct PrView {
     /// Dragged into `group` by hand, rather than put there by its state.
     pub placed: bool,
     pub actions: Vec<Action>,
+    pub created_at: DateTime<Utc>,
+    /// When it was a draft, oldest first.
+    pub draft_spans: Vec<DraftSpan>,
     pub open_since: DateTime<Utc>,
     pub quiet_since: DateTime<Utc>,
     /// The last push, or review or comment by a human including the author.
@@ -342,8 +353,46 @@ fn view(pr: &PullRequest, people: &People, rules: &Rules, now: DateTime<Utc>) ->
             .filter(|request| request.as_code_owner)
             .count(),
         code_owner_teams: code_owner_teams(pr, people),
+        created_at: pr.created_at,
+        draft_spans: draft_spans(pr),
         responses,
     }
+}
+
+/// When `pr` was a draft, from the events marking it ready or back to draft. One
+/// whose first event is being marked ready started out as a draft. Only the latest
+/// timeline items are read, so on a very busy PR that start may be too early.
+pub(crate) fn draft_spans(pr: &PullRequest) -> Vec<DraftSpan> {
+    let mut events: Vec<(DateTime<Utc>, bool)> = pr
+        .timeline_items
+        .iter()
+        .filter_map(|item| match item {
+            TimelineItem::ReadyForReviewEvent { created_at } => Some((*created_at, true)),
+            TimelineItem::ConvertToDraftEvent { created_at } => Some((*created_at, false)),
+            _ => None,
+        })
+        .collect();
+    events.sort_by_key(|(at, _)| *at);
+
+    let starts_as_draft = events.first().map_or(pr.is_draft, |(_, ready)| *ready);
+    let mut since = starts_as_draft.then_some(pr.created_at);
+    let mut spans = Vec::new();
+    for (at, ready) in events {
+        if ready {
+            if let Some(from) = since.take() {
+                spans.push(DraftSpan { from, to: Some(at) });
+            }
+        } else {
+            since = since.or(Some(at));
+        }
+    }
+    if pr.is_draft {
+        spans.push(DraftSpan {
+            from: since.unwrap_or_else(|| spans.last().and_then(|s| s.to).unwrap_or(pr.created_at)),
+            to: None,
+        });
+    }
+    spans
 }
 
 /// Time spent as a draft doesn't count against reviewers.
@@ -1132,6 +1181,56 @@ mod tests {
         assert_eq!(approval("again"), (None, None));
         assert_eq!(approval("critical"), (None, None));
         assert_eq!(approval("unknown"), (None, None));
+    }
+
+    #[test]
+    fn works_out_when_it_was_a_draft() {
+        let event = |kind: &str, at: &str| json!({ "__typename": kind, "createdAt": at });
+        let ready = |at: &str| event("ReadyForReviewEvent", at);
+        let back = |at: &str| event("ConvertToDraftEvent", at);
+        let created = "2026-10-01T09:00:00Z";
+        let (t2, t3, t4) = (
+            "2026-10-02T09:00:00Z",
+            "2026-10-03T09:00:00Z",
+            "2026-10-04T09:00:00Z",
+        );
+        let spans = |overrides: Value| derive_one(overrides).draft_spans;
+        let span = |from: &str, to: Option<&str>| DraftSpan {
+            from: at(from),
+            to: to.map(at),
+        };
+
+        // Never a draft.
+        assert_eq!(spans(json!({ "createdAt": created })), []);
+        // Opened as a draft, and still one.
+        assert_eq!(
+            spans(json!({ "createdAt": created, "isDraft": true })),
+            [span(created, None)],
+        );
+        // Opened as a draft, then marked ready.
+        assert_eq!(
+            spans(json!({ "createdAt": created,
+                "timelineItems": { "nodes": [ready(t2)] } })),
+            [span(created, Some(t2))],
+        );
+        // Opened normally, back to draft, then ready again.
+        assert_eq!(
+            spans(json!({ "createdAt": created,
+                "timelineItems": { "nodes": [back(t2), ready(t3)] } })),
+            [span(t2, Some(t3))],
+        );
+        // Opened as a draft, ready, and a draft again now.
+        assert_eq!(
+            spans(json!({ "createdAt": created, "isDraft": true,
+                "timelineItems": { "nodes": [ready(t2), back(t3)] } })),
+            [span(created, Some(t2)), span(t3, None)],
+        );
+        // Whatever order GitHub gives them in.
+        assert_eq!(
+            spans(json!({ "createdAt": created,
+                "timelineItems": { "nodes": [ready(t4), back(t3), ready(t2)] } })),
+            [span(created, Some(t2)), span(t3, Some(t4))],
+        );
     }
 
     #[test]

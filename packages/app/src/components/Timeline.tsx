@@ -55,22 +55,28 @@ function describeTeam(team: TimelineTeam, now: number): string {
 
 function PrBar({ pr }: { pr: TimelinePr }) {
   const platform = usePlatform();
-  const state = [pr.draft ? "Draft" : "Open", pr.approved && "Approved"].filter(Boolean).join(", ");
+  const whole = pr.segments.length > 1 ? ` · ${formatDuration(pr.durationMs)} in all` : "";
   return (
     <div className={cn("relative", ROW)}>
-      {pr.visible && (
-      <button
-        type="button"
-        aria-label={`Open #${pr.number} ${pr.title}`}
-        data-tip={`${pr.repo}#${pr.number} ${pr.title}\n${formatDuration(pr.durationMs)} · ${state}`}
-        onClick={() => platform.visit(pr.id, pr.url)}
-        // Measured from the right, so the least width grows away from the edge.
-        style={{ right: percent(1 - pr.end), width: percent(pr.end - pr.start) }}
-        className={cn(
-          "absolute inset-y-[6px] min-w-1.5 cursor-pointer rounded-[3px] border-0 p-0 hover:brightness-110",
-          pr.draft ? DRAFT : pr.approved ? "bg-success" : "bg-info",
-        )}
-      />
+      {pr.segments.map(
+        (segment, index) =>
+          segment.visible && (
+            <button
+              key={index}
+              type="button"
+              aria-label={`Open #${pr.number} ${pr.title}`}
+              data-tip={`${pr.repo}#${pr.number} ${pr.title}\n${formatDuration(segment.durationMs)} · ${
+                segment.draft ? "Draft" : pr.approved ? "Open, Approved" : "Open"
+              }${whole}`}
+              onClick={() => platform.visit(pr.id, pr.url)}
+              // Measured from the right, so the least width grows away from the edge.
+              style={{ right: percent(1 - segment.end), width: percent(segment.end - segment.start) }}
+              className={cn(
+                "absolute inset-y-[6px] min-w-1.5 cursor-pointer rounded-[3px] border-0 p-0 hover:brightness-110",
+                segment.draft ? DRAFT : pr.approved ? "bg-success" : "bg-info",
+              )}
+            />
+          ),
       )}
     </div>
   );

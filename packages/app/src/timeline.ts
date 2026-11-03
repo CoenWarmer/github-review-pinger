@@ -30,15 +30,22 @@ interface Placed {
 
 export interface TimelineTeam extends CodeOwnerTeam, Placed {}
 
+/** A stretch of a PR's bar: as a draft, or open. */
+export interface TimelineSegment extends Placed {
+  draft: boolean;
+}
+
 export interface TimelinePr extends Placed {
   id: string;
   url: string;
   number: number;
   title: string;
   repo: string;
-  openSince: string;
+  /** Whether it's a draft now. */
   draft: boolean;
   approved: boolean;
+  /** Its bar, oldest first, from when it was created to now. */
+  segments: TimelineSegment[];
   teams: TimelineTeam[];
 }
 
@@ -103,6 +110,28 @@ function timeTicks(start: number, end: number, stepHours: number): number[] {
   return ticks;
 }
 
+/** When it was a draft and when open, from `start` to `now`, as times. */
+function pieces(
+  pr: PullRequest | ReviewRequest,
+  start: number,
+  now: number,
+): { from: number; to: number; draft: boolean }[] {
+  // Older saved lists only say what it is now.
+  const spans =
+    pr.draftSpans ?? (pr.group === "draft" ? [{ from: pr.openSince, to: null }] : []);
+  const result: { from: number; to: number; draft: boolean }[] = [];
+  let at = start;
+  for (const span of spans) {
+    const from = Math.max(Date.parse(span.from), at);
+    const to = Math.min(span.to ? Date.parse(span.to) : now, now);
+    if (from > at) result.push({ from: at, to: from, draft: false });
+    if (to > from) result.push({ from, to, draft: true });
+    at = Math.max(at, to);
+  }
+  if (now > at || result.length === 0) result.push({ from: at, to: now, draft: false });
+  return result;
+}
+
 /**
  * Open PRs, newest first, each with the teams that own what it changes. Without
  * a `range` the axis runs from the oldest PR to now.
@@ -112,7 +141,10 @@ export function buildTimeline(
   now: number,
   range: TimelineRange | null = null,
 ): Timeline {
-  const oldest = Math.min(now, ...prs.map((pr) => Date.parse(pr.openSince)));
+  const createdAt = (pr: PullRequest | ReviewRequest) =>
+    // A list saved before it existed doesn't say.
+    pr.createdAt ? Date.parse(pr.createdAt) : Date.parse(pr.openSince);
+  const oldest = Math.min(now, ...prs.map(createdAt));
   // A little room before the oldest bar. The other end is now, at the chart's edge.
   const from = range?.from ?? oldest - Math.max((now - oldest) * 0.02, DAY_MS / 4);
   const to = range?.to ?? now;
@@ -127,16 +159,22 @@ export function buildTimeline(
   const rows = prs
     .map((pr): TimelinePr => {
       const open = Date.parse(pr.openSince);
+      const created = Math.min(createdAt(pr), open);
+      const segments = pieces(pr, created, now).map(({ from: start, to: end, draft }) => ({
+        draft,
+        ...place(start, end),
+      }));
+      const draft = segments[segments.length - 1].draft;
       return {
         id: pr.id,
         url: pr.url,
         number: pr.number,
         title: pr.title,
         repo: pr.repo,
-        openSince: pr.openSince,
-        draft: pr.group === "draft",
-        approved: pr.group !== "draft" && !!pr.approved,
-        ...place(open, now),
+        draft,
+        approved: !draft && !!pr.approved,
+        ...place(created, now),
+        segments,
         teams: teamsOf(pr).map((team) => {
           // A request made while it was a draft waited no longer than the PR did.
           const start = Math.max(team.requestedAt ? Date.parse(team.requestedAt) : open, open);
@@ -149,7 +187,8 @@ export function buildTimeline(
         }),
       };
     })
-    .sort((a, b) => Date.parse(b.openSince) - Date.parse(a.openSince));
+    // All end at now, so the shortest bar is the newest PR.
+    .sort((a, b) => a.durationMs - b.durationMs);
 
   const days = (to - from) / DAY_MS;
   // A zoom fits the window, as that's what was asked to be seen.

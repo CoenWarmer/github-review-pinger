@@ -46,6 +46,9 @@ pub struct ReviewView {
     pub group: ReviewGroup,
     /// Dragged into `group` by hand, rather than put there by its state.
     pub placed: bool,
+    pub created_at: DateTime<Utc>,
+    /// When it was a draft, oldest first.
+    pub draft_spans: Vec<prs::DraftSpan>,
     pub open_since: DateTime<Utc>,
     /// When it became the viewer's turn; only for requested PRs.
     pub waiting_since: Option<DateTime<Utc>>,
@@ -157,6 +160,8 @@ fn view(pr: &PullRequest, viewer: &str, rules: &Rules, now: DateTime<Utc>) -> Op
         reviewers,
         code_owner_teams: prs::code_owner_teams(pr, &people),
         approved,
+        created_at: pr.created_at,
+        draft_spans: prs::draft_spans(pr),
     })
 }
 
