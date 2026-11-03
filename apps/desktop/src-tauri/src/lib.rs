@@ -58,11 +58,8 @@ fn show_popover(app: &AppHandle) {
         poller::on_popover_open(app, poller.inner().clone());
     }
     #[cfg(not(target_os = "linux"))]
-    {
-        let _ = window.move_window(Position::TrayBottomCenter);
-        // It may still be wide from last time, which can reach past the screen.
-        popover::keep_on_screen(app, &window);
-    }
+    // Constrained, as it may still be wide from last time, which can reach past the screen.
+    let _ = window.move_window_constrained(Position::TrayBottomCenter);
     let _ = window.show();
     let _ = window.set_focus();
 }

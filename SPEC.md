@@ -299,8 +299,8 @@ a list view (the default) and a timeline view. The choice is shared by both tabs
 The timeline view is a Gantt chart of the tab's open PRs, leaving out My PRs'
 Merged section and custom views. While it's showing, the desktop popover widens
 to 800 px (animated over about 200 ms, or at once when the system asks for
-reduced motion), staying centered under the tray icon as far as the screen
-allows, and it narrows again on returning to the list or going to another tab.
+reduced motion), growing from its center, under the tray icon. Near the edge of
+the screen it stops at the edge, with both sides still moving together. It narrows again on returning to the list or going to another tab.
 The web app's page keeps whatever size it has. The filter and repo picker narrow
 the chart, without the list's search of GitHub.
 
