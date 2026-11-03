@@ -205,8 +205,10 @@ export interface Activity {
   login: string;
   kind: "approved" | "changesRequested" | "commented" | "pushed";
   at: string;
-  /** Where to read it: the comment, or the review when it has none. */
+  /** Where to read it: the comment, or the review. */
   url: string | null;
+  /** For a review: looks up its last comment. Missing in lists saved before it existed. */
+  reviewId?: string | null;
 }
 
 /** A stretch of a PR's life as a draft. */

@@ -280,6 +280,7 @@ mod tests {
             include_str!("../../../../../crates/core/src/github/merged.graphql"),
             include_str!("../../../../../crates/core/src/github/pr_details.graphql"),
             include_str!("../../../../../crates/core/src/github/pr_search.graphql"),
+            include_str!("../../../../../crates/core/src/github/review_comment.graphql"),
             include_str!("../../../../../crates/core/src/github/search.graphql"),
             include_str!("../../../../../crates/core/src/github/stats_merged.graphql"),
         ];

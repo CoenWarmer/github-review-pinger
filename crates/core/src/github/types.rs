@@ -348,14 +348,9 @@ pub struct Review {
     /// Only requested for `reviews`.
     #[serde(default)]
     pub url: Option<String>,
-    /// The review's last comment, only requested for `reviews`.
+    /// Only requested for `reviews`.
     #[serde(default)]
-    pub comments: Option<Nodes<ReviewComment>>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct ReviewComment {
-    pub url: String,
+    pub id: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]

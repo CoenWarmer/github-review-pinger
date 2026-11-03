@@ -303,6 +303,14 @@ impl Poller {
             .map_err(fetch_error_message)
     }
 
+    /// Where a review's last comment is, if it has one.
+    pub async fn review_comment_url(&self, id: &str) -> Result<Option<String>, String> {
+        let token = self.search_token().await?;
+        github::fetch_review_comment_url(&self.http, &token, id)
+            .await
+            .map_err(fetch_error_message)
+    }
+
     /// The teams you belong to (`org/slug`), for the statistics' team choice.
     /// Rejects with a message to show.
     pub async fn my_teams(&self) -> Result<Vec<String>, String> {

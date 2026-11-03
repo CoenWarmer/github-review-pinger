@@ -80,6 +80,15 @@ fn get_snapshot(poller: State<Arc<Poller>>) -> Snapshot {
     poller.snapshot()
 }
 
+/// Where a review's last comment is, if it has one.
+#[tauri::command]
+async fn review_comment_url(
+    id: String,
+    poller: State<'_, Arc<Poller>>,
+) -> Result<Option<String>, String> {
+    poller.review_comment_url(&id).await
+}
+
 #[tauri::command]
 fn set_popover_wide(app: AppHandle, wide: bool, animated: bool) {
     popover::set_wide(&app, wide, animated);
@@ -403,6 +412,7 @@ pub fn run() {
             load_review_stats,
             load_stats_repos,
             load_pr_details,
+            review_comment_url,
             load_ci_stats,
             set_buildkite_pipeline,
             add_view,

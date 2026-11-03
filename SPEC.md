@@ -375,8 +375,9 @@ changes it); a user chip opens their last response, below.
     longer lists them under latest reviews because they were asked again.
     Shown for approvers only when they responded after approving.
   - **Click**: a user chip with a response opens it on GitHub: the review's
-    last comment (`#discussion_r…`), a PR comment, or the review itself, and
-    marks the PR visited. A chip without a response isn't clickable.
+    last comment (`#discussion_r…`, looked up on click, since fetching it for every
+    PR would be most of what a refresh costs), a PR comment, or the review itself,
+    and marks the PR visited. A chip without a response isn't clickable.
   - **Not responded**: "Hasn't responded yet, requested 4h ago". After a
     response, a newer re-request adds "Re-requested 1h ago".
 - **Team chip**:

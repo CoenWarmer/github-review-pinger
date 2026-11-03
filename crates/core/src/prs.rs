@@ -464,34 +464,42 @@ fn has_new_feedback(pr: &PullRequest, people: &People, responses: &[Response]) -
 pub(crate) fn interactions(
     pr: &PullRequest,
 ) -> impl Iterator<Item = (&Actor, Option<ReviewState>, DateTime<Utc>)> {
-    linked_interactions(pr).map(|(author, state, at, _)| (author, state, at))
+    linked_interactions(pr).map(|linked| (linked.author, linked.state, linked.at))
 }
 
-/// Like [`interactions`], with where to read each: a review's last comment
-/// (or the review itself) and a conversation comment's own link.
-fn linked_interactions(
-    pr: &PullRequest,
-) -> impl Iterator<Item = (&Actor, Option<ReviewState>, DateTime<Utc>, Option<&str>)> {
+/// A human's review or comment, with where to read it.
+struct Linked<'a> {
+    author: &'a Actor,
+    state: Option<ReviewState>,
+    at: DateTime<Utc>,
+    url: Option<&'a str>,
+    review_id: Option<&'a str>,
+}
+
+/// Like [`interactions`], with where to read each: a review, or a conversation
+/// comment's own link.
+fn linked_interactions(pr: &PullRequest) -> impl Iterator<Item = Linked<'_>> {
     let reviews = pr.reviews.iter().filter_map(|review| {
-        let comment = review
-            .comments
-            .iter()
-            .flat_map(|comments| comments.iter())
-            .last()
-            .map(|comment| comment.url.as_str());
-        Some((
-            review.author.as_ref()?,
-            Some(review.state),
-            review.submitted_at?,
-            comment.or(review.url.as_deref()),
-        ))
+        Some(Linked {
+            author: review.author.as_ref()?,
+            state: Some(review.state),
+            at: review.submitted_at?,
+            url: review.url.as_deref(),
+            review_id: review.id.as_deref(),
+        })
     });
     let comments = pr.timeline_items.iter().filter_map(|item| match item {
         TimelineItem::IssueComment {
             created_at,
             url,
             author: Some(author),
-        } => Some((author, None, *created_at, url.as_deref())),
+        } => Some(Linked {
+            author,
+            state: None,
+            at: *created_at,
+            url: url.as_deref(),
+            review_id: None,
+        }),
         _ => None,
     });
     reviews.chain(comments)
@@ -781,18 +789,20 @@ fn latest_response_by(
     matches: impl Fn(&str) -> bool,
 ) -> Option<Activity> {
     linked_interactions(pr)
-        .filter_map(|(author, state, at, url)| {
-            let kind = match state {
+        .filter_map(|linked| {
+            let kind = match linked.state {
                 None | Some(ReviewState::Commented) => ActivityKind::Commented,
                 Some(ReviewState::Approved) => ActivityKind::Approved,
                 Some(ReviewState::ChangesRequested) => ActivityKind::ChangesRequested,
                 Some(_) => return None,
             };
+            let author = linked.author;
             (matches(&author.login) && people.is_other_human(author)).then(|| Activity {
                 login: author.login.clone(),
                 kind,
-                at,
-                url: url.map(str::to_string),
+                at: linked.at,
+                url: linked.url.map(str::to_string),
+                review_id: linked.review_id.map(str::to_string),
             })
         })
         .max_by_key(|activity| activity.at)
@@ -816,6 +826,7 @@ fn team_activity(pr: &PullRequest, people: &People, members: &HashSet<String>) -
                 kind: ActivityKind::Pushed,
                 at: node.commit.committed_date,
                 url: None,
+                review_id: None,
             })
         })
         .max_by_key(|activity| activity.at);
@@ -1264,52 +1275,32 @@ mod tests {
                 kind: ActivityKind::Commented,
                 at: at("2026-10-27T13:00:00Z"),
                 url: Some("https://github.com/o/r/pull/1#issuecomment-9".into()),
+                review_id: None,
             })
         );
     }
 
     #[test]
-    fn a_last_response_links_to_the_reviews_last_comment_or_else_the_review() {
-        let review = |at: &str, review_url: &str, comment_url: Option<&str>| {
+    fn a_last_response_links_to_the_review_and_can_look_up_its_last_comment() {
+        let review = |at: &str, id: &str| {
             let mut review = submitted(user("jcger"), "COMMENTED", at);
-            review["url"] = json!(review_url);
-            review["comments"] = match comment_url {
-                Some(url) => json!({ "nodes": [{ "url": url }] }),
-                None => json!({ "nodes": [] }),
-            };
+            review["url"] = json!(format!("https://x/{id}"));
+            review["id"] = json!(id);
             review
         };
-        let last_response = |reviews: Vec<Value>| {
-            let pr = with(json!({
-                "reviewRequests": { "nodes": [{ "requestedReviewer": user("jcger") }] },
-                "reviews": { "nodes": reviews },
-            }));
-            derive_all(vec![pr], &[]).remove(0).reviewers[0]
-                .last_response
-                .clone()
-                .unwrap()
-        };
-
-        let with_comment = last_response(vec![
-            review(
-                "2026-10-27T08:00:00Z",
-                "https://x/review-1",
-                Some("https://x/discussion_r1"),
-            ),
-            review(
-                "2026-10-27T12:00:00Z",
-                "https://x/review-2",
-                Some("https://x/discussion_r2"),
-            ),
-        ]);
-        assert_eq!(with_comment.url.as_deref(), Some("https://x/discussion_r2"));
-
-        let without_comment = last_response(vec![review(
-            "2026-10-27T12:00:00Z",
-            "https://x/review-2",
-            None,
-        )]);
-        assert_eq!(without_comment.url.as_deref(), Some("https://x/review-2"));
+        let pr = with(json!({
+            "reviewRequests": { "nodes": [{ "requestedReviewer": user("jcger") }] },
+            "reviews": { "nodes": [
+                review("2026-10-27T08:00:00Z", "older"),
+                review("2026-10-27T12:00:00Z", "newer"),
+            ] },
+        }));
+        let last = derive_all(vec![pr], &[]).remove(0).reviewers[0]
+            .last_response
+            .clone()
+            .unwrap();
+        assert_eq!(last.url.as_deref(), Some("https://x/newer"));
+        assert_eq!(last.review_id.as_deref(), Some("newer"));
     }
 
     #[test]
@@ -1349,6 +1340,7 @@ mod tests {
                 kind: ActivityKind::Pushed,
                 at: at("2026-10-04T09:00:00Z"),
                 url: None,
+                review_id: None,
             })
         );
 

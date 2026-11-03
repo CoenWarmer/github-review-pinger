@@ -690,6 +690,16 @@ export class Engine {
     }
   }
 
+  /** Where a review's last comment is. Not knowing is fine: the review is opened instead. */
+  async reviewCommentUrl(id: string): Promise<string | null> {
+    try {
+      return (await this.github?.fetchReviewCommentUrl(id)) ?? null;
+    } catch (e) {
+      console.warn("Could not look up a review's last comment", e);
+      return null;
+    }
+  }
+
   /** The teams you belong to, for the statistics. Rejects with a message to show. */
   async listTeams(): Promise<string[]> {
     if (!this.github) throw "There's no token to look teams up with.";

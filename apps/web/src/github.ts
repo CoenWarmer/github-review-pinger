@@ -38,6 +38,7 @@ export interface Queries {
   mergedSearch: string;
   prSearch: string;
   prDetails: string;
+  reviewComment: string;
   statsMerged: string;
 }
 
@@ -294,6 +295,8 @@ export interface Github {
     onProgress?: (progress: Progress) => void,
   ): Promise<Fetched>;
   fetchDetails(ids: string[]): Promise<RawPullRequest[]>;
+  /** Where a review's last comment is, when it has one. */
+  fetchReviewCommentUrl(id: string): Promise<string | null>;
   /** `cursor` continues from a previous page's `endCursor`; `null` starts from the top. */
   fetchMergedPage(cursor: string | null, count: number): Promise<MergedPage>;
   /** The first page of PRs, in any state, matching the text and any qualifiers in it. */
@@ -762,6 +765,14 @@ export function createGithub({
     async fetchPrDetails(id, after = null) {
       const reply = await request<{ node: PrDetailsData | null }>(queries.prDetails, { id, after });
       return reply.data.node;
+    },
+
+    async fetchReviewCommentUrl(id) {
+      const reply = await request<{ node: { comments?: { nodes: ({ url: string } | null)[] } } | null }>(
+        queries.reviewComment,
+        { id },
+      );
+      return reply.data.node?.comments?.nodes[0]?.url ?? null;
     },
 
     async fetchMyTeams() {

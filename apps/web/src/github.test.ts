@@ -12,7 +12,7 @@ import {
   type RawPullRequest,
 } from "./github.ts";
 
-const queries: Queries = { search: "SEARCH", details: "DETAILS", mergeState: "MERGE", mergedSearch: "MERGED", prSearch: "PRSEARCH", prDetails: "PRDETAILS", statsMerged: "STATS" };
+const queries: Queries = { search: "SEARCH", details: "DETAILS", mergeState: "MERGE", mergedSearch: "MERGED", prSearch: "PRSEARCH", prDetails: "PRDETAILS", reviewComment: "REVIEWCOMMENT", statsMerged: "STATS" };
 
 type Handler = (body: {
   query: string;
@@ -97,6 +97,18 @@ describe("requests", () => {
       Response.json({ errors: [{ type: "RATE_LIMITED", message: "slow down" }] }),
     );
     await assert.rejects(gh.fetchDetails(["a"]), failure("rateLimited"));
+  });
+
+  it("looks up a review's last comment, if it has one", async () => {
+    const asked: unknown[] = [];
+    const answer = (nodes: unknown[]) =>
+      github((body) => {
+        asked.push(body);
+        return Response.json({ data: { node: { comments: { nodes } } } });
+      });
+    assert.equal(await answer([{ url: "https://x/discussion_r1" }]).fetchReviewCommentUrl("R1"), "https://x/discussion_r1");
+    assert.equal(await answer([]).fetchReviewCommentUrl("R2"), null);
+    assert.deepEqual(asked[0], { query: "REVIEWCOMMENT", variables: { id: "R1" } });
   });
 
   it("maps a network failure", async () => {

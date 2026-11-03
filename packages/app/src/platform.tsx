@@ -73,6 +73,11 @@ export interface Platform {
 
   /** Opens a pull request, comment or review, and has the PR refreshed first next time. */
   visit(id: string, url: string): void;
+  /**
+   * Like `visit` for a review, opening its last comment if it has one, which is
+   * looked up now as it's too costly to fetch for every PR; otherwise `url`.
+   */
+  visitReview(id: string, reviewId: string, url: string): void;
   /** Opens a link outside the app. */
   openUrl(url: string): void;
   snooze(id: string, days: number): void;

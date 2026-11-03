@@ -36,8 +36,10 @@ pub struct Activity {
     pub login: String,
     pub kind: ActivityKind,
     pub at: DateTime<Utc>,
-    /// Where to read it: the comment, or the review when it has none.
+    /// Where to read it: the comment, or the review.
     pub url: Option<String>,
+    /// For a review: looks up its last comment, which is a better place to open.
+    pub review_id: Option<String>,
 }
 
 /// The teams still to look up, lowercase `(org, slug)`.

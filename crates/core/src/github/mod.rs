@@ -22,6 +22,8 @@ pub const MERGED_SEARCH_QUERY: &str = include_str!("merged_search.graphql");
 pub const PR_SEARCH_QUERY: &str = include_str!("pr_search.graphql");
 /// One PR's description, size and timeline, for its "Details" fold-out.
 pub const PR_DETAILS_QUERY: &str = include_str!("pr_details.graphql");
+
+pub const REVIEW_COMMENT_QUERY: &str = include_str!("review_comment.graphql");
 /// Your merged PRs in a window, for the statistics.
 pub const STATS_MERGED_QUERY: &str = include_str!("stats_merged.graphql");
 /// The query text for the merged PRs search: always this one text, so

@@ -3,8 +3,9 @@ pub mod usage;
 pub use review_pinger_core::github::types;
 use review_pinger_core::github::{
     DETAILS_QUERY, MAX_CHECK_PAGES, MERGE_STATE_QUERY, MERGED_QUERY, MERGED_SEARCH,
-    MERGED_SEARCH_QUERY, PR_DETAILS_QUERY, PR_SEARCH_QUERY, RequiredChecksReply, SEARCH_QUERY,
-    STATS_MERGED_QUERY, needs_required_checks, required_checks_query,
+    MERGED_SEARCH_QUERY, PR_DETAILS_QUERY, PR_SEARCH_QUERY, REVIEW_COMMENT_QUERY,
+    RequiredChecksReply, SEARCH_QUERY, STATS_MERGED_QUERY, needs_required_checks,
+    required_checks_query,
 };
 
 use std::collections::{HashMap, HashSet};
@@ -413,6 +414,19 @@ pub async fn fetch_pr_details(
     )
     .await?;
     Ok(reply.data["node"].clone())
+}
+
+/// Where a review's last comment is, when it has one.
+pub async fn fetch_review_comment_url(
+    http: &reqwest::Client,
+    token: &str,
+    id: &str,
+) -> Result<Option<String>, FetchError> {
+    let reply: Response<Value> =
+        request(http, token, REVIEW_COMMENT_QUERY, json!({ "id": id })).await?;
+    Ok(reply.data["node"]["comments"]["nodes"][0]["url"]
+        .as_str()
+        .map(str::to_string))
 }
 
 #[derive(Deserialize)]
