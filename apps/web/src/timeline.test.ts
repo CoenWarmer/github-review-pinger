@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import type { PullRequest } from "@review-pinger/app";
+import type { MergedPr, PullRequest } from "@review-pinger/app";
 import { buildTimeline, FIT_ALL, formatDuration, panRange, withState, zoomOut, zoomRange } from "../../../packages/app/src/timeline.ts";
 
 const NOW = Date.parse("2026-10-10T12:00:00Z");
@@ -291,6 +291,48 @@ describe("buildTimeline", () => {
       const start = zoomRange(axis, 0, 0.001);
       assert.equal(start.from, axis.from);
       assert.equal(start.to - start.from, 3600_000);
+    });
+  });
+
+  describe("merged PRs", () => {
+    const merged = (id: string, created: number | null, at: number) =>
+      ({
+        id,
+        number: 1,
+        title: id,
+        url: `https://github.com/o/r/pull/${id}`,
+        repo: "o/r",
+        createdAt: created === null ? null : daysAgo(created),
+        mergedAt: daysAgo(at),
+      }) as MergedPr;
+
+    it("runs a bar from created to merged, not to now", () => {
+      const [row] = buildTimeline([merged("a", 6, 2)], NOW, FIT_ALL).prs;
+      assert.equal(row.merged, true);
+      assert.equal(row.durationMs, 4 * DAY);
+      assert.ok(row.end < 1);
+      assert.equal(row.segments.length, 1);
+      assert.equal(row.segments[0].draft, false);
+      assert.equal(row.approved, false);
+      assert.deepEqual(row.teams, []);
+    });
+
+    it("puts the last to merge first, whenever they were created", () => {
+      const chart = buildTimeline([merged("older", 3, 2), merged("latest", 30, 1)], NOW, FIT_ALL);
+      assert.deepEqual(chart.prs.map((row) => row.id), ["latest", "older"]);
+    });
+
+    it("fits the longest in, and has a mark for a list saved before createdAt", () => {
+      const chart = buildTimeline([merged("long", 30, 1)], NOW, FIT_ALL);
+      assert.ok(chart.from <= NOW - 30 * DAY);
+      const [saved] = buildTimeline([merged("saved", null, 1)], NOW).prs;
+      assert.equal(saved.durationMs, 0);
+      assert.equal(saved.visible, true);
+    });
+
+    it("cuts off at a zoom, and marks one before it as outside", () => {
+      const chart = buildTimeline([merged("before", 9, 8)], NOW);
+      assert.equal(chart.prs[0].visible, false);
     });
   });
 

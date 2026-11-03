@@ -51,6 +51,7 @@ import {
 } from "./hooks";
 import { MergedRow } from "./components/MergedRow";
 import { PlatformProvider, usePlatform, type Platform } from "./platform";
+import { loadSectionOpen, saveSectionOpen } from "./openSections";
 import { SECTION_TITLES } from "./sections";
 import { SlackContext } from "./slack";
 import {
@@ -179,6 +180,18 @@ function SortMenu({
   );
 }
 
+/** Whether a section is expanded, as it was last left, even before a restart. */
+function useSectionOpen(id: string, defaultOpen: boolean) {
+  const [open, setOpen] = useState(() => loadSectionOpen(id) ?? defaultOpen);
+  return [
+    open,
+    (next: boolean) => {
+      setOpen(next);
+      saveSectionOpen(id, next);
+    },
+  ] as const;
+}
+
 function Section<
   T extends {
     id: string;
@@ -207,7 +220,7 @@ function Section<
   dropKey?: string;
   render: (row: T) => ReactNode;
 }) {
-  const [open, setOpen] = useState(defaultOpen);
+  const [open, setOpen] = useSectionOpen(id, defaultOpen);
   const [sort, setSort] = useSectionSort(id);
   useReportOpen(
     id,
@@ -274,7 +287,7 @@ function MergedSection({
   now: number;
 }) {
   const platform = usePlatform();
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useSectionOpen("mine:merged", false);
   const [loading, setLoading] = useState(false);
   if (rows.length === 0 && !canLoadMore) return null;
 
@@ -555,6 +568,22 @@ function AppContent() {
                 // Each tab starts at now, rather than wherever the other was scrolled to.
                 key={tab}
                 pullRequests={tab === "reviews" ? reviews.filter(matchesReview) : prs.filter(matchesMine)}
+                merged={
+                  tab === "mine"
+                    ? {
+                        pullRequests: merged.filter((pr) =>
+                          matchesQuery(query, [pr.title, pr.repo, pr.number]),
+                        ),
+                        canLoadMore: snapshot.mergedCanLoadMore,
+                        enabled: snapshot.myPrsSections.some(
+                          (pref) =>
+                            pref.kind === "builtin" &&
+                            pref.section === "merged" &&
+                            pref.enabled,
+                        ),
+                      }
+                    : undefined
+                }
                 emptyText={
                   filtering
                     ? "No pull requests match."

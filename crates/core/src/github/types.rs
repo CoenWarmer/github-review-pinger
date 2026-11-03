@@ -16,6 +16,9 @@ pub struct MergedPullRequest {
     pub url: String,
     pub repository: Repository,
     pub merged_at: DateTime<Utc>,
+    /// Missing in pages saved before it was asked for.
+    #[serde(default, rename = "createdAt")]
+    pub created_at: Option<DateTime<Utc>>,
 }
 
 /// A PR found by "Search on GitHub", in any state: just enough to list it.
