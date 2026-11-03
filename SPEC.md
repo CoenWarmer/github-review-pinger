@@ -309,6 +309,12 @@ the chart, without the list's search of GitHub.
   so the teams are those requested now or earlier, leaving out a pending request
   flagged as made by hand; one asked by hand whose request has ended still shows.
   A request older than the last 50 timeline items isn't known.
+- **Zoom**: dragging across the bars or the axis highlights a stretch of time, and
+  releasing zooms the chart to fit it in the window, down to an hour. It can be
+  done again to go further in. "Reset zoom" goes back to the whole axis, and so
+  does switching tab or view. All the rows stay, empty where a PR has nothing in
+  that stretch. A click without a drag still opens the PR. On touch, a sideways
+  drag zooms and a vertical one scrolls.
 - **PR bars**: from the open clock to now, dashed for drafts, and green with a
   check by the title when approved (per the rule above; drafts aren't shown as
   approved). Clicking a PR's bar or title opens it, like a row.

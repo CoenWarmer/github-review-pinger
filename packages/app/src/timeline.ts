@@ -1,21 +1,34 @@
 import type { CodeOwnerTeam, PullRequest, ReviewRequest } from "./types";
 
-const DAY_MS = 24 * 60 * 60_000;
+const HOUR_MS = 60 * 60_000;
+const DAY_MS = 24 * HOUR_MS;
 /** The chart is never narrower than this, so a phone scrolls it rather than squashes it. */
 const MIN_TRACK_PX = 480;
 /** Past this the chart scrolls, so one very old PR can't squash the rest. */
 const MIN_PX_PER_DAY = 16;
 /** How far apart date labels have to be to stay readable. */
 const MIN_TICK_PX = 64;
-const TICK_DAYS = [1, 2, 7, 14, 30, 90, 180, 365];
+const TICK_HOURS = [1, 2, 3, 6, 12, 24, 48, 168, 336, 720, 2160, 4320, 8760];
+/** How far a zoom can go, so it can't end up between two labels. */
+const MIN_ZOOM_MS = HOUR_MS;
 
-export interface TimelineTeam extends CodeOwnerTeam {
-  /** Where its bar starts and ends along the axis, from 0 to 1. */
-  start: number;
-  end: number;
+/** A stretch of time the chart is zoomed in to, in epoch milliseconds. */
+export interface TimelineRange {
+  from: number;
+  to: number;
 }
 
-export interface TimelinePr {
+/** Where a bar falls along the axis, from 0 to 1, cut off at the axis's ends. */
+interface Placed {
+  start: number;
+  end: number;
+  /** Any of it falls within the axis. */
+  visible: boolean;
+}
+
+export interface TimelineTeam extends CodeOwnerTeam, Placed {}
+
+export interface TimelinePr extends Placed {
   id: string;
   url: string;
   number: number;
@@ -24,17 +37,19 @@ export interface TimelinePr {
   openSince: string;
   draft: boolean;
   approved: boolean;
-  /** Where its bar starts along the axis, from 0 to 1. */
-  start: number;
   teams: TimelineTeam[];
 }
 
-export interface Timeline {
+export interface Timeline extends TimelineRange {
   prs: TimelinePr[];
   /** The least the bars' track takes, in pixels. */
   trackPx: number;
-  /** Whole local days to label, each with where it falls along the axis, which ends at now. */
+  /** Times to label, each with where it falls along the axis. */
   ticks: { at: number; position: number }[];
+  /** The labels are close enough together to be times, rather than days. */
+  hourly: boolean;
+  /** Where now falls along the axis; `null` when zoomed in to before it. */
+  nowPosition: number | null;
 }
 
 /** Older saved lists don't have `codeOwnerTeams`, so fall back to the pending team chips. */
@@ -58,25 +73,41 @@ function teamsOf(pr: PullRequest | ReviewRequest): CodeOwnerTeam[] {
   );
 }
 
-/** The whole local days from `start` to `end`, `stepDays` apart. */
-function dayTicks(start: number, end: number, stepDays: number): number[] {
-  const day = new Date(start);
-  day.setHours(0, 0, 0, 0);
-  day.setDate(day.getDate() + 1);
+/** Whole local days (or, under a day apart, hours) from `start` to `end`, `stepHours` apart. */
+function timeTicks(start: number, end: number, stepHours: number): number[] {
+  const tick = new Date(start);
+  if (stepHours < 24) {
+    tick.setHours(tick.getHours() - (tick.getHours() % stepHours), 0, 0, 0);
+  } else {
+    tick.setHours(0, 0, 0, 0);
+  }
   const ticks: number[] = [];
-  while (day.getTime() < end) {
-    ticks.push(day.getTime());
-    day.setDate(day.getDate() + stepDays);
+  while (tick.getTime() < end) {
+    if (tick.getTime() > start) ticks.push(tick.getTime());
+    tick.setHours(tick.getHours() + stepHours);
   }
   return ticks;
 }
 
-/** Open PRs, newest first, each with the teams that own what it changes. */
-export function buildTimeline(prs: (PullRequest | ReviewRequest)[], now: number): Timeline {
+/**
+ * Open PRs, newest first, each with the teams that own what it changes. Without
+ * a `range` the axis runs from the oldest PR to now.
+ */
+export function buildTimeline(
+  prs: (PullRequest | ReviewRequest)[],
+  now: number,
+  range: TimelineRange | null = null,
+): Timeline {
   const oldest = Math.min(now, ...prs.map((pr) => Date.parse(pr.openSince)));
   // A little room before the oldest bar. The other end is now, at the chart's edge.
-  const start = oldest - Math.max((now - oldest) * 0.02, DAY_MS / 4);
-  const position = (ms: number) => (ms - start) / (now - start);
+  const from = range?.from ?? oldest - Math.max((now - oldest) * 0.02, DAY_MS / 4);
+  const to = range?.to ?? now;
+  const position = (ms: number) => (ms - from) / (to - from);
+  const place = (start: number, end: number): Placed => ({
+    start: Math.max(position(start), 0),
+    end: Math.min(position(end), 1),
+    visible: start <= to && end >= from,
+  });
 
   const rows = prs
     .map((pr): TimelinePr => {
@@ -90,30 +121,54 @@ export function buildTimeline(prs: (PullRequest | ReviewRequest)[], now: number)
         openSince: pr.openSince,
         draft: pr.group === "draft",
         approved: pr.group !== "draft" && !!pr.approved,
-        start: position(open),
+        ...place(open, now),
         teams: teamsOf(pr).map((team) => {
           // A request made while it was a draft waited no longer than the PR did.
-          const from = Math.max(team.requestedAt ? Date.parse(team.requestedAt) : open, open);
-          const to = team.pending
+          const start = Math.max(team.requestedAt ? Date.parse(team.requestedAt) : open, open);
+          const end = team.pending
             ? now
             : team.approvedAt || team.respondedAt
               ? Math.min(Date.parse((team.approvedAt ?? team.respondedAt)!), now)
-              : from;
-          return { ...team, start: position(from), end: position(Math.max(from, to)) };
+              : start;
+          return { ...team, ...place(start, Math.max(start, end)) };
         }),
       };
     })
-    .sort((a, b) => b.start - a.start);
+    .sort((a, b) => Date.parse(b.openSince) - Date.parse(a.openSince));
 
-  const days = (now - start) / DAY_MS;
-  const trackPx = Math.max(MIN_TRACK_PX, days * MIN_PX_PER_DAY);
-  const pxPerDay = trackPx / days;
-  const stepDays = TICK_DAYS.find((step) => step * pxPerDay >= MIN_TICK_PX) ?? 365;
-  const ticks = dayTicks(start, now, stepDays)
-    // A label is centered on its day: leave it room at the start, and beside "now".
-    .filter((at) => ((at - start) / DAY_MS) * pxPerDay >= MIN_TICK_PX / 2)
-    .filter((at) => ((now - at) / DAY_MS) * pxPerDay >= MIN_TICK_PX * 0.75)
+  const days = (to - from) / DAY_MS;
+  // A zoom fits the window, as that's what was asked to be seen.
+  const trackPx = range ? MIN_TRACK_PX : Math.max(MIN_TRACK_PX, days * MIN_PX_PER_DAY);
+  const pxPerHour = trackPx / (days * 24);
+  const stepHours = TICK_HOURS.find((step) => step * pxPerHour >= MIN_TICK_PX) ?? 8760;
+  const showsNow = to >= now;
+  const ticks = timeTicks(from, to, stepHours)
+    // A label is centered on its time: leave it room at the start, and at the end or beside "now".
+    .filter((at) => ((at - from) / HOUR_MS) * pxPerHour >= MIN_TICK_PX / 2)
+    .filter(
+      (at) => ((to - at) / HOUR_MS) * pxPerHour >= (showsNow ? MIN_TICK_PX * 0.75 : MIN_TICK_PX / 2),
+    )
     .map((at) => ({ at, position: position(at) }));
 
-  return { prs: rows, trackPx, ticks };
+  return {
+    prs: rows,
+    from,
+    to,
+    trackPx,
+    ticks,
+    hourly: stepHours < 24,
+    nowPosition: showsNow ? position(now) : null,
+  };
+}
+
+/** The range between two places along the axis (from 0 to 1, either way round). */
+export function zoomRange(axis: TimelineRange, a: number, b: number): TimelineRange {
+  const at = (fraction: number) => axis.from + fraction * (axis.to - axis.from);
+  const from = at(Math.min(a, b));
+  const to = at(Math.max(a, b));
+  if (to - from >= MIN_ZOOM_MS) return { from, to };
+  // Too narrow to read: widen it around its middle, staying on the axis.
+  const start = Math.max((from + to - MIN_ZOOM_MS) / 2, axis.from);
+  const end = Math.min(start + MIN_ZOOM_MS, axis.to);
+  return { from: end - MIN_ZOOM_MS, to: end };
 }

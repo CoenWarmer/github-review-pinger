@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { PullRequest } from "@review-pinger/app";
-import { buildTimeline } from "../../../packages/app/src/timeline.ts";
+import { buildTimeline, zoomRange } from "../../../packages/app/src/timeline.ts";
 
 const NOW = Date.parse("2026-10-10T12:00:00Z");
 const DAY = 24 * 60 * 60_000;
@@ -118,6 +118,77 @@ describe("buildTimeline", () => {
       reviewers: [{ team: "o/web", requestedAt: daysAgo(1) }, { team: null, requestedAt: null }],
     } as unknown as PullRequest;
     assert.deepEqual(buildTimeline([saved], NOW).prs[0].teams.map((team) => team.team), ["o/web"]);
+  });
+
+  describe("zoomed in", () => {
+    const range = { from: NOW - 8 * DAY, to: NOW - 4 * DAY };
+
+    it("fits the window, whatever the stretch", () => {
+      const chart = buildTimeline([pr("a", 400, [])], NOW, { from: NOW - 300 * DAY, to: NOW - DAY });
+      assert.equal(chart.trackPx, 480);
+    });
+
+    it("cuts bars off at the axis, and marks those outside it", () => {
+      const chart = buildTimeline(
+        [pr("across", 10, []), pr("inside", 6, []), pr("after", 2, [])],
+        NOW,
+        range,
+      );
+      const bar = (id: string) => chart.prs.find((row) => row.id === id)!;
+      assert.deepEqual(chart.prs.length, 3);
+      assert.equal(bar("across").start, 0);
+      assert.equal(bar("across").end, 1);
+      assert.equal(bar("across").visible, true);
+      assert.equal(bar("inside").start, 0.5);
+      assert.equal(bar("inside").visible, true);
+      assert.equal(bar("after").visible, false);
+    });
+
+    it("hides a team's bar that ended before the stretch", () => {
+      const chart = buildTimeline(
+        [pr("a", 20, [owner("o/done", 18, false, 15, 15), owner("o/waiting", 6)])],
+        NOW,
+        range,
+      );
+      const [done, waiting] = chart.prs[0].teams;
+      assert.equal(done.visible, false);
+      assert.equal(waiting.visible, true);
+    });
+
+    it("has no now, unless the stretch reaches it", () => {
+      assert.equal(buildTimeline([pr("a", 10, [])], NOW, range).nowPosition, null);
+      const toNow = buildTimeline([pr("a", 10, [])], NOW, { from: NOW - DAY, to: NOW });
+      assert.equal(toNow.nowPosition, 1);
+    });
+
+    it("labels hours when zoomed in that far, and days otherwise", () => {
+      const hours = buildTimeline([pr("a", 10, [])], NOW, { from: NOW - 6 * 3600_000, to: NOW - 3600_000 });
+      assert.equal(hours.hourly, true);
+      assert.ok(hours.ticks.length > 0);
+      for (const { position } of hours.ticks) assert.ok(position > 0 && position < 1);
+      assert.equal(buildTimeline([pr("a", 10, [])], NOW, range).hourly, false);
+    });
+  });
+
+  describe("zoomRange", () => {
+    const axis = { from: 0, to: 100 * 3600_000 };
+
+    it("takes the stretch between two places, either way round", () => {
+      const expected = { from: 25 * 3600_000, to: 50 * 3600_000 };
+      assert.deepEqual(zoomRange(axis, 0.25, 0.5), expected);
+      assert.deepEqual(zoomRange(axis, 0.5, 0.25), expected);
+    });
+
+    it("widens a stretch under an hour, staying on the axis", () => {
+      const middle = zoomRange(axis, 0.5, 0.5);
+      assert.equal(middle.to - middle.from, 3600_000);
+      const end = zoomRange(axis, 0.999, 1);
+      assert.equal(end.to, axis.to);
+      assert.equal(end.to - end.from, 3600_000);
+      const start = zoomRange(axis, 0, 0.001);
+      assert.equal(start.from, axis.from);
+      assert.equal(start.to - start.from, 3600_000);
+    });
   });
 
   it("scrolls rather than squashes around one very old PR", () => {
