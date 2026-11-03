@@ -26,6 +26,26 @@ if (entries.length === 0) {
   process.exit(0);
 }
 
+// Run numbers start over when the app restarts, so a run is also split where one
+// number follows another: entries of one run are never far apart.
+const MAX_GAP_MS = 45_000;
+let run = 0;
+let previous = null;
+for (const entry of entries) {
+  if (
+    entry.cycle &&
+    (!previous ||
+      previous.cycle !== entry.cycle ||
+      Date.parse(entry.at) - Date.parse(previous.at) > MAX_GAP_MS)
+  ) {
+    run += 1;
+  }
+  if (entry.cycle) {
+    previous = entry;
+    entry.run = run;
+  }
+}
+
 const points = (entry) => entry.cost?.cost ?? 0;
 const sum = (list, value) => list.reduce((total, item) => total + value(item), 0);
 const groupBy = (list, key) => {
@@ -83,7 +103,7 @@ console.log("\nBy what set it off");
 table(
   [...groupBy(entries, (entry) => entry.trigger)]
     .map(([trigger, list]) => {
-      const runs = new Set(list.map((entry) => entry.cycle)).size;
+      const runs = new Set(list.filter((entry) => entry.run).map((entry) => entry.run)).size;
       return {
         trigger,
         runs,
@@ -98,9 +118,9 @@ table(
 );
 
 console.log("\nCheapest and dearest full runs");
-const runs = [...groupBy(entries.filter((entry) => entry.cycle), (entry) => entry.cycle)]
-  .map(([cycle, list]) => ({
-    run: cycle,
+const runs = [...groupBy(entries.filter((entry) => entry.run), (entry) => entry.run)]
+  .map(([number, list]) => ({
+    run: number,
     trigger: list[0].trigger,
     at: list[0].at.slice(11, 19),
     attempts: list.length,
