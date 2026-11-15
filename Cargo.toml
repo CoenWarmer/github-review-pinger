@@ -6,6 +6,14 @@ resolver = "3"
 version = "0.9.0"
 
 # Profiles apply to the whole workspace, so the desktop app's release settings live here.
+# Debug builds keep line numbers for our own crates and skip debug info for dependencies,
+# which keeps target/debug several times smaller.
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+debug = false
+
 [profile.release]
 codegen-units = 1
 lto = true

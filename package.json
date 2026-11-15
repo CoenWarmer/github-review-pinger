@@ -2,7 +2,8 @@
   "name": "review-pinger",
   "private": true,
   "scripts": {
-    "dev": "pnpm --filter @review-pinger/desktop tauri dev",
+    "dev": "pnpm sweep && pnpm --filter @review-pinger/desktop tauri dev",
+    "sweep": "if command -v cargo-sweep >/dev/null; then cargo sweep --time 14 >/dev/null; cargo sweep --installed >/dev/null; fi; true",
     "tauri": "pnpm --filter @review-pinger/desktop tauri",
     "web": "pnpm --filter @review-pinger/web dev",
     "build": "pnpm --filter @review-pinger/desktop build"
